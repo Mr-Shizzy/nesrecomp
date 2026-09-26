@@ -79,5 +79,33 @@ def txsrom_fixtures():
     yield mmc3_irq_program(118, 'mmc3v_irq_118')
 
 
+def tqrom_fixtures():
+    yield handoff('mmc3v_prg_119', 119, [(0x8000, 6), (0x8001, 9)], 9, chr_kb=64)
+    # CHR ROM pages hold their page number; the RAM starts zeroed. Bank bit 6
+    # selects RAM, addressed by bank bits 0-2; ROM uses bits 0-5.
+    yield ppu_contract(119, 128, 64, [
+        ('cpu', 0x8000, 0), ('cpu', 0x8001, 0x40),
+        ('cpu', 0x8000, 2), ('cpu', 0x8001, 0x05),
+        ('read', 0, 0), ('write', 0, 0x5a), ('write', 0x0400, 0xa5),
+        ('read', 0, 0x5a), ('read', 0x0400, 0xa5),
+        ('read', 0x1000, 5), ('write', 0x1000, 0x77), ('read', 0x1000, 5),
+        ('cpu', 0x8000, 3), ('cpu', 0x8001, 0x78), ('read', 0x1400, 0x5a),
+        ('cpu', 0x8000, 4), ('cpu', 0x8001, 0x41), ('read', 0x1800, 0xa5),
+        ('write', 0x1800, 0x3c), ('read', 0x0400, 0x3c),
+        ('cpu', 0x8000, 1), ('cpu', 0x8001, 0x7e), ('write', 0x0c00, 0x99),
+        ('cpu', 0x8000, 5), ('cpu', 0x8001, 0x47), ('read', 0x1c00, 0x99),
+        ('cpu', 0x8000, 2), ('cpu', 0x8001, 0xbf), ('read', 0x1000, 63),
+        ('cpu', 0x8000, 2), ('cpu', 0x8001, 0x85), ('read', 0x1000, 5),
+        # Mode 1 moves the RAM-backed 2 KiB bank to $1000.
+        ('cpu', 0x8000, 0x80), ('read', 0x1000, 0x5a), ('read', 0x1400, 0x3c),
+        ('read', 0, 5),
+        # No work RAM: the read returns the open-bus address high byte.
+        ('cpu', 0xa001, 0x80), ('cpu', 0x6000, 0x12), ('cpu_read', 0x6000, 0x60),
+        ('cpu', 0x8000, 0),
+    ], '_tqrom')
+    yield mmc3_irq_program(119, 'mmc3v_irq_119', chr_kb=64)
+
+
 def mmc3_variant_fixtures():
     yield from txsrom_fixtures()
+    yield from tqrom_fixtures()

@@ -20,6 +20,7 @@ models; it does not independently establish the mapper specification.
 | ID | Board / reference | Behavior and limits |
 |---:|---|---|
 | 118 | [TxSROM](https://www.nesdev.org/wiki/TxSROM) | MMC3 banking and A12 IRQ. CHR A17 drives CIRAM A10: bit 7 of the register covering the nametable address's pattern page (R0/R1 or R2-R5 by $8000 bit 7; $3000-$3EFF uses pages 4-7). $A000 is disconnected. iNES keeps the MMC3 8 KiB WRAM default; four-screen headers are rejected. |
+| 119 | [TQROM](https://www.nesdev.org/wiki/TQROM) | MMC3 banking and A12 IRQ. CHR bank bit 6 (CHR A16) selects the 8 KiB CHR RAM chip, addressed by bank bits 0-2; otherwise CHR ROM sees bits 0-5 (at most 64 KiB). No work RAM. iNES implies the 8 KiB CHR RAM; NES 2.0 must declare exactly 8 KiB volatile CHR RAM. This is the only board accepted with both CHR ROM and CHR RAM. |
 | 40 | [NTDEC 2722](https://www.nesdev.org/wiki/INES_Mapper_040) | Fixed PRG banks at $6000/$8000/$A000/$E000, switchable 8 KiB at $C000, 4096-M2 IRQ. Code at $6000 uses the interpreter. |
 | 155 | [MMC1A](https://www.nesdev.org/wiki/MMC1) | RAM stays enabled by the PRG register; bit 4 instead bypasses fixed-bank A17 selection. Uses the same SxROM board wiring as mapper 1. |
 | 85 | [VRC7](https://www.nesdev.org/wiki/VRC7) | Three 8 KiB PRG windows, eight CHR windows, WRAM gate, VRC IRQ, and six FM channels. Submapper 1 selects A3 and omits the oscillator; submapper 2 selects A4. |
@@ -52,7 +53,7 @@ models; it does not independently establish the mapper specification.
 [NES 2.0](https://www.nesdev.org/wiki/NES_2.0) decoding now preserves the 12-bit
 mapper, submapper, extended/exponent ROM lengths, RAM/NVRAM sizes, trainer offset,
 timing, and console type. Unknown submappers, unsupported console/timing models,
-and mixed CHR ROM/RAM boards are rejected explicitly. NTSC and multi-region
+and mixed CHR ROM/RAM boards other than TQROM are rejected explicitly. NTSC and multi-region
 headers run the NTSC machine. File allocations are bounded to 64 MiB per ROM,
 128 KiB PRG RAM, and 1 MiB CHR RAM. RAM sizes do not by themselves add banking
 registers; implemented MMC1 board wiring is described below.

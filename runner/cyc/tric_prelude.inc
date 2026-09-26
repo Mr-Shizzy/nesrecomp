@@ -77,6 +77,8 @@ struct TricMapper {
     bool A12;
     ulong A12LowCycle;
     bool ChrA17[8];                // TxSROM: CHR A17 per pattern page = CIRAM A10
+    bool ChrA16[8];                // TQROM: CHR A16 per pattern page selects the RAM chip
+    byte ChrLow[8];                // TQROM: the bank's low bits, which address the RAM
     // ---- UxROM / CNROM / AxROM / GxROM ----
     byte Latch;
     bool PatternPending;
@@ -112,6 +114,7 @@ struct TricMapper {
     void MMC3Apply();
     void MMC3Write(ushort Address, byte Input);
     void MMC3ClockIRQ();
+    bool ChrRamSelected(ushort Address);
     void PatternReadLatch(ushort Address);
     void PatternReadEnd(bool Reading);
 
@@ -168,6 +171,7 @@ struct TricMapper {
 
 struct TricCartridge {
     NesCartInfo Info;
+    byte  CHRRAM[8192];      // TQROM's separate CHR RAM chip
     byte *PRGROM;
     int   PRGROM_Length;     // the image's own length
     int   PRGSlots;          // 4KB slots in the padded buffer, a power of two
@@ -284,7 +288,19 @@ inline void TricMapper::MMC3Apply() {
     for (uint i = 0; i < 4; ++i) {
         ChrA17[big + i] = (Reg[i / 2] & 0x80) != 0;
         ChrA17[small_ + i] = (Reg[2 + i] & 0x80) != 0;
+        ChrA16[big + i] = (Reg[i / 2] & 0x40) != 0;
+        ChrA16[small_ + i] = (Reg[2 + i] & 0x40) != 0;
+        ChrLow[big + i] = (byte)((Reg[i / 2] & 6) | (i & 1));
+        ChrLow[small_ + i] = (byte)(Reg[2 + i] & 7);
     }
+    // nesdev wiki, TQROM: with A16 low the CHR ROM sees bank bits 0-5 only.
+    if (Cart.Mapper == 119)
+        for (uint i = 0; i < 8; ++i)
+            if (!ChrA16[i]) CHR_Off[i] %= 65536u;
+}
+// TQROM: A16 high enables the 6264 SRAM instead of the ROM (nesdev wiki).
+inline bool TricMapper::ChrRamSelected(ushort Address) {
+    return Cart.Mapper == 119 && ChrA16[(Address >> 10) & 7];
 }
 
 inline void TricMapper::MMC3Write(ushort Address, byte Input) {
@@ -331,7 +347,7 @@ inline void TricMapper::PPUClock() {
         unsigned select=(PPU_AddressBus/1024)%4;
         if (BankSelect!=select) { BankSelect=select; if (Cart.Mapper==157) DatachLines(); else BandaiApply(); }
     }
-    if (Cart.Mapper != 4 && Cart.Mapper != 118) return;
+    if (Cart.Mapper != 4 && Cart.Mapper != 118 && Cart.Mapper != 119) return;
     if (!(PPU_AddressBus & 0x1000)) {
         if (A12) { A12 = false; A12LowCycle = totalCycles; }
         return;
@@ -356,6 +372,8 @@ inline void TricMapper::Reset() {
     A12 = false;
     A12LowCycle = 0;
     memset(ChrA17, 0, sizeof(ChrA17));
+    memset(ChrA16, 0, sizeof(ChrA16));
+    memset(ChrLow, 0, sizeof(ChrLow));
     Latch = 0;
     PatternPending = false;
     PatternAddress = 0;
@@ -410,7 +428,7 @@ inline void TricMapper::Reset() {
         MapPRG16(1, -1);
         MapCHR8(0);
         break;
-    case 4: case 118:
+    case 4: case 118: case 119:
         Reg[7] = 1;
         MMC3Apply();
         Mirroring = TRIC_MIRROR_VERTICAL;
@@ -621,7 +639,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     case 1: case 155: MMC1Write(Address, Input); break;
     case 2: Latch = Input; MapPRG16(0, Input); break;
     case 3: Latch = Input; MapCHR8(Input); break;
-    case 4: case 118: MMC3Write(Address, Input); break;
+    case 4: case 118: case 119: MMC3Write(Address, Input); break;
     case 7:
         Latch = Input;
         MapPRG32(Input & 7);
@@ -665,6 +683,7 @@ inline void TricMapper::PatternReadEnd(bool Reading) {
 
 inline byte TricMapper::SnoopPPU(ushort Address) {
     if (Cart.Mapper==5 && Address>=8192) return MMC5NT(Address,false);
+    if (Address < 0x2000 && ChrRamSelected(Address)) return Cart.CHRRAM[ChrLow[Address >> 10] * 1024 + (Address & 1023)];
     if (Address < 0x2000) return Cart.CHRROM[FetchPatternAddress(Address)];
     if (VRC6Board()) {
         unsigned bank=VRC6Nametable((Address>>10)&3);
@@ -688,6 +707,13 @@ inline void TricMapper::AccessPPU() {
         PPU_DataIn=PPU_NonTiltData;
         if (!SeventyTwoPinConnector[20]) PPU_NonTiltData=PPU_DataOut=Cart.CHRROM[index];
         if (!SeventyTwoPinConnector[55] && Cart.UsingCHRRAM) Cart.CHRROM[index]=PPU_DataIn;
+    }
+    if (!SeventyTwoPinConnector[64] && ChrRamSelected(Address)) {
+        byte &cell = Cart.CHRRAM[ChrLow[(Address >> 10) & 7] * 1024 + (Address & 1023)];
+        PPU_DataIn = PPU_NonTiltData;
+        if (!SeventyTwoPinConnector[20]) PPU_NonTiltData = PPU_DataOut = cell;
+        if (!SeventyTwoPinConnector[55]) cell = PPU_DataIn;
+        return;
     }
     if (!SeventyTwoPinConnector[64]) {
         int CHR_Address = FetchPatternAddress(Address);

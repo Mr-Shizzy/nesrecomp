@@ -71,6 +71,48 @@ static void mmc3_reg(unsigned index, uint8_t value, uint8_t mode)
 
 static unsigned txsrom_nt(uint16_t addr) { return hw_cart_ciram_a10(addr) ? 1 : 0; }
 
+/* nesdev wiki, TQROM: bank bit 6 selects the 8 KiB CHR RAM chip. */
+static void test_mapper119(void)
+{
+    cart(119, 128, 64);
+    hw_cart.chr_ram_base = 64 * 1024; hw_cart.chr_ram_len = 8192;
+    hw_cart_power_on();
+    CHECK(hw_cart.watch_ppu_addr);
+    prg_banks(0, 1, 14, 15);
+    mmc3_reg(0, 0x40, 0); /* 2 KiB: RAM pages 0-1 */
+    mmc3_reg(1, 0x3f, 0); /* 2 KiB: ROM pages 62-63 */
+    mmc3_reg(2, 0x47, 0); mmc3_reg(3, 0x7f, 0); /* RAM page 7 twice: A10-A12 only */
+    mmc3_reg(4, 0x80, 0); mmc3_reg(5, 0xbf, 0); /* bit 6 clear: ROM, bits 0-5 */
+    static const uint32_t ram = 64 * 1024;
+    const uint32_t off[8] = { ram, ram + 1024, 62 * 1024, 63 * 1024,
+                              ram + 7 * 1024, ram + 7 * 1024, 0, 63 * 1024 };
+    const uint8_t writable[8] = { 1, 1, 0, 0, 1, 1, 0, 0 };
+    for (unsigned p = 0; p < 8; ++p) {
+        CHECK(hw_cart.chr_off[p] == off[p]);
+        CHECK(hw_cart.chr_write[p] == writable[p]);
+        CHECK(hw_cart_chr_index((uint16_t)(p * 1024 + 0x155)) == off[p] + 0x155);
+    }
+    hw_cart_cpu_write(0x8000, 0x80); /* swap the halves */
+    for (unsigned p = 0; p < 8; ++p) {
+        CHECK(hw_cart.chr_off[p ^ 4] == off[p]);
+        CHECK(hw_cart.chr_write[p ^ 4] == writable[p]);
+    }
+    chr[ram + 7 * 1024 + 3] = 0x99;
+    CHECK(pattern_read(0x0003) == 0x99 && pattern_read(0x0403) == 0x99);
+    /* No work RAM on the board, whatever $A001 says. */
+    hw_cart_cpu_write(0xa001, 0x80);
+    no_wram();
+    hw.cycles = 100;
+    hw_cart_cpu_write(0xc000, 0); hw_cart_cpu_write(0xc001, 0); hw_cart_cpu_write(0xe001, 0);
+    hw_cart_ppu_addr(0x0000); hw.cycles += 4; hw_cart_ppu_addr(0x1000);
+    CHECK(hw_cart_irq());
+    /* CHR-RAM boards stay writable through the MMC3 path. */
+    cart(4, 128, 8);
+    hw_cart.chr_ram = 1; hw_cart_power_on();
+    mmc3_reg(2, 3, 0);
+    for (unsigned p = 0; p < 8; ++p) CHECK(hw_cart.chr_write[p]);
+}
+
 /* nesdev wiki, TxSROM: CHR A17 drives CIRAM A10. */
 static void test_mapper118(void)
 {
@@ -437,6 +479,7 @@ int main(void)
     no_wram();
     /* Run added board contracts. */
     test_mapper118();
+    test_mapper119();
     test_mapper232();
     test_mapper184();
     test_mapper180();

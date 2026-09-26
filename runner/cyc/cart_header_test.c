@@ -57,6 +57,17 @@ int main(void)
     CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==118 && c.prg_ram==8192);
     CHECK(nes_cart_variant_supported(&c));
     h[6]=0x68; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
+    /* TQROM: iNES implies the 8 KiB CHR RAM beside at most 64 KiB CHR ROM. */
+    memset(h,0,sizeof(h)); memcpy(h,"NES",3); h[3]=26; h[4]=8; h[5]=8; h[6]=0x70; h[7]=0x70;
+    CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==119 && c.chr_size==65536 && c.chr_ram==8192);
+    CHECK(c.prg_ram==0 && nes_cart_variant_supported(&c));
+    h[5]=16; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
+    h[5]=8; h[7]=0x78; h[11]=7; CHECK(nes_cart_header(h,16,&c)); CHECK(nes_cart_variant_supported(&c));
+    h[11]=8; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
+    h[11]=0x77; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
+    h[11]=0; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
+    h[11]=7; h[5]=0; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
+    h[6]=0x40; h[7]=0x08; h[5]=8; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==4 && !nes_cart_variant_supported(&c));
     puts("cartridge header contracts passed");
     return 0;
 }

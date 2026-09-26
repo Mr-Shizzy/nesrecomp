@@ -275,9 +275,18 @@ bool cyc_load_ines(const uint8_t *image, size_t size)
         !nes_cart_variant_supported(&info)) return false;
     uint32_t prg_alloc, chr_alloc;
     uint32_t chr_len = info.chr_size ? info.chr_size : info.chr_ram + info.chr_nvram;
+    /* A board with both CHR ROM and CHR RAM (TQROM) keeps the RAM chip after
+     * the padded ROM, outside the range ROM bank numbers wrap within. */
+    uint32_t mixed_ram = info.chr_size ? info.chr_ram : 0;
     uint8_t *prg = alloc_padded(image + info.data_offset, info.prg_size, &prg_alloc);
     uint8_t *chr = alloc_padded(info.chr_size ? image + info.data_offset + info.prg_size : NULL,
                               chr_len, &chr_alloc);
+    if (chr && mixed_ram) {
+        uint8_t *grown = (uint8_t *)realloc(chr, (size_t)chr_alloc + mixed_ram);
+        if (grown) memset(grown + chr_alloc, 0, mixed_ram);
+        else free(chr);
+        chr = grown;
+    }
     if (!prg || !chr) { free(prg); free(chr); return false; }
     free(hw_cart.prg);
     free(hw_cart.chr);
@@ -290,6 +299,8 @@ bool cyc_load_ines(const uint8_t *image, size_t size)
     hw_cart.chr_len = chr_len;
     hw_cart.chr_pages = chr_alloc / 1024;
     hw_cart.chr_ram = !info.chr_size;
+    hw_cart.chr_ram_base = mixed_ram ? chr_alloc : 0;
+    hw_cart.chr_ram_len = mixed_ram ? mixed_ram : hw_cart.chr_ram ? chr_len : 0;
     hw_cart.mapper = info.mapper;
     if (info.mapper==153) memset(hw_cart.wram,255,8192);
     nes_eeprom_init(&hw_cart.eeprom[0],info.mapper==157?256:(info.mapper==16 || info.mapper==159)?info.prg_nvram:0);
@@ -386,8 +397,8 @@ size_t cyc_audio_read(int16_t *out, size_t max) { return apu_audio_read(out, max
 
 uint64_t cyc_mem_state_hash(void)
 {
-    uint64_t h = cyc_mem_hash(hw.cycles, hw.ram, ppu.ciram, hw_cart.info.four_screen ? 4096 : 2048, ppu.oam, ppu.palette, hw_cart.chr_ram ? hw_cart.chr : NULL,
-                        hw_cart.chr_len, hw_cart.has_wram ? hw_cart.wram : NULL, hw_cart.wram_len,
+    uint64_t h = cyc_mem_hash(hw.cycles, hw.ram, ppu.ciram, hw_cart.info.four_screen ? 4096 : 2048, ppu.oam, ppu.palette,
+                        hw_cart.chr_ram_len ? hw_cart.chr + hw_cart.chr_ram_base : NULL, hw_cart.chr_ram_len, hw_cart.has_wram ? hw_cart.wram : NULL, hw_cart.wram_len,
                         hw_frame_index);
     for (unsigned chip=0;chip<2;++chip)
         for (unsigned i=0;i<hw_cart.eeprom[chip].size;++i) h=cyc_trace_mix(h,hw_cart.eeprom[chip].data[i]);
@@ -397,8 +408,8 @@ uint64_t cyc_mem_state_hash(void)
 
 void cyc_mem_state_dump(void *file)
 {
-    cyc_mem_dump(file, hw.cycles, hw.ram, ppu.ciram, hw_cart.info.four_screen ? 4096 : 2048, ppu.oam, ppu.palette, hw_cart.chr_ram ? hw_cart.chr : NULL,
-                 hw_cart.chr_len, hw_cart.has_wram ? hw_cart.wram : NULL, hw_cart.wram_len, hw_frame_index);
+    cyc_mem_dump(file, hw.cycles, hw.ram, ppu.ciram, hw_cart.info.four_screen ? 4096 : 2048, ppu.oam, ppu.palette,
+                 hw_cart.chr_ram_len ? hw_cart.chr + hw_cart.chr_ram_base : NULL, hw_cart.chr_ram_len, hw_cart.has_wram ? hw_cart.wram : NULL, hw_cart.wram_len, hw_frame_index);
 }
 
 uint64_t cyc_hw_state_hash(void)

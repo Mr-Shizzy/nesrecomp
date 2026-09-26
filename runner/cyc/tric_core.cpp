@@ -9627,7 +9627,7 @@ bool cyc_load_ines(const uint8_t *image, size_t size) {
     case 34: break;
     case 13: break;
     case 11: break;
-    case 118: break;
+    case 118: case 119: break;
     case 40: case 155: case 0: case 1: case 2: case 3: case 4: case 7: case 66: break;
     default: return false;
     }
@@ -9771,8 +9771,9 @@ static const struct { const char *name; const void *p; size_t n; } cyc_hw_fields
 // What any NES model can be compared on at a frame boundary (cyc_trace.c).
 uint64_t cyc_mem_state_hash(void)
 {
-    uint64_t h = cyc_mem_hash(totalCycles, RAM, VRAM, Cart.Info.four_screen ? 4096 : 2048, OAM, PaletteRAM, Cart.UsingCHRRAM ? Cart.CHRROM : NULL,
-                        (size_t)Cart.CHRROM_Length,
+    uint64_t h = cyc_mem_hash(totalCycles, RAM, VRAM, Cart.Info.four_screen ? 4096 : 2048, OAM, PaletteRAM,
+                        Cart.Mapper == 119 ? Cart.CHRRAM : Cart.UsingCHRRAM ? Cart.CHRROM : NULL,
+                        Cart.Mapper == 119 ? sizeof(Cart.CHRRAM) : (size_t)Cart.CHRROM_Length,
                         Cart.MapperChip.HasWRAM ? Cart.MapperChip.WRAM : NULL, Cart.MapperChip.WRAM_Length,
                         cyc_frame_index_buffer);
     for (unsigned chip=0;chip<2;++chip)
@@ -9783,8 +9784,9 @@ uint64_t cyc_mem_state_hash(void)
 
 void cyc_mem_state_dump(void *file)
 {
-    cyc_mem_dump(file, totalCycles, RAM, VRAM, Cart.Info.four_screen ? 4096 : 2048, OAM, PaletteRAM, Cart.UsingCHRRAM ? Cart.CHRROM : NULL,
-                 (size_t)Cart.CHRROM_Length,
+    cyc_mem_dump(file, totalCycles, RAM, VRAM, Cart.Info.four_screen ? 4096 : 2048, OAM, PaletteRAM,
+                 Cart.Mapper == 119 ? Cart.CHRRAM : Cart.UsingCHRRAM ? Cart.CHRROM : NULL,
+                 Cart.Mapper == 119 ? sizeof(Cart.CHRRAM) : (size_t)Cart.CHRROM_Length,
                  Cart.MapperChip.HasWRAM ? Cart.MapperChip.WRAM : NULL, Cart.MapperChip.WRAM_Length,
                  cyc_frame_index_buffer);
 }

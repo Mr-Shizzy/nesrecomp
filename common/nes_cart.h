@@ -79,6 +79,8 @@ static inline bool nes_cart_header(const uint8_t *h, size_t size, NesCartInfo *c
         if (c->mapper == 159) { c->prg_ram=0; c->prg_nvram=128; }
         if (c->mapper == 16) { c->prg_ram=0; c->prg_nvram=c->battery?256:0; }
         if (!c->chr_size) c->chr_ram = c->mapper == 13 ? 16384 : 8192;
+        /* TQROM always pairs its CHR ROM with an 8 KiB CHR RAM chip. */
+        if (c->mapper == 119) c->chr_ram = 8192;
     }
     return c->prg_size >= 4096;
 }
@@ -98,6 +100,11 @@ static inline bool nes_cart_variant_supported(const NesCartInfo *c)
     if (c->console || (c->nes2 && c->timing != 0 && c->timing != 2)) return false;
     if (c->prg_ram + c->prg_nvram > 0x20000 || c->chr_ram + c->chr_nvram > 0x100000)
         return false;
+    /* TQROM: CHR A16 selects the RAM chip; ROM sees bank bits 0-5 only, and
+     * the RAM decodes A10-A12, so exactly 8 KiB. No other board mixes them. */
+    if (c->mapper == 119)
+        return !c->submapper && !c->four_screen && c->chr_size && c->chr_size <= 65536 &&
+               c->chr_ram == 8192 && !c->chr_nvram;
     if (c->chr_size && (c->chr_ram || c->chr_nvram)) return false;
     if (!c->chr_size && !c->chr_ram && !c->chr_nvram) return false;
     switch (c->mapper) {
