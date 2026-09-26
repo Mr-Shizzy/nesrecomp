@@ -78,7 +78,7 @@ def timer_program(dma=False):
         a=p.labels['handler'];prg[-2:]=bytes([a&255,a>>8])
     return m5image('timer'+('_dma' if dma else ''),p,extra=vector)
 
-def render_program(exmode=0,split=0):
+def render_program(exmode=0,split=0,cpu_access=None):
     p=M5Program();p.emit(0x78,0xd8,0xa2,255,0x9a)
     p.store(0x2000,0);p.store(0x2001,0);p.store(0x4017,64)
     p.emit(*([0x2c,2,0x20,0x10,0xfb]*2))
@@ -95,8 +95,19 @@ def render_program(exmode=0,split=0):
     p.store(0x2000,0x20);p.store(0x2001,0x1e)
     # Poll an IRQ generated from real PPU fetches, not a synthetic line tick.
     p.store(0x5203,5);p.label('wait');p.read(0x5204);p.emit(0x10,0xfb)
-    p.emit(0x29,0x40);p.expect(0x40);p.emit(0xa9,0x42)
-    name,img,seeds,expected=m5image(f'render_{exmode}_{split:02x}',p)
+    p.emit(0x29,0x40);p.expect(0x40)
+    if cpu_access:
+        # PPU register accesses advance part of a CPU cycle inside the host.
+        # During continuous rendering they must not make MMC5's /RD watchdog
+        # see three idle CPU edges, clear in-frame, or reset its scanline count.
+        for i in range(64):
+            if cpu_access=='write':p.store(0x2000,0x20)
+            else:p.read(0x2002)
+            p.read(0x5204);p.emit(0x29,0x40);p.expect(0x40)
+            if i%2:p.emit(0xea) # vary the access's phase against PPU fetches
+    p.emit(0xa9,0x42)
+    suffix=f'cpu_access_{cpu_access}' if cpu_access else f'{exmode}_{split:02x}'
+    name,img,seeds,expected=m5image('render_'+suffix,p)
     h=bytearray(img[:16]);h[5]=16;h[11]=0
     # Each tile's row/plane distinguish banks and fine Y, with no solid-color
     # degeneracy that would hide incorrect split or CHR selection.
@@ -148,5 +159,6 @@ def mmc5_fixtures():
     yield timer_program();yield timer_program(True)
     for mode in (0,1):
         for split in (0,0x90,0xd0):yield render_program(mode,split)
+    for access in ('read','write'):yield render_program(cpu_access=access)
     yield tone_program();yield tone_program(1)
     yield save_program();yield save_program(True)

@@ -66,14 +66,14 @@ inline void TricMapper::VRCWrite(ushort Address, byte Input) {
         break;
     }
 }
-inline void TricMapper::CPUClock() {
+inline void TricMapper::CPUClock(bool PPUReadAtCPU) {
     if (Cart.Mapper==40) {
         if (IrqEnable && totalCycles!=LastWriteCycle && VrcCounter16!=4096) {
             VrcCounter16++; if (VrcCounter16==4096) IrqOut=true;
         }
         return;
     }
-    if (Cart.Mapper==5) { MMC5Clock(); return; }
+    if (Cart.Mapper==5) { MMC5Clock(PPUReadAtCPU); return; }
     if (BandaiBoard()) { BandaiClock(); return; }
     if (!IrqEnable || totalCycles == LastWriteCycle) return;
     if (Cart.Mapper == 73) {
