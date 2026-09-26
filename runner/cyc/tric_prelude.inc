@@ -91,7 +91,7 @@ struct TricMapper {
     void MMC5PCM(byte Value);
     bool MMC5Read(ushort Address, byte &Value, bool SideEffects);
     void MMC5Write(ushort Address, byte Input);
-    void MMC5Clock();
+    void MMC5Clock(bool PPUReadAtCPU);
     void MMC5PPURead(ushort Address);
     unsigned MMC5CHR(ushort Address);
     byte MMC5NT(ushort Address, bool Render);
@@ -121,7 +121,7 @@ struct TricMapper {
     int  FetchPatternAddress(ushort Address);
     void AccessPPU();
     void PPUClock();
-    void CPUClock();
+    void CPUClock(bool PPUReadAtCPU);
     bool BandaiBoard();
     void BandaiApply();
     void BandaiWrite(ushort Address, byte Input);

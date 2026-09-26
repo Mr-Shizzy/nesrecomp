@@ -744,9 +744,13 @@ void _EmulatorCore()
                     }
                 }
 
+                // PPU register accesses can advance master ticks inside _6502.
+                // MMC5 must sample /RD at this CPU edge, before those ticks,
+                // or it can falsely detect three idle cycles during rendering.
+                bool ppuReadAtCPU = PPU_READ;
                 _6502(); // This is where I run the CPU
                 totalCycles++;         // for debugging mostly
-                Cart.MapperChip.CPUClock(); // If the mapper chip does every cpu cycle... (see FME-7)
+                Cart.MapperChip.CPUClock(ppuReadAtCPU); // If the mapper chip does every cpu cycle... (see FME-7)
             }
             CoreTickAfterCPU();
 }

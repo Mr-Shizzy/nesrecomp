@@ -140,10 +140,10 @@ inline void TricMapper::MMC5Write(ushort Address, byte Input) {
     case 0x520a: M5.timer=M5.timer%256+Input*256; M5.timer_write=totalCycles+1; break;
     }
 }
-inline void TricMapper::MMC5Clock() {
+inline void TricMapper::MMC5Clock(bool PPUReadAtCPU) {
     // Connector data pins are refreshed only on an access; /RD changes even
     // when there is no access (especially at vblank). Sample the actual pin.
-    if (PPU_READ) M5.idle=0;
+    if (PPUReadAtCPU) M5.idle=0;
     else if (M5.idle<3) {
         ++M5.idle;
         if (M5.idle==3) {
