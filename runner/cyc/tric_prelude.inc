@@ -119,6 +119,8 @@ struct TricMapper {
     void Sunsoft4Apply();
     int  Sunsoft4Page(ushort Address);
     void Sunsoft4Store(ushort Address, byte Input);
+    void Action52Store(ushort Address, byte Input);
+    bool Action52Open;             // mapper 228: the absent third chip is selected
     void MMC1Apply();
     void MMC1Write(ushort Address, byte Input);
     void MMC3Apply();
@@ -369,6 +371,21 @@ inline void TricMapper::PPUClock() {
     }
 }
 
+// ---- Active Enterprises (nesdev wiki, INES Mapper 228) ----
+// Address 1.MHHPPP PPS.CCCC plus D1-D0. The 1.5 MiB image stores chips 0, 1
+// and 3; chip 2 is not fitted.
+inline void TricMapper::Action52Store(ushort Address, byte Input) {
+    unsigned chip = (Address >> 11) % 4, page = (Address >> 6) % 32;
+    bool three = Cart.PRGROM_Length == 3 * 524288;
+    Action52Open = three && chip == 2;
+    unsigned base = (three && chip == 3 ? 2 : chip) * 32 + page;
+    bool single = (Address & 32) != 0;
+    MapPRG16(0, (int)(single ? base : base - base % 2));
+    MapPRG16(1, (int)(single ? base : base - base % 2 + 1));
+    MapCHR8((int)((Address % 16) * 4 + Input % 4));
+    Mirroring = (Address & 0x2000) ? TRIC_MIRROR_HORIZONTAL : TRIC_MIRROR_VERTICAL;
+}
+
 // ---- reset ----
 
 inline void TricMapper::Reset() {
@@ -392,6 +409,7 @@ inline void TricMapper::Reset() {
     VrcLatch16 = VrcCounter16 = 0;
     IrqDivider = 341; IrqMode = 0;
     Fme7Cmd = Fme7IrqCtrl = 0; memset(Fme7Reg, 0, sizeof(Fme7Reg)); Fme7Counter = 0;
+    Action52Open = false;
     CPU_Drove = false;
     if (!Cart.Info.battery && !Cart.Info.prg_nvram) memset(ExRAM,0,sizeof(ExRAM));
     WRAM_Length = Cart.Info.prg_ram + Cart.Info.prg_nvram;
@@ -409,6 +427,7 @@ inline void TricMapper::Reset() {
     case 69: FME7Apply(); break;
     case 68: Sunsoft4Apply(); break;
     case 41: MapPRG32(0); MapCHR8(0); Mirroring = TRIC_MIRROR_VERTICAL; break;
+    case 228: Action52Store(0x8000, 0); break;
     case 16: case 159: case 153: case 157: BandaiApply(); break;
     case 85: Reg[1]=1; Reg[2]=2; VRC7Apply(); break;
     case 24: case 26: Ctrl=0x20; VRC6Apply(); break;
@@ -480,6 +499,7 @@ inline void TricMapper::FetchCPU() {
         }
         if (!VRC2Board() && WRAM_Length == 2048 && CPU_AddressIn >= 0x7000) return;
     }
+    if (!SeventyTwoPinConnector[49] && Cart.Mapper == 228 && Action52Open) return;   // open bus
     if (!SeventyTwoPinConnector[49]) {    // A15 high: PRG ROM
         CPU_NonTiltData = Cart.PRGROM[PRG_Off[(CPU_AddressIn >> 12) & 7] | (CPU_AddressIn & 0xFFF)];
         CPU_Drove = true;
@@ -499,6 +519,7 @@ inline byte TricMapper::SnoopCPU(ushort Address) {
         if (VRC2Board() && !HasWRAM) return Address < 0x7000 ? (dataBus & 0xfe) | Latch : dataBus;
         if (!VRC2Board() && WRAM_Length == 2048 && Address >= 0x7000) return dataBus;
     }
+    if (Address >= 0x8000 && Cart.Mapper == 228 && Action52Open) return dataBus;
     if (Address >= 0x8000) return Cart.PRGROM[PRG_Off[(Address >> 12) & 7] | (Address & 0xFFF)];
     if (Address >= 0x6000 && HasWRAM && WRAM_Readable) return WRAM[(WRAM_Bank + (Address & 0x1FFF)) % WRAM_Length];
     return dataBus;
@@ -668,6 +689,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     case 3: Latch = Input; MapCHR8(Input); break;
     case 4: case 118: case 119: MMC3Write(Address, Input); break;
     case 68: Sunsoft4Store(Address, Input); break;
+    case 228: Action52Store(Address, Input); break;
     case 7:
         Latch = Input;
         MapPRG32(Input & 7);

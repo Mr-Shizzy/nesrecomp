@@ -416,6 +416,39 @@ static void mmc3_ppu_addr(uint16_t vbus)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Mapper 228: Active Enterprises (Action 52, Cheetahmen II)                */
+/* ------------------------------------------------------------------------- */
+/* nesdev wiki, INES Mapper 228. A write to $8000-$FFFF latches the address
+ * (1.MHHPPP PPS.CCCC) and D0-D1: A13 mirroring (1 = horizontal), A11-A12 the
+ * 512 KiB PRG chip, A6-A10 its 16 KiB page, A5 16 KiB mode (the page in both
+ * halves; else the even/odd pair), A0-A3:D0-D1 the 8 KiB CHR bank. The
+ * 1.5 MiB Action 52 has chips 0, 1 and 3, stored in that order: selecting
+ * chip 2 reads open bus. The documented $4020-$5FFF nibble RAM is absent on
+ * both cartridges and is not modeled. */
+static void action52_apply(void)
+{
+    uint16_t a = (uint16_t)(hw_cart.m.chr1 << 8 | hw_cart.m.latch);
+    unsigned chip = (a >> 11) & 3, page = (a >> 6) & 31;
+    bool three_chips = hw_cart.prg_len == 0x180000;
+    bool open = three_chips && chip == 2;
+    if (three_chips && chip == 3) chip = 2;
+    unsigned bank = chip * 32 + page;
+    if (a & 0x20) { map_prg16(0, (int)bank); map_prg16(1, (int)bank); }
+    else map_prg16(0, (int)(bank & ~1u)), map_prg16(1, (int)(bank | 1));
+    if (open) for (unsigned slot = 0; slot < 8; ++slot) hw_cart.prg_off[slot] |= MMC5_PRG_OPEN;
+    map_chr8((int)((a & 15) << 2 | (hw_cart.m.chr0 & 3)));
+    hw_cart.mirroring = (a & 0x2000) ? HW_MIRROR_HORIZONTAL : HW_MIRROR_VERTICAL;
+}
+
+static void action52_write(uint16_t addr, uint8_t value)
+{
+    hw_cart.m.latch = (uint8_t)addr;
+    hw_cart.m.chr1 = (uint8_t)(addr >> 8);
+    hw_cart.m.chr0 = value & 3;
+    action52_apply();
+}
+
+/* ------------------------------------------------------------------------- */
 /* Mapper 118: TxSROM (TKSROM/TLSROM)                                       */
 /* ------------------------------------------------------------------------- */
 /* nesdev wiki, TxSROM: an MMC3 whose CHR A17 output drives CIRAM A10 in place
@@ -510,6 +543,7 @@ static const struct {
     { 69, "Sunsoft FME-7 / 5B", 0, 1 },
     { 68, "Sunsoft-4", 0, 1 },
     { 41, "Caltron 6-in-1", 0, 0 },
+    { 228, "Active Enterprises", 0, 0 },
     { 157, "Bandai Datach", 1, 0 },
     { 153, "Bandai BA-JUMP2", 1, 1 },
     { 16, "Bandai FCG / LZ93D50", 0, 0 },
@@ -619,6 +653,8 @@ void hw_cart_power_on(void)
     case 69: fme7_apply(); break;
     case 68: sunsoft4_apply(); break;
     case 41: nrom_reset(); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
+    /* The games expect $00 written to $8000 at power-on and reset. */
+    case 228: action52_write(0x8000, 0); break;
     case 16: case 159: case 153: case 157: bandai_apply(); break;
     case 85: hw_cart.m.reg[1]=1; hw_cart.m.reg[2]=2; hw_cart.m.irq_prescaler=341; vrc7_apply(); break;
     case 24: case 26:
@@ -828,6 +864,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 3:  cnrom_write(value); break;
     case 4: case 118: case 119: mmc3_write(addr, value); break;
     case 68: sunsoft4_write(addr, value); break;
+    case 228: action52_write(addr, value); break;
     case 7:  axrom_write(value); break;
     case 66: gxrom_write(value); break;
     default: break;              /* NROM: the ROM ignores writes */

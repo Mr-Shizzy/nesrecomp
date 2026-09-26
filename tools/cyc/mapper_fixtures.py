@@ -33,6 +33,31 @@ def handoff(name, mapper, writes, expected_bank, *, prg_kb=128, chr_kb=8,
     return name, header + prg + bytes(chr_kb * 1024), seeds, f'A={expected_bank:02X}'
 
 
+def action52_open_bus():
+    """Mapper 228 on a 1.5 MiB image: chip 2 is not fitted. A routine copied
+    to RAM selects it, reads $8000 (open bus: the operand's high byte, $80),
+    reselects chip 0 and returns. A=$42 on success."""
+    routine = bytes([0x8d, 0x00, 0x90,   # STA $9000: chip 2, page 0
+                     0xad, 0x00, 0x80,   # LDA $8000: open bus
+                     0x85, 0x10,         # STA $10
+                     0x8d, 0x00, 0x80,   # STA $8000: chip 0 again
+                     0x4c, 0x00, 0x81])  # JMP $8100
+    code = bytearray([0x78, 0xd8, 0xa2, 0xff, 0x9a])
+    for i, byte in enumerate(routine):
+        code.extend([0xa9, byte, 0x8d, (0x300 + i) & 255, (0x300 + i) >> 8])
+    code.extend([0x4c, 0x00, 0x03])
+    check = bytes([0xa5, 0x10, 0xc9, 0x80, 0xd0, 0x05, 0xa9, 0x42, 0x4c, 0x06, 0x81,
+                   0xa9, 0xee, 0x4c, 0x0d, 0x81])
+    prg = bytearray([0xff]) * (1536 * 1024)
+    for bank in range(192):
+        offset = bank * 8192
+        prg[offset:offset + len(code)] = code
+        prg[offset + 0x100:offset + 0x100 + len(check)] = check
+        prg[offset + 8192 - 6:offset + 8192] = bytes([0, 0x80]) * 3
+    header = b'NES\x1a' + bytes([96, 1, 0x40, 0xe0]) + bytes(8)
+    return 'mapper228_open_bus', header + prg + bytes(8192), '00:8000\n00:8100\n', 'fallback:A=42'
+
+
 def mapper_fixtures():
     # Add a runtime fixture with each mapper implementation.
     yield handoff('mapper11', 11, [(0xb000, 0x21)], 4, chr_kb=128)
@@ -63,4 +88,9 @@ def mapper_fixtures():
     for mode in ('absolute', 'indexed', 'indirect'):
         yield handoff('mapper41_' + mode, 41, [(0x6006, 0)], 24, prg_kb=256, chr_kb=128,
                       addressing=mode)
+    # Active Enterprises: the address is the register (1.MHHPPP PPS.CCCC).
+    yield handoff('mapper228_pair', 228, [(0x80c0, 0)], 4, prg_kb=256, chr_kb=128)
+    yield handoff('mapper228_single', 228, [(0x81e0, 0)], 14, prg_kb=256, chr_kb=128)
+    yield handoff('mapper228_chip3', 228, [(0x9820, 0)], 128, prg_kb=1536, chr_kb=8)
+    yield action52_open_bus()
     yield from ()
