@@ -12,6 +12,7 @@ def main():
     ap.add_argument('--fixtures',type=Path,help='VRC6 tone fixture directory')
     ap.add_argument('--fm-fixtures',type=Path,help='VRC7 fixture directory')
     ap.add_argument('--mmc5-fixtures',type=Path,help='MMC5 fixture directory')
+    ap.add_argument('--s5b-fixtures',type=Path,help='Sunsoft 5B fixture directory (s5b_ prefix)')
     args=ap.parse_args();measurements=[];cases=[]
     if args.fixtures:
         for mapper in (24,26):
@@ -23,7 +24,10 @@ def main():
                   (root,'fm_nes2_tone_85_1',None),(root,'fm_nes2_tone_85_2_reset',None)]
     if args.mmc5_fixtures:
         cases += [(args.mmc5_fixtures.resolve(),f'mmc5_tone{i}',(21477272.7272727/12)/(16*254)) for i in range(2)]
-    if not cases: ap.error('pass --fixtures, --fm-fixtures or --mmc5-fixtures')
+    if args.s5b_fixtures:
+        from sunsoft_fixtures import S5B_TONES
+        cases += [(args.s5b_fixtures.resolve(),name,'noise' if hz is None else hz) for name,hz in S5B_TONES.items()]
+    if not cases: ap.error('pass --fixtures, --fm-fixtures, --mmc5-fixtures or --s5b-fixtures')
     for root,name,expected in cases:
             case=root/name
             suffix='.exe' if hasattr(subprocess,'CREATE_NO_WINDOW') else ''
@@ -49,6 +53,12 @@ def main():
                 if expected is None:
                     assert rms<1,(name,align,'expected silence',rms)
                     measurements.append(dict(case=name,align=align,rms=rms,expected='silence'))
+                    continue
+                if expected=='noise':
+                    # Aperiodic: audible, unclipped, and many level changes.
+                    changes=sum(1 for i in range(1,len(samples)) if samples[i]!=samples[i-1])
+                    assert rms>50 and changes>1000 and max(samples)<32767 and min(samples)>-32768,(name,rms,changes)
+                    measurements.append(dict(case=name,align=align,rms=rms,expected='noise',changes=changes))
                     continue
                 crossings=[i for i in range(1,len(samples)) if samples[i-1]<=center<samples[i]]
                 assert len(crossings)>100

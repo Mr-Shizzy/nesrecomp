@@ -15,6 +15,7 @@
 
 #include "cyc_trace.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -497,6 +498,7 @@ void hw_cart_ppu_rd(bool reading)
 #include "hw_vrc6.inc"
 #include "hw_vrc7.inc"
 #include "hw_bandai.inc"
+#include "hw_sunsoft.inc"
 
 static const struct {
     int         mapper;
@@ -505,6 +507,7 @@ static const struct {
     uint8_t     wram;            /* boards for this mapper carry work RAM */
 } MAPPERS[] = {
     { 5, "MMC5", 0, 1 },
+    { 69, "Sunsoft FME-7 / 5B", 0, 1 },
     { 157, "Bandai Datach", 1, 0 },
     { 153, "Bandai BA-JUMP2", 1, 1 },
     { 16, "Bandai FCG / LZ93D50", 0, 0 },
@@ -590,7 +593,7 @@ void hw_cart_power_on(void)
     memset(hw_cart.chr_write, hw_cart.chr_ram, sizeof(hw_cart.chr_write));
     int i = mapper_index(hw_cart.mapper);
     hw_cart.watch_ppu_addr = i >= 0 ? MAPPERS[i].watch_ppu_addr : 0;
-    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
+    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
     hw_cart.mirroring = hw_cart.info.vertical ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
     hw_cart.wram_bank = 0;
     hw_cart.has_wram = hw_cart.info.prg_size ? hw_cart.wram_len != 0 : i >= 0 ? MAPPERS[i].wram : 0;
@@ -608,8 +611,10 @@ void hw_cart_power_on(void)
     for (unsigned chip=0;chip<2;++chip) nes_eeprom_reset(&hw_cart.eeprom[chip]);
     memset(&hw_cart.barcode,0,sizeof(hw_cart.barcode));
     vrc7_sound_reset(true);
+    s5b_reset();
     switch (hw_cart.mapper) {
     case 5: mmc5_reset(); break;
+    case 69: fme7_apply(); break;
     case 16: case 159: case 153: case 157: bandai_apply(); break;
     case 85: hw_cart.m.reg[1]=1; hw_cart.m.reg[2]=2; hw_cart.m.irq_prescaler=341; vrc7_apply(); break;
     case 24: case 26:
@@ -662,6 +667,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
         return;
     }
     if (hw_cart.mapper==5) { mmc5_write(addr,value); return; }
+    if (hw_cart.mapper==69 && addr>=0x8000) { fme7_write(addr,value); return; }
     if (bandai_board()) { bandai_write(addr,value); return; }
     if (vrc24_board() && addr >= 0x6000 && addr < 0x8000) {
         if (vrc2_board() && !hw_cart.has_wram) {
@@ -812,6 +818,7 @@ bool hw_cart_cpu_read(uint16_t addr, uint8_t *value)
         *value=hw_cart.prg[((12u&(hw_cart.prg_slots-1))*4096)+(addr&8191)]; return true;
     }
     if (hw_cart.mapper==5) return mmc5_read(addr,value);
+    if (hw_cart.mapper==69) return addr>=0x6000 && addr<0x8000 && fme7_read(addr,value);
     if (bandai_board()) return bandai_read(addr,value);
     if (vrc24_board() && addr >= 0x6000 && addr < 0x8000) {
         if (vrc2_board() && !hw_cart.has_wram) {
@@ -853,6 +860,7 @@ void hw_cart_cpu_clock(void)
         return;
     }
     if (hw_cart.mapper==5) { mmc5_clock(); return; }
+    if (hw_cart.mapper==69) { fme7_clock(); return; }
     if (bandai_board()) { bandai_clock(); return; }
     if (hw_cart.mapper==85) vrc7_audio_clock();
     if (vrc6_board()) vrc6_audio_clock();
@@ -893,6 +901,7 @@ double hw_cart_audio_level(void)
      * Cartridge mixer resistor tolerances are not modeled. */
     if (hw_cart.mapper==5) return mmc5_audio();
     if (hw_cart.mapper==85) return -(double)hw_cart.m.vrc7_output / 32768.0;
+    if (hw_cart.mapper==69) return s5b_output();
     return vrc6_board() ? -(double)vrc6_audio_dac() * (0.1488 / 15.0) : 0;
 }
 
@@ -949,6 +958,12 @@ uint64_t hw_cart_state_hash(uint64_t h)
         for (unsigned i=0;i<sizeof(Mmc5State);++i) acc=acc*131+bytes[i];
     }
     if (hw_cart.mapper==85) acc=vrc7_sound_hash(acc);
+    if (hw_cart.mapper==69) {
+        const uint8_t *b=(const uint8_t *)&hw_cart.m.fme7;
+        for (unsigned i=0;i<sizeof(HwFme7);++i) acc=acc*131+b[i];
+        b=(const uint8_t *)&hw_cart.m.s5b;
+        for (unsigned i=0;i<sizeof(Hw5B);++i) acc=acc*131+b[i];
+    }
     if (bandai_board()) {
         /* Chip padding starts zero and all fields have deterministic reset. */
         const unsigned char *b=(const unsigned char *)hw_cart.eeprom;
@@ -966,6 +981,16 @@ uint64_t hw_cart_state_hash(uint64_t h)
 void hw_cart_state_dump(void *file)
 {
     FILE *f = (FILE *)file;
+    if (hw_cart.mapper==69) {
+        const HwFme7 *m=&hw_cart.m.fme7; const Hw5B *s=&hw_cart.m.s5b;
+        fprintf(f,"cart.fme7.command %X\ncart.fme7.prg %02X %02X %02X %02X\ncart.fme7.mirror %u\n"
+                  "cart.fme7.irq_ctrl %02X\ncart.fme7.counter %04X\n",m->command,m->prg[0],m->prg[1],
+                m->prg[2],m->prg[3],m->mirror,m->irq_ctrl,m->counter);
+        for (unsigned i=0;i<8;++i) fprintf(f,"cart.fme7.chr[%u] %02X\n",i,m->chr[i]);
+        fprintf(f,"cart.5b.address %02X\ncart.5b.env %u up=%u hold=%u count=%u\ncart.5b.lfsr %05X\n",
+                s->address,s->env_level,s->env_up,s->env_hold,s->env_count,(unsigned)s->lfsr);
+        for (unsigned r=0;r<16;++r) fprintf(f,"cart.5b.reg%X %02X\n",r,s->reg[r]);
+    }
     if (hw_cart.mapper==85) {
         fprintf(f,"cart.vrc7.address %02X\ncart.vrc7.phase %llu\ncart.vrc7.output %d\n",
             hw_cart.m.vrc7_address,(unsigned long long)hw_cart.m.vrc7_phase,hw_cart.m.vrc7_output);

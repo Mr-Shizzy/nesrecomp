@@ -2,6 +2,7 @@
  * documentation linked in MAPPERS.md, not from the oracle's bank tables. */
 #include "hw_internal.h"
 #include "hw.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -470,6 +471,7 @@ static void test_variants(void)
 #include "mmc5_test.inc"
 #include "mmc1_board_test.inc"
 #include "mapper40_test.inc"
+#include "sunsoft_test.inc"
 
 int main(void)
 {
@@ -506,6 +508,7 @@ int main(void)
     test_mmc1_boards();
     test_mmc1a();
     test_mapper40();
+    test_sunsoft();
     printf("mapper contracts: %u checks passed\n", checks);
     return 0;
 }

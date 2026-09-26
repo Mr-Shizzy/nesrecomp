@@ -86,6 +86,9 @@ struct TricMapper {
     ushort VrcChr[8], VrcLatch16, VrcCounter16;
     int16_t IrqDivider;
     byte IrqMode;
+    // ---- Sunsoft FME-7 ----
+    byte Fme7Cmd, Fme7Reg[16], Fme7IrqCtrl;
+    ushort Fme7Counter;
 
     uint MMC5RAM(unsigned Bank);
     void MMC5Apply();
@@ -109,6 +112,10 @@ struct TricMapper {
     void MapCHR4(uint Page, int Bank) { for (uint i = 0; i < 4; i++) MapCHR1(Page * 4 + i, Bank * 4 + (int)i); }
     void MapCHR8(int Bank) { for (uint i = 0; i < 8; i++) MapCHR1(i, Bank * 8 + (int)i); }
 
+    void FME7Apply();
+    bool FME7Low(ushort Address, byte *Out, const byte *In);
+    void FME7Store(ushort Address, byte Input);
+    void FME7Clock();
     void MMC1Apply();
     void MMC1Write(ushort Address, byte Input);
     void MMC3Apply();
@@ -212,6 +219,7 @@ inline bool TricMapper::CartMapperIRQ() { return Cart.Mapper==5 ? (M5.irq_enable
 #include "tric_vrc6.inc"
 #include "tric_vrc7.inc"
 #include "tric_bandai.inc"
+#include "tric_sunsoft.inc"
 
 // ---- MMC1 (nesdev wiki, MMC1) ----
 
@@ -380,6 +388,7 @@ inline void TricMapper::Reset() {
     memset(VrcChr, 0, sizeof(VrcChr));
     VrcLatch16 = VrcCounter16 = 0;
     IrqDivider = 341; IrqMode = 0;
+    Fme7Cmd = Fme7IrqCtrl = 0; memset(Fme7Reg, 0, sizeof(Fme7Reg)); Fme7Counter = 0;
     CPU_Drove = false;
     if (!Cart.Info.battery && !Cart.Info.prg_nvram) memset(ExRAM,0,sizeof(ExRAM));
     WRAM_Length = Cart.Info.prg_ram + Cart.Info.prg_nvram;
@@ -394,6 +403,7 @@ inline void TricMapper::Reset() {
 
     switch (Cart.Mapper) {
     case 5: MMC5Reset(); break;
+    case 69: FME7Apply(); break;
     case 16: case 159: case 153: case 157: BandaiApply(); break;
     case 85: Reg[1]=1; Reg[2]=2; VRC7Apply(); break;
     case 24: case 26: Ctrl=0x20; VRC6Apply(); break;
@@ -453,6 +463,7 @@ inline void TricMapper::FetchCPU() {
         CPU_NonTiltData=Cart.PRGROM[(6%(Cart.PRGSlots/2))*8192+CPU_AddressIn%8192]; CPU_Drove=true; return;
     }
     if (Cart.Mapper==5) { CPU_Drove=MMC5Read(CPU_AddressIn,CPU_NonTiltData,true); return; }
+    if (Cart.Mapper==69 && CPU_AddressIn>=0x6000 && CPU_AddressIn<0x8000) { CPU_Drove=FME7Low(CPU_AddressIn,&CPU_NonTiltData,nullptr); return; }
     if (BandaiBoard() && CPU_AddressIn<0x8000) { CPU_Drove=BandaiRead(CPU_AddressIn,CPU_NonTiltData); return; }
     if (VRC24Board() && CPU_AddressIn >= 0x6000 && CPU_AddressIn < 0x8000) {
         if (VRC2Board() && !HasWRAM) {
@@ -477,6 +488,7 @@ inline byte TricMapper::SnoopCPU(ushort Address) {
     if (Cart.Mapper==40 && Address>=0x6000 && Address<0x8000)
         return Cart.PRGROM[(6%(Cart.PRGSlots/2))*8192+Address%8192];
     if (Cart.Mapper==5) { byte v=dataBus; MMC5Read(Address,v,false); return v; }
+    if (Cart.Mapper==69 && Address>=0x6000 && Address<0x8000) { byte v=dataBus; FME7Low(Address,&v,nullptr); return v; }
     if (BandaiBoard() && Address<0x8000) { byte v=dataBus; BandaiRead(Address,v); return v; }
     if (VRC24Board() && Address >= 0x6000 && Address < 0x8000) {
         if (VRC2Board() && !HasWRAM) return Address < 0x7000 ? (dataBus & 0xfe) | Latch : dataBus;
@@ -499,6 +511,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
         return;
     }
     if (Cart.Mapper==5) { MMC5Write(Address,Input); return; }
+    if (Cart.Mapper==69) { FME7Store(Address,Input); return; }
     if (BandaiBoard()) { BandaiWrite(Address,Input); return; }
     if (VRC24Board() && Address >= 0x6000 && Address < 0x8000) {
         if (VRC2Board() && !HasWRAM) {
