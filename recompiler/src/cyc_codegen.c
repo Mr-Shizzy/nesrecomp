@@ -1404,6 +1404,7 @@ static const char *mapper_name(int mapper) {
     case 69: return "Sunsoft FME-7 / 5B";
     case 68: return "Sunsoft-4";
     case 41: return "Caltron 6-in-1";
+    case 228: return "Active Enterprises";
     case 119: return "TQROM";
     case 7:  return "AxROM";
     case 66: return "GxROM";

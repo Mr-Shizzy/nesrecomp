@@ -72,6 +72,36 @@ static void mmc3_reg(unsigned index, uint8_t value, uint8_t mode)
 
 static unsigned txsrom_nt(uint16_t addr) { return hw_cart_ciram_a10(addr) ? 1 : 0; }
 
+/* nesdev wiki, INES Mapper 228: 1.MHHPPP PPS.CCCC plus D0-D1. */
+static void test_mapper228(void)
+{
+    cart(228, 256, 512);
+    prg_banks(0, 1, 2, 3); chr_bank(0, 0, 8);
+    CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    hw_cart_cpu_write(0x8000 | 0x2000 | 5 << 6 | 0x20 | 3, 2);   /* 16 KiB page 5 twice */
+    prg_banks(10, 11, 10, 11); chr_bank(0, 14 * 8, 8);
+    CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    hw_cart_cpu_write(0x8000 | 5 << 6 | 0xf, 0xff);               /* even/odd pair 4-5 */
+    prg_banks(8, 9, 10, 11); chr_bank(0, 63 * 8, 8);
+    CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    hw_cart_cpu_write(0xffff, 0);                                 /* chip 3 wraps in 256 KiB */
+    prg_banks(30, 31, 30, 31); chr_bank(0, 60 * 8, 8);
+    hw_cart_cpu_write(0x7fff, 1); prg_banks(30, 31, 30, 31);      /* below $8000: no latch */
+    no_wram();
+    /* Action 52: chips 0, 1, 3 stored consecutively; chip 2 is open bus. */
+    cart(228, 512, 512);
+    hw_cart.prg_len = 0x180000; hw_cart.prg_slots = 512;
+    hw_cart_cpu_write(0x8000 | 3 << 11 | 1 << 6 | 0x20, 0);       /* chip 3 page 1 */
+    for (unsigned s = 0; s < 8; ++s) CHECK(hw_cart.prg_off[s] == 65u * 16384 + (s % 4) * 4096);
+    CHECK(hw_prg_is_rom(0x8000));
+    hw_cart_cpu_write(0x8000 | 2 << 11, 0);                       /* chip 2 */
+    for (unsigned s = 0; s < 8; ++s) CHECK(hw_cart.prg_off[s] & MMC5_PRG_OPEN);
+    CHECK(!hw_prg_is_rom(0x8000) && !hw_prg_is_rom(0xffff));
+    hw_cart_cpu_write(0x8000 | 1 << 11 | 31 << 6, 0);             /* chip 1, pair 30-31 */
+    prg_banks(124, 125, 126, 127);
+    hw_cart_cpu_write(0x8000, 0); prg_banks(0, 1, 2, 3);
+}
+
 /* nesdev wiki, INES Mapper 041: address-latched outer bank, gated inner CHR. */
 static void test_mapper41(void)
 {
@@ -504,6 +534,7 @@ int main(void)
     no_wram();
     /* Run added board contracts. */
     test_mapper41();
+    test_mapper228();
     test_mapper118();
     test_mapper119();
     test_mapper232();

@@ -100,6 +100,14 @@ def ppu_fixtures():
     yield ppu_contract(184, 32, 32, [
         ('cpu', 0x6000, 0x12), ('read', 0, 8), ('read', 0x1000, 20),
         ('cpu', 0x7fff, 0), ('read', 0, 0), ('read', 0x1000, 16)])
+    # Active Enterprises: CHR = A0-A3:D0-D1, mirroring = A13. Every write here
+    # keeps chip 0 page 0 in 32 KiB mode, the code's own bank.
+    yield ppu_contract(228, 256, 512, [
+        ('cpu', 0x8005, 2), ('read', 0, 176), ('read', 0x1fff, 183),
+        ('cpu', 0x800f, 3), ('read', 0, 248),
+        ('cpu', 0xa000, 0), ('read', 0, 0), ('write', 0x2000, 0x31), ('read', 0x2400, 0x31),
+        ('cpu', 0x8000, 0), ('read', 0x2800, 0x31),
+        ('cpu', 0x4020, 5), ('cpu_read', 0x4020, 0x40)])
     # Caltron 6-in-1: outer latch by address, inner CHR only with A2 set and
     # ANDed with the ROM byte ($8000 holds SEI, $78; $B000 holds $FF).
     yield ppu_contract(41, 256, 128, [
