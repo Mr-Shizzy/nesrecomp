@@ -76,6 +76,7 @@ struct TricMapper {
     bool IrqReload, IrqEnable, IrqOut;
     bool A12;
     ulong A12LowCycle;
+    bool ChrA17[8];                // TxSROM: CHR A17 per pattern page = CIRAM A10
     // ---- UxROM / CNROM / AxROM / GxROM ----
     byte Latch;
     bool PatternPending;
@@ -278,6 +279,12 @@ inline void TricMapper::MMC3Apply() {
     MapCHR1(small_ + 1, Reg[3]);
     MapCHR1(small_ + 2, Reg[4]);
     MapCHR1(small_ + 3, Reg[5]);
+    // The chip's CHR A17 pin for each pattern page, before any ROM-size wrap
+    // (nesdev wiki, TxSROM: the pin drives CIRAM A10 on that board).
+    for (uint i = 0; i < 4; ++i) {
+        ChrA17[big + i] = (Reg[i / 2] & 0x80) != 0;
+        ChrA17[small_ + i] = (Reg[2 + i] & 0x80) != 0;
+    }
 }
 
 inline void TricMapper::MMC3Write(ushort Address, byte Input) {
@@ -286,7 +293,8 @@ inline void TricMapper::MMC3Write(ushort Address, byte Input) {
     case 0x8001: Reg[BankSelect & 7] = Input; MMC3Apply(); break;
     case 0xA000:
         MirrorReg = Input;
-        Mirroring = (Input & 1) ? TRIC_MIRROR_HORIZONTAL : TRIC_MIRROR_VERTICAL;
+        if (Cart.Mapper != 118)   // TxSROM leaves the mirroring output unconnected
+            Mirroring = (Input & 1) ? TRIC_MIRROR_HORIZONTAL : TRIC_MIRROR_VERTICAL;
         break;
     case 0xA001:
         RamProtect = Input;
@@ -323,7 +331,7 @@ inline void TricMapper::PPUClock() {
         unsigned select=(PPU_AddressBus/1024)%4;
         if (BankSelect!=select) { BankSelect=select; if (Cart.Mapper==157) DatachLines(); else BandaiApply(); }
     }
-    if (Cart.Mapper != 4) return;
+    if (Cart.Mapper != 4 && Cart.Mapper != 118) return;
     if (!(PPU_AddressBus & 0x1000)) {
         if (A12) { A12 = false; A12LowCycle = totalCycles; }
         return;
@@ -347,6 +355,7 @@ inline void TricMapper::Reset() {
     IrqReload = IrqEnable = IrqOut = false;
     A12 = false;
     A12LowCycle = 0;
+    memset(ChrA17, 0, sizeof(ChrA17));
     Latch = 0;
     PatternPending = false;
     PatternAddress = 0;
@@ -401,7 +410,7 @@ inline void TricMapper::Reset() {
         MapPRG16(1, -1);
         MapCHR8(0);
         break;
-    case 4:
+    case 4: case 118:
         Reg[7] = 1;
         MMC3Apply();
         Mirroring = TRIC_MIRROR_VERTICAL;
@@ -612,7 +621,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     case 1: case 155: MMC1Write(Address, Input); break;
     case 2: Latch = Input; MapPRG16(0, Input); break;
     case 3: Latch = Input; MapCHR8(Input); break;
-    case 4: MMC3Write(Address, Input); break;
+    case 4: case 118: MMC3Write(Address, Input); break;
     case 7:
         Latch = Input;
         MapPRG32(Input & 7);
@@ -663,6 +672,7 @@ inline byte TricMapper::SnoopPPU(ushort Address) {
         return VRAM[(bank%2)*1024+(Address&1023)];
     }
     if (Cart.AlternativeNametableArrangement) return VRAM[Address & 0xfff];
+    if (Cart.Mapper == 118) return VRAM[(ChrA17[(Address >> 10) & 7] ? 0x400 : 0) | (Address & 0x3ff)];
     ushort Addr = (ushort)(Address & 0x3FF);
     if (Mirroring == TRIC_MIRROR_HORIZONTAL) Addr |= (ushort)((Address & 0x800) ? 0x400 : 0);
     else if (Mirroring == TRIC_MIRROR_VERTICAL) Addr |= (ushort)((Address & 0x400) ? 0x400 : 0);
@@ -701,6 +711,7 @@ inline void TricMapper::Connector_CheckCIRAM() {
         SeventyTwoPinConnector[21]=(VRC6Nametable((PPU_AddressBus>>10)&3)&1)!=0;
         return;
     }
+    if (Cart.Mapper == 118) { SeventyTwoPinConnector[21] = ChrA17[(PPU_AddressBus >> 10) & 7]; return; }
     bool a10;
     if (Mirroring == TRIC_MIRROR_HORIZONTAL)    a10 = (PPU_AddressBus & 0x800) != 0;
     else if (Mirroring == TRIC_MIRROR_VERTICAL) a10 = (PPU_AddressBus & 0x400) != 0;

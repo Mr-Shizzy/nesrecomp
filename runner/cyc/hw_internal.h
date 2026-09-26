@@ -162,7 +162,7 @@ HW_ALWAYS_INLINE uint32_t hw_cart_chr_index(uint16_t a)
 /* CIRAM A10 as the cartridge drives it, as a CIRAM index bit. */
 HW_ALWAYS_INLINE uint16_t hw_cart_ciram_a10(uint16_t vbus)
 {
-    if (hw_cart.mapper == 24 || hw_cart.mapper == 26) return hw_cart_nt_a10(vbus);
+    if (hw_cart.mapper == 24 || hw_cart.mapper == 26 || hw_cart.mapper == 118) return hw_cart_nt_a10(vbus);
     if (hw_cart.info.four_screen) return vbus & 0xc00;
     switch (hw_cart.mirroring) {
     case HW_MIRROR_HORIZONTAL: return (vbus & 0x800) ? 0x400 : 0;

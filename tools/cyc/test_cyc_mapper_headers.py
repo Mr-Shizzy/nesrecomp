@@ -15,6 +15,7 @@ from bandai_fixtures import bandai_fixtures
 from mmc5_fixtures import mmc5_fixtures
 from mmc1_fixtures import mmc1_fixtures
 from mapper40_fixtures import mapper40_fixtures
+from mmc3_variant_fixtures import mmc3_variant_fixtures
 
 
 def main():
@@ -28,7 +29,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     checked = set()
     count = 0
-    for _, image, _, _ in chain(mapper_fixtures(), latch_fixtures(), fineprg_fixtures(), vrc_fixtures(), expansion_fixtures(), vrc7_fixtures(), bandai_fixtures(), mmc5_fixtures(), mmc1_fixtures(), mapper40_fixtures()):
+    for _, image, _, _ in chain(mapper_fixtures(), latch_fixtures(), fineprg_fixtures(), vrc_fixtures(), expansion_fixtures(), vrc7_fixtures(), bandai_fixtures(), mmc5_fixtures(), mmc1_fixtures(), mapper40_fixtures(), mmc3_variant_fixtures()):
         mapper = (image[6] >> 4) | (image[7] & 0xf0)
         if mapper in checked:
             continue

@@ -63,6 +63,62 @@ static void no_wram(void)
 }
 
 /* Per-board tests. */
+static void mmc3_reg(unsigned index, uint8_t value, uint8_t mode)
+{
+    hw_cart_cpu_write(0x8000, (uint8_t)(mode | index));
+    hw_cart_cpu_write(0x8001, value);
+}
+
+static unsigned txsrom_nt(uint16_t addr) { return hw_cart_ciram_a10(addr) ? 1 : 0; }
+
+/* nesdev wiki, TxSROM: CHR A17 drives CIRAM A10. */
+static void test_mapper118(void)
+{
+    cart(118, 128, 128);
+    CHECK(hw_cart.watch_ppu_addr && hw_cart.has_wram);
+    prg_banks(0, 1, 14, 15);
+    mmc3_reg(6, 5, 0); mmc3_reg(7, 9, 0);
+    prg_banks(5, 9, 14, 15);
+    /* Mode 0: R0 covers $2000-$27FF, R1 $2800-$2FFF; bit 7 is not a
+     * nametable-only bit, it is the CHR A17 the 128 KiB ROM ignores. */
+    mmc3_reg(0, 0x84, 0); mmc3_reg(1, 0x06, 0);
+    chr_bank(0, 4, 2); chr_bank(2, 6, 2);
+    CHECK(txsrom_nt(0x2000) && txsrom_nt(0x23ff) && txsrom_nt(0x2400) && txsrom_nt(0x27ff));
+    CHECK(!txsrom_nt(0x2800) && !txsrom_nt(0x2fff));
+    /* R2-R5 map the other pattern half; their A17 is ignored for $2000-$2FFF
+     * but drives $3000-$3EFF, which the MMC3 decodes as pattern pages 4-7. */
+    mmc3_reg(2, 0x80, 0); mmc3_reg(3, 0, 0); mmc3_reg(4, 0x80, 0); mmc3_reg(5, 0, 0);
+    CHECK(txsrom_nt(0x2000) && !txsrom_nt(0x2800));
+    CHECK(txsrom_nt(0x3000) && !txsrom_nt(0x3400) && txsrom_nt(0x3800) && !txsrom_nt(0x3c00));
+    /* $A000 is disconnected. */
+    for (unsigned v = 0; v < 2; ++v) {
+        hw_cart_cpu_write(0xa000, (uint8_t)v);
+        CHECK(txsrom_nt(0x2000) && txsrom_nt(0x2400) && !txsrom_nt(0x2800) && !txsrom_nt(0x2c00));
+    }
+    /* Mode 1 swaps the halves: each 1 KiB register selects one nametable. */
+    hw_cart_cpu_write(0x8000, 0x80);
+    CHECK(txsrom_nt(0x2000) && !txsrom_nt(0x2400) && txsrom_nt(0x2800) && !txsrom_nt(0x2c00));
+    mmc3_reg(3, 0x81, 0x80);
+    CHECK(txsrom_nt(0x2400));
+    mmc3_reg(0, 0, 0x80); /* R0 now maps $1000-$17FF and $3000-$37FF */
+    CHECK(!txsrom_nt(0x3000) && !txsrom_nt(0x3400) && txsrom_nt(0x2000));
+    chr_bank(0, 0, 1); chr_bank(1, 1, 1); chr_bank(4, 0, 2);
+    /* The MMC3 IRQ counter runs from A12 exactly as on mapper 4. */
+    hw.cycles = 100;
+    hw_cart_cpu_write(0xc000, 1); hw_cart_cpu_write(0xc001, 0); hw_cart_cpu_write(0xe001, 0);
+    for (unsigned edge = 0; edge < 2; ++edge) {
+        hw_cart_ppu_addr(0x0000); hw.cycles += 4; hw_cart_ppu_addr(0x1000);
+    }
+    CHECK(hw_cart_irq());
+    hw_cart_cpu_write(0xe000, 0); CHECK(!hw_cart_irq());
+    /* Work RAM follows the MMC3's $A001 protect bits. */
+    uint8_t value = 0;
+    hw_cart_cpu_write(0xa001, 0x80); hw_cart_cpu_write(0x6000, 0x5a);
+    CHECK(hw_cart_cpu_read(0x6000, &value) && value == 0x5a);
+    hw_cart_cpu_write(0xa001, 0xc0); hw_cart_cpu_write(0x6000, 0x11);
+    CHECK(hw_cart_cpu_read(0x6000, &value) && value == 0x5a);
+}
+
 static void test_mapper232(void)
 {
     cart(232, 256, 8);
@@ -380,6 +436,7 @@ int main(void)
     chr_bank(0, 0, 8);
     no_wram();
     /* Run added board contracts. */
+    test_mapper118();
     test_mapper232();
     test_mapper184();
     test_mapper180();

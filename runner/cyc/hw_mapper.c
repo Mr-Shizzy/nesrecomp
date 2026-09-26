@@ -317,8 +317,10 @@ static void mmc3_write(uint16_t addr, uint8_t value)
         mmc3_apply();
         break;
     case 0xA000:
+        /* TxSROM wires CHR A17 to CIRAM A10 instead; see txsrom_ciram_a10. */
         hw_cart.m.mirror_reg = value;
-        hw_cart.mirroring = (value & 1) ? HW_MIRROR_HORIZONTAL : HW_MIRROR_VERTICAL;
+        if (hw_cart.mapper != 118)
+            hw_cart.mirroring = (value & 1) ? HW_MIRROR_HORIZONTAL : HW_MIRROR_VERTICAL;
         break;
     case 0xA001:
         hw_cart.m.ram_protect = value;
@@ -400,6 +402,23 @@ static void mmc3_ppu_addr(uint16_t vbus)
         hw_cart.m.a12 = 1;
         if (hw.cycles - hw_cart.m.a12_low_cycle >= MMC3_A12_FILTER_CYCLES) mmc3_clock_irq();
     }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Mapper 118: TxSROM (TKSROM/TLSROM)                                       */
+/* ------------------------------------------------------------------------- */
+/* nesdev wiki, TxSROM: an MMC3 whose CHR A17 output drives CIRAM A10 in place
+ * of the chip's mirroring output. The MMC3 decodes CHR from PPU A12-A10 alone,
+ * so a nametable address selects bit 7 of whichever register the matching
+ * pattern page uses: R0/R1 for the 2 KiB half, R2-R5 for the 1 KiB half,
+ * swapped by $8000 bit 7. Registers mapped to the other half are ignored.
+ * $A000 has no effect. The register value is used before any ROM-size wrap:
+ * A17 exists on the connector even when a smaller CHR ROM ignores it. */
+static uint16_t txsrom_ciram_a10(uint16_t addr)
+{
+    unsigned page = ((addr >> 10) & 7) ^ ((hw_cart.m.bank_select & 0x80) ? 4 : 0);
+    uint8_t bank = page < 4 ? hw_cart.m.reg[page >> 1] : hw_cart.m.reg[2 + (page & 3)];
+    return (bank & 0x80) ? 0x400 : 0;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -513,6 +532,7 @@ static const struct {
     { 2,  "UxROM", 0, 0 },
     { 3,  "CNROM", 0, 0 },
     { 4,  "MMC3",  1, 1 },
+    { 118, "TxSROM", 1, 1 },
     { 7,  "AxROM", 0, 0 },
     { 66, "GxROM", 0, 0 },
 };
@@ -608,7 +628,7 @@ void hw_cart_power_on(void)
     case 1: case 155: mmc1_reset(); break;
     case 2:  uxrom_reset(); break;
     case 3:  cnrom_reset(); break;
-    case 4:  mmc3_reset(); break;
+    case 4: case 118: mmc3_reset(); break;
     case 7:  axrom_reset(); break;
     case 66: gxrom_reset(); break;
     default: nrom_reset(); break;
@@ -767,7 +787,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 1: case 155: mmc1_write(addr, value); break;
     case 2:  uxrom_write(value); break;
     case 3:  cnrom_write(value); break;
-    case 4:  mmc3_write(addr, value); break;
+    case 4: case 118: mmc3_write(addr, value); break;
     case 7:  axrom_write(value); break;
     case 66: gxrom_write(value); break;
     default: break;              /* NROM: the ROM ignores writes */
@@ -801,7 +821,7 @@ void hw_cart_ppu_addr_watched(uint16_t vbus)
     if (hw_cart.mapper==1 || hw_cart.mapper==155) {
         unsigned a12=(vbus>>12)&1;
         if (hw_cart.m.a12!=a12) { hw_cart.m.a12=(uint8_t)a12; mmc1_apply(); }
-    } else if (hw_cart.mapper == 4) mmc3_ppu_addr(vbus);
+    } else if (hw_cart.mapper == 4 || hw_cart.mapper == 118) mmc3_ppu_addr(vbus);
     else if (hw_cart.mapper==153 || hw_cart.mapper==157) bandai_ppu_addr(vbus);
 }
 
@@ -830,7 +850,11 @@ void hw_cart_cpu_clock(void)
 
 /* ------------------------------------------------------------------------- */
 /* Cartridge nametables and expansion audio. */
-uint16_t hw_cart_nt_a10(uint16_t addr) { return (vrc6_nt_bank((addr >> 10) & 3) & 1) << 10; }
+uint16_t hw_cart_nt_a10(uint16_t addr)
+{
+    if (hw_cart.mapper == 118) return txsrom_ciram_a10(addr);
+    return (vrc6_nt_bank((addr >> 10) & 3) & 1) << 10;
+}
 bool hw_cart_nt_read(uint16_t addr, bool read_bus, uint8_t *value)
 {
     if (hw_cart.mapper==5) { if (read_bus) *value=mmc5_nt_read(addr,true); return true; }

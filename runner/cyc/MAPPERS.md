@@ -19,6 +19,7 @@ models; it does not independently establish the mapper specification.
 
 | ID | Board / reference | Behavior and limits |
 |---:|---|---|
+| 118 | [TxSROM](https://www.nesdev.org/wiki/TxSROM) | MMC3 banking and A12 IRQ. CHR A17 drives CIRAM A10: bit 7 of the register covering the nametable address's pattern page (R0/R1 or R2-R5 by $8000 bit 7; $3000-$3EFF uses pages 4-7). $A000 is disconnected. iNES keeps the MMC3 8 KiB WRAM default; four-screen headers are rejected. |
 | 40 | [NTDEC 2722](https://www.nesdev.org/wiki/INES_Mapper_040) | Fixed PRG banks at $6000/$8000/$A000/$E000, switchable 8 KiB at $C000, 4096-M2 IRQ. Code at $6000 uses the interpreter. |
 | 155 | [MMC1A](https://www.nesdev.org/wiki/MMC1) | RAM stays enabled by the PRG register; bit 4 instead bypasses fixed-bank A17 selection. Uses the same SxROM board wiring as mapper 1. |
 | 85 | [VRC7](https://www.nesdev.org/wiki/VRC7) | Three 8 KiB PRG windows, eight CHR windows, WRAM gate, VRC IRQ, and six FM channels. Submapper 1 selects A3 and omits the oscillator; submapper 2 selects A4. |
