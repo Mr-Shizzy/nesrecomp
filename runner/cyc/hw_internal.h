@@ -85,6 +85,20 @@ typedef struct {
     uint16_t timer[3];
 } HwVrc6Audio;
 
+/* Sunsoft FME-7 registers, and the 5B's sound generator (hw_sunsoft.inc). */
+typedef struct {
+    uint8_t command, chr[8], prg[4], mirror, irq_ctrl;
+    uint16_t counter;
+} HwFme7;
+
+typedef struct {
+    uint8_t reg[16], address;
+    uint8_t prescale, noise_half, noise_count, tone_out;
+    uint8_t env_level, env_up, env_hold;
+    uint16_t tone_count[3], env_count;
+    uint32_t lfsr;
+} Hw5B;
+
 typedef struct {
     uint8_t *prg;
     uint32_t prg_len;
@@ -138,6 +152,8 @@ typedef struct {
         uint8_t irq_mode;
         Mmc5State mmc5;
         HwVrc6Audio vrc6_audio;
+        HwFme7 fme7;
+        Hw5B s5b;
         uint8_t vrc7_reg[64], vrc7_address;
         uint64_t vrc7_phase;
         int16_t vrc7_output;

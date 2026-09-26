@@ -74,6 +74,7 @@ inline void TricMapper::CPUClock(bool PPUReadAtCPU) {
         return;
     }
     if (Cart.Mapper==5) { MMC5Clock(PPUReadAtCPU); return; }
+    if (Cart.Mapper==69) { FME7Clock(); return; }
     if (BandaiBoard()) { BandaiClock(); return; }
     if (!IrqEnable || totalCycles == LastWriteCycle) return;
     if (Cart.Mapper == 73) {
