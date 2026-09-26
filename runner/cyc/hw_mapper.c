@@ -258,6 +258,18 @@ static void mmc1_write(uint16_t addr, uint8_t value)
 /* nesdev wiki, MMC3. Eight bank registers behind a select latch, a mirroring
  * bit, a work RAM protect byte, and a scanline counter that drives /IRQ. */
 
+/* nesdev wiki, TQROM: CHR A16 (bank bit 6) selects the 8 KiB CHR RAM chip
+ * instead of the CHR ROM, which then sees bank bits 0-5 (at most 64 KiB).
+ * The RAM decodes A10-A12 only, so its 1 KiB page is the bank's low 3 bits. */
+static void mmc3_chr1(unsigned page, unsigned bank)
+{
+    bool ram = hw_cart.mapper == 119 && (bank & 0x40);
+    if (hw_cart.mapper == 119 && !ram) bank &= 0x3f;
+    hw_cart.chr_write[page] = hw_cart.mapper == 119 ? ram : hw_cart.chr_ram;
+    if (ram) hw_cart.chr_off[page] = hw_cart.chr_ram_base + (bank & 7) * 0x400u;
+    else map_chr1(page, (int)bank);
+}
+
 static void mmc3_apply(void)
 {
     const uint8_t *r = hw_cart.m.reg;
@@ -276,12 +288,10 @@ static void mmc3_apply(void)
      * CHR A12). The 2KB banks ignore the low bit of their register. */
     unsigned big = (hw_cart.m.bank_select & 0x80) ? 4 : 0;   /* page of the 2KB pair */
     unsigned small = big ^ 4;
-    map_chr2(big / 2 + 0, r[0] >> 1);
-    map_chr2(big / 2 + 1, r[1] >> 1);
-    map_chr1(small + 0, r[2]);
-    map_chr1(small + 1, r[3]);
-    map_chr1(small + 2, r[4]);
-    map_chr1(small + 3, r[5]);
+    for (unsigned i = 0; i < 4; ++i) {
+        mmc3_chr1(big + i, (r[i >> 1] & 0xfe) | (i & 1));
+        mmc3_chr1(small + i, r[2 + i]);
+    }
 }
 
 static void mmc3_reset(void)
@@ -533,6 +543,7 @@ static const struct {
     { 3,  "CNROM", 0, 0 },
     { 4,  "MMC3",  1, 1 },
     { 118, "TxSROM", 1, 1 },
+    { 119, "TQROM", 1, 0 },
     { 7,  "AxROM", 0, 0 },
     { 66, "GxROM", 0, 0 },
 };
@@ -576,6 +587,7 @@ void hw_cart_power_on(void)
     if (!hw_cart.info.battery && !hw_cart.info.prg_nvram) memset(hw_cart.exram,0,sizeof(hw_cart.exram));
     memset(hw_cart.prg_off, 0, sizeof(hw_cart.prg_off));
     memset(hw_cart.chr_off, 0, sizeof(hw_cart.chr_off));
+    memset(hw_cart.chr_write, hw_cart.chr_ram, sizeof(hw_cart.chr_write));
     int i = mapper_index(hw_cart.mapper);
     hw_cart.watch_ppu_addr = i >= 0 ? MAPPERS[i].watch_ppu_addr : 0;
     hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
@@ -628,7 +640,7 @@ void hw_cart_power_on(void)
     case 1: case 155: mmc1_reset(); break;
     case 2:  uxrom_reset(); break;
     case 3:  cnrom_reset(); break;
-    case 4: case 118: mmc3_reset(); break;
+    case 4: case 118: case 119: mmc3_reset(); break;
     case 7:  axrom_reset(); break;
     case 66: gxrom_reset(); break;
     default: nrom_reset(); break;
@@ -787,7 +799,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 1: case 155: mmc1_write(addr, value); break;
     case 2:  uxrom_write(value); break;
     case 3:  cnrom_write(value); break;
-    case 4: case 118: mmc3_write(addr, value); break;
+    case 4: case 118: case 119: mmc3_write(addr, value); break;
     case 7:  axrom_write(value); break;
     case 66: gxrom_write(value); break;
     default: break;              /* NROM: the ROM ignores writes */
@@ -821,7 +833,7 @@ void hw_cart_ppu_addr_watched(uint16_t vbus)
     if (hw_cart.mapper==1 || hw_cart.mapper==155) {
         unsigned a12=(vbus>>12)&1;
         if (hw_cart.m.a12!=a12) { hw_cart.m.a12=(uint8_t)a12; mmc1_apply(); }
-    } else if (hw_cart.mapper == 4 || hw_cart.mapper == 118) mmc3_ppu_addr(vbus);
+    } else if (hw_cart.mapper == 4 || hw_cart.mapper == 118 || hw_cart.mapper == 119) mmc3_ppu_addr(vbus);
     else if (hw_cart.mapper==153 || hw_cart.mapper==157) bandai_ppu_addr(vbus);
 }
 

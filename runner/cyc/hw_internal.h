@@ -92,7 +92,12 @@ typedef struct {
     uint8_t *chr;               /* CHR ROM, or CHR RAM */
     uint32_t chr_len;
     uint32_t chr_pages;         /* chr_len / 0x400, rounded up to a power of 2 */
-    uint8_t  chr_ram;
+    uint8_t  chr_ram;           /* all CHR is RAM */
+    /* CHR RAM inside chr: all of it on CHR-RAM boards, or the chip after the
+     * padded CHR ROM on boards with both (TQROM). A program can read it back,
+     * so it is compared across implementations in cyc_mem_hash. */
+    uint32_t chr_ram_base, chr_ram_len;
+    uint8_t  chr_write[8];      /* the 1KB page is writable RAM */
 
     /* Where each window reads from, as a byte offset into prg/chr. Mappers
      * set these only through hw_cart_map_prg8()/hw_cart_map_chr1(). */

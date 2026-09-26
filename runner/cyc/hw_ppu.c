@@ -86,7 +86,7 @@ static uint8_t vram_fetch(void)
         uint16_t addr = (uint16_t)(((ppu.vbus & 0x3F00) | ppu.octal_latch) & 0x1FFF);
         uint32_t a = hw_cart_chr_index(addr);
         value = ppu.rd ? hw_cart_chr_read(addr) : (uint8_t)ppu.vbus;
-        if (ppu.wr && hw_cart.chr_ram) hw_cart.chr[a] = (uint8_t)ppu.vbus;
+        if (ppu.wr && hw_cart.chr_write[(addr >> 10) & 7]) hw_cart.chr[a] = (uint8_t)ppu.vbus;
     }
     ppu.vbus = (uint16_t)((ppu.vbus & 0xFF00) | value);
     return value;
@@ -99,8 +99,9 @@ static void vram_store(uint8_t value)
     } else if (ppu.vbus & 0x2000) {
         uint16_t addr = (uint16_t)((ppu.vbus & 0x3f00) | ppu.octal_latch);
         if (!hw_cart_nt_write(addr, value)) ppu.ciram[ciram_index()] = value;
-    } else if (ppu.wr && hw_cart.chr_ram) {
-        hw_cart.chr[hw_cart_chr_index((uint16_t)(((ppu.vbus & 0x3F00) | ppu.octal_latch) & 0x1FFF))] = value;
+    } else if (ppu.wr) {
+        uint16_t addr = (uint16_t)(((ppu.vbus & 0x3F00) | ppu.octal_latch) & 0x1FFF);
+        if (hw_cart.chr_write[(addr >> 10) & 7]) hw_cart.chr[hw_cart_chr_index(addr)] = value;
     }
 }
 
