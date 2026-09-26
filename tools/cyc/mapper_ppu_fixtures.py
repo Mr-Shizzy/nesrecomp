@@ -100,6 +100,17 @@ def ppu_fixtures():
     yield ppu_contract(184, 32, 32, [
         ('cpu', 0x6000, 0x12), ('read', 0, 8), ('read', 0x1000, 20),
         ('cpu', 0x7fff, 0), ('read', 0, 0), ('read', 0x1000, 16)])
+    # Caltron 6-in-1: outer latch by address, inner CHR only with A2 set and
+    # ANDed with the ROM byte ($8000 holds SEI, $78; $B000 holds $FF).
+    yield ppu_contract(41, 256, 128, [
+        ('cpu', 0x600c, 0), ('read', 0, 32), ('read', 0x1fff, 39),
+        ('cpu', 0xb000, 2), ('read', 0, 48),
+        ('cpu', 0x800b - 0xb, 3), ('read', 0, 32),
+        ('cpu', 0xb000, 1), ('read', 0x0400, 41),
+        ('cpu', 0x600b, 0), ('cpu', 0xb000, 3), ('read', 0x0400, 41),
+        ('cpu', 0x6024, 0), ('write', 0x2000, 0x31), ('read', 0x2400, 0x31),
+        ('cpu', 0x6004, 0), ('read', 0x2800, 0x31),
+        ('cpu_read', 0x6000, 0x60)])
     yield ppu_contract(206, 128, 64, [
         ('cpu', 0x8000, 0), ('cpu', 0x8001, 0xff),
         ('cpu', 0x8000, 2), ('cpu', 0x8001, 0xc5),

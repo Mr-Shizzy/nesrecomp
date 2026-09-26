@@ -808,6 +808,7 @@ static unsigned mapper_write_floor(int mapper) {
     case 31: return 0x5000;
     case 113: return 0x4100;
     case 140: return 0x6000;
+    case 41: return 0x6000;
     default: return 0x8000;
     }
 }
@@ -1402,6 +1403,7 @@ static const char *mapper_name(int mapper) {
     case 118: return "TxSROM";
     case 69: return "Sunsoft FME-7 / 5B";
     case 68: return "Sunsoft-4";
+    case 41: return "Caltron 6-in-1";
     case 119: return "TQROM";
     case 7:  return "AxROM";
     case 66: return "GxROM";

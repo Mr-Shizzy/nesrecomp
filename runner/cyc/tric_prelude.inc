@@ -408,6 +408,7 @@ inline void TricMapper::Reset() {
     case 5: MMC5Reset(); break;
     case 69: FME7Apply(); break;
     case 68: Sunsoft4Apply(); break;
+    case 41: MapPRG32(0); MapCHR8(0); Mirroring = TRIC_MIRROR_VERTICAL; break;
     case 16: case 159: case 153: case 157: BandaiApply(); break;
     case 85: Reg[1]=1; Reg[2]=2; VRC7Apply(); break;
     case 24: case 26: Ctrl=0x20; VRC6Apply(); break;
@@ -523,6 +524,15 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
             return;
         }
         if (!VRC2Board() && WRAM_Length == 2048 && Address >= 0x7000) return;
+    }
+    if (Cart.Mapper == 41 && Address >= 0x6000) {   // nesdev wiki, INES Mapper 041
+        if (Address < 0x6800) {
+            PrgReg = Address % 8; Chr0 = (Address / 8) % 4;
+            Mirroring = (Address & 32) ? TRIC_MIRROR_HORIZONTAL : TRIC_MIRROR_VERTICAL;
+        } else if (Address >= 0x8000 && PrgReg >= 4) Latch = (byte)(Input & SnoopCPU(Address) % 4);
+        else return;
+        MapPRG32(PrgReg); MapCHR8(Chr0 * 4 + Latch);
+        return;
     }
     if (Cart.Mapper == 31 && Address / 4096 == 5) {
         Reg[Address % 8] = Input;
