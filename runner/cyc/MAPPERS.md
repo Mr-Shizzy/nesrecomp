@@ -74,21 +74,25 @@ checks with `tools/cyc/test_cyc_runtime.py`; every fixture runs compiled code, t
 same binary's interpreter, the standalone interpreter, and the independent oracle
 at all four CPU/PPU alignments. Retained logs contain the frame and bus hashes.
 
-Validation of this expansion: 417 cartridge assertions and 41 synthetic programs
+Initial 15-mapper expansion validation: 417 cartridge assertions and 41 synthetic programs
 (656 executions across the four modes and alignments on each of Windows and
 Linux), all with 100% native CPU execution, plus 135 rejection
 checks from `test_cyc_mapper_headers.py`. PPU programs assert physical CHR-page
 bytes through `$2007`, verify banked CHR RAM, mirroring and overlapping WRAM,
 then enable background rendering for frame-hash comparison. These tests establish
-specific board contracts; commercial games on the new IDs have not been tested.
+specific board contracts. Subsequent commercial smoke checks cover mappers
+11/34/71/79, MMC5 and extended MMC1, alongside core titles on mappers 0/1/4.
+See [CARTRIDGE_REVIEW.md](CARTRIDGE_REVIEW.md) for the accepted thirteen-title
+campaign, its menu-only RPG comparison limits, and outstanding hardware work.
 AccuracyCoin and the 3,000-frame SMB3 route also match the pre-expansion traces
 exactly at all four alignments. AccuracyCoin retains its existing alignment
 scores of 144/144, 143/144, 141/144 and 143/144; this change adds no new failures.
 
-The extended board wiring is described below. The legacy runner still needs
-separate integration work.
+The extended board wiring is described below. Existing projects can opt into
+the cycle backend through [PROJECTS.md](PROJECTS.md); legacy renderer and mod
+features still require explicit ports.
 
-The metadata/variant draft adds `cart_header_test.c` and
+The metadata/variant implementation adds `cart_header_test.c` and
 `tools/cyc/cart_variant_fixtures.py`. Contracts cover Aladdin, fixed Namco PRG,
 explicit NINA/BNROM selection, exponent lengths, Camerica variants, Popils RAM,
 small RAM mirroring, and four-screen reads/writes through the actual PPU bus.
