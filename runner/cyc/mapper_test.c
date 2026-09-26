@@ -72,6 +72,29 @@ static void mmc3_reg(unsigned index, uint8_t value, uint8_t mode)
 
 static unsigned txsrom_nt(uint16_t addr) { return hw_cart_ciram_a10(addr) ? 1 : 0; }
 
+/* nesdev wiki, INES Mapper 041: address-latched outer bank, gated inner CHR. */
+static void test_mapper41(void)
+{
+    cart(41, 256, 128);
+    prg_banks(0, 1, 2, 3); chr_bank(0, 0, 8);
+    CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    hw_cart_cpu_write(0x603d, 0x00);            /* PRG 5, CHR outer 3, horizontal */
+    prg_banks(20, 21, 22, 23); chr_bank(0, 96, 8);
+    CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    hw_cart_cpu_write(0x9000, 2); chr_bank(0, 112, 8);   /* inner 2: bank 14 */
+    prg[hw_cart.prg_off[1]] = 0x01;             /* ROM drives $9000 = $01 */
+    hw_cart_cpu_write(0x9000, 3); chr_bank(0, 104, 8);   /* 3 AND 1 */
+    hw_cart_cpu_write(0x6803, 0xff);            /* outside $6000-$67FF */
+    prg_banks(20, 21, 22, 23);
+    hw_cart_cpu_write(0x6003, 0xff);            /* PRG 3: inner writes ignored */
+    prg_banks(12, 13, 14, 15); chr_bank(0, 8, 8);
+    CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    hw_cart_cpu_write(0xb000, 2); chr_bank(0, 8, 8);
+    hw_cart_cpu_write(0x67ff, 0); prg_banks(28, 29, 30, 31); chr_bank(0, 104, 8);
+    hw_cart_cpu_write(0xb000, 0); chr_bank(0, 96, 8);
+    no_wram();
+}
+
 /* nesdev wiki, TQROM: bank bit 6 selects the 8 KiB CHR RAM chip. */
 static void test_mapper119(void)
 {
@@ -480,6 +503,7 @@ int main(void)
     chr_bank(0, 0, 8);
     no_wram();
     /* Run added board contracts. */
+    test_mapper41();
     test_mapper118();
     test_mapper119();
     test_mapper232();

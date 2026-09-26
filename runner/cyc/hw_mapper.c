@@ -509,6 +509,7 @@ static const struct {
     { 5, "MMC5", 0, 1 },
     { 69, "Sunsoft FME-7 / 5B", 0, 1 },
     { 68, "Sunsoft-4", 0, 1 },
+    { 41, "Caltron 6-in-1", 0, 0 },
     { 157, "Bandai Datach", 1, 0 },
     { 153, "Bandai BA-JUMP2", 1, 1 },
     { 16, "Bandai FCG / LZ93D50", 0, 0 },
@@ -617,6 +618,7 @@ void hw_cart_power_on(void)
     case 5: mmc5_reset(); break;
     case 69: fme7_apply(); break;
     case 68: sunsoft4_apply(); break;
+    case 41: nrom_reset(); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
     case 16: case 159: case 153: case 157: bandai_apply(); break;
     case 85: hw_cart.m.reg[1]=1; hw_cart.m.reg[2]=2; hw_cart.m.irq_prescaler=341; vrc7_apply(); break;
     case 24: case 26:
@@ -677,6 +679,23 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
             return;
         }
         if (!vrc2_board() && hw_cart.wram_len == 2048 && addr >= 0x7000) return;
+    }
+    /* Mapper 41: https://www.nesdev.org/wiki/INES_Mapper_041. The outer
+     * register latches address bits at $6000-$67FF (data ignored): A0-A2 the
+     * 32 KiB PRG bank, A3-A4 the outer 32 KiB CHR bank, A5 mirroring
+     * (1 = horizontal). A2 also enables the inner 8 KiB CHR select at
+     * $8000-$FFFF, which conflicts with the ROM (AND). */
+    if (hw_cart.mapper == 41) {
+        if ((addr & 0xf800) == 0x6000) {
+            hw_cart.m.prg = addr & 7;
+            hw_cart.m.chr0 = (addr >> 3) & 3;
+            hw_cart.mirroring = (addr & 0x20) ? HW_MIRROR_HORIZONTAL : HW_MIRROR_VERTICAL;
+        } else if (addr >= 0x8000 && (hw_cart.m.prg & 4)) {
+            hw_cart.m.latch = value & hw_cart_prg_read(addr) & 3;
+        } else return;
+        map_prg32(hw_cart.m.prg);
+        map_chr8(hw_cart.m.chr0 << 2 | hw_cart.m.latch);
+        return;
     }
     /* Mapper 31: https://www.nesdev.org/wiki/INES_Mapper_031 */
     if (hw_cart.mapper == 31 && (addr & 0xf000) == 0x5000) {
