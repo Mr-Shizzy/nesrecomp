@@ -68,6 +68,16 @@ int main(void)
     h[11]=0; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
     h[11]=7; h[5]=0; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
     h[6]=0x40; h[7]=0x08; h[5]=8; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==4 && !nes_cart_variant_supported(&c));
+    /* Sunsoft-4: iNES 8 KiB WRAM; CHR ROM required; submapper 1 unsupported. */
+    memset(h,0,sizeof(h)); memcpy(h,"NES",3); h[3]=26; h[4]=8; h[5]=32; h[6]=0x40; h[7]=0x40;
+    CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==68 && c.prg_ram==8192 && nes_cart_variant_supported(&c));
+    h[7]=0x48; h[8]=0x10; CHECK(nes_cart_header(h,16,&c)); CHECK(c.submapper==1 && !nes_cart_variant_supported(&c));
+    h[8]=0; h[10]=7; CHECK(nes_cart_header(h,16,&c)); CHECK(nes_cart_variant_supported(&c));
+    h[10]=8; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
+    h[10]=0; h[5]=0; h[11]=7; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
+    /* FME-7: iNES 8 KiB WRAM. */
+    memset(h,0,sizeof(h)); memcpy(h,"NES",3); h[3]=26; h[4]=8; h[5]=16; h[6]=0x50; h[7]=0x40;
+    CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==69 && c.prg_ram==8192 && nes_cart_variant_supported(&c));
     puts("cartridge header contracts passed");
     return 0;
 }
