@@ -40,7 +40,7 @@ def main():
             rom = bytearray(image)
             rom[7] |= 8
             rom[8] = byte8
-            if not rom[5]:
+            if not rom[5] or mapper == 119:  # TQROM also carries 8 KiB CHR RAM
                 rom[11] = 8 if mapper == 13 else 7
             (case / 'test.nes').write_bytes(rom)
             (case / 'game.toml').write_text('[game]\noutput_prefix="test"\ncycle_accurate=true\n')
