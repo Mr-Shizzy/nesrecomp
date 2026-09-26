@@ -167,3 +167,39 @@ static void fme7_clock(void)
     if ((f->irq_ctrl & 0x80) && f->counter-- == 0 && (f->irq_ctrl & 1)) hw_cart.m.irq_out = 1;
     s5b_clock();
 }
+
+/* Sunsoft-4 (mapper 68). https://www.nesdev.org/wiki/INES_Mapper_068
+ * $8000-$B000: four 2 KiB CHR banks. $C000/$D000: the two 1 KiB CHR ROM pages
+ * that can replace CIRAM (D7 forced high: the last 128 KiB of CHR ROM).
+ * $E000: bits 0-1 mirroring (vertical, horizontal, one-screen low/high), bit 4
+ * CHR ROM nametables. $F000: bits 0-3 the 16 KiB PRG bank at $8000, bit 4 the
+ * work RAM enable. reg[0-3] = CHR, reg[4-5] = nametable pages. */
+static void sunsoft4_apply(void)
+{
+    for (unsigned i = 0; i < 4; ++i) map_chr2(i, hw_cart.m.reg[i]);
+    map_prg16(0, hw_cart.m.prg & 15);
+    map_prg16(1, -1);
+    static const uint8_t mirror[4] = { HW_MIRROR_VERTICAL, HW_MIRROR_HORIZONTAL,
+                                       HW_MIRROR_SCREEN_A, HW_MIRROR_SCREEN_B };
+    hw_cart.mirroring = mirror[hw_cart.m.ctrl & 3];
+    hw_cart.wram_readable = hw_cart.wram_writable = (hw_cart.m.prg & 0x10) != 0;
+}
+
+static void sunsoft4_write(uint16_t addr, uint8_t value)
+{
+    unsigned page = addr >> 12;
+    if (page <= 11) hw_cart.m.reg[page - 8] = value;
+    else if (page <= 13) hw_cart.m.reg[page - 8] = value | 0x80;
+    else if (page == 14) hw_cart.m.ctrl = value;
+    else hw_cart.m.prg = value;
+    sunsoft4_apply();
+}
+
+/* With $E000 bit 4 set the nametables are CHR ROM pages. The CIRAM A10 the
+ * mirroring mode would drive selects which of the two registers applies. */
+static uint32_t sunsoft4_nt_index(uint16_t addr)
+{
+    uint16_t a10 = hw_cart_ciram_a10(addr);
+    unsigned bank = hw_cart.m.reg[a10 ? 5 : 4];
+    return (bank & (hw_cart.chr_pages - 1)) * 1024u + (addr & 0x3ff);
+}

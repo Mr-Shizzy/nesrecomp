@@ -43,3 +43,33 @@ inline void TricMapper::FME7Clock() {
     Fme7Counter = (ushort)(Fme7Counter - 1);
     if (wrap && (Fme7IrqCtrl & 1)) IrqOut = true;
 }
+
+/* Sunsoft-4 (nesdev wiki, INES Mapper 068). Reg[0-3]: 2 KiB CHR banks;
+ * Reg[4-5]: CHR ROM nametable pages (D7 forced); Ctrl: $E000; PrgReg: $F000. */
+inline void TricMapper::Sunsoft4Apply() {
+    MapCHR2(0, Reg[0]); MapCHR2(1, Reg[1]); MapCHR2(2, Reg[2]); MapCHR2(3, Reg[3]);
+    MapPRG16(0, PrgReg % 16); MapPRG16(1, -1);
+    const byte modes[4] = { TRIC_MIRROR_VERTICAL, TRIC_MIRROR_HORIZONTAL, TRIC_MIRROR_SCREEN_A, TRIC_MIRROR_SCREEN_B };
+    Mirroring = modes[Ctrl % 4];
+    WRAM_Readable = WRAM_Writable = HasWRAM && (PrgReg & 16);
+}
+// Which nametable register a quadrant uses, per the mirroring table.
+inline int TricMapper::Sunsoft4Page(ushort Address) {
+    unsigned q = (Address >> 10) % 4, sel;
+    switch (Ctrl % 4) {
+    case 0: sel = q % 2; break;
+    case 1: sel = q / 2; break;
+    case 2: sel = 0; break;
+    default: sel = 1; break;
+    }
+    return (int)((Reg[4 + sel] % Cart.CHRPages) * 1024u + Address % 1024);
+}
+inline void TricMapper::Sunsoft4Store(ushort Address, byte Input) {
+    switch (Address / 4096) {
+    case 8: case 9: case 10: case 11: Reg[Address / 4096 - 8] = Input; break;
+    case 12: case 13: Reg[Address / 4096 - 8] = (byte)(Input | 128); break;
+    case 14: Ctrl = Input; break;
+    default: PrgReg = Input; break;
+    }
+    Sunsoft4Apply();
+}

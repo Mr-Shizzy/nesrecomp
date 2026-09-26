@@ -116,6 +116,9 @@ struct TricMapper {
     bool FME7Low(ushort Address, byte *Out, const byte *In);
     void FME7Store(ushort Address, byte Input);
     void FME7Clock();
+    void Sunsoft4Apply();
+    int  Sunsoft4Page(ushort Address);
+    void Sunsoft4Store(ushort Address, byte Input);
     void MMC1Apply();
     void MMC1Write(ushort Address, byte Input);
     void MMC3Apply();
@@ -404,6 +407,7 @@ inline void TricMapper::Reset() {
     switch (Cart.Mapper) {
     case 5: MMC5Reset(); break;
     case 69: FME7Apply(); break;
+    case 68: Sunsoft4Apply(); break;
     case 16: case 159: case 153: case 157: BandaiApply(); break;
     case 85: Reg[1]=1; Reg[2]=2; VRC7Apply(); break;
     case 24: case 26: Ctrl=0x20; VRC6Apply(); break;
@@ -653,6 +657,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     case 2: Latch = Input; MapPRG16(0, Input); break;
     case 3: Latch = Input; MapCHR8(Input); break;
     case 4: case 118: case 119: MMC3Write(Address, Input); break;
+    case 68: Sunsoft4Store(Address, Input); break;
     case 7:
         Latch = Input;
         MapPRG32(Input & 7);
@@ -703,6 +708,7 @@ inline byte TricMapper::SnoopPPU(ushort Address) {
         if (Ctrl&16) return Cart.CHRROM[(bank*1024+(Address&1023))%(Cart.UsingCHRRAM ? Cart.CHRROM_Length : Cart.CHRPages*1024)];
         return VRAM[(bank%2)*1024+(Address&1023)];
     }
+    if (Cart.Mapper == 68 && (Ctrl & 16)) return Cart.CHRROM[Sunsoft4Page(Address)];
     if (Cart.AlternativeNametableArrangement) return VRAM[Address & 0xfff];
     if (Cart.Mapper == 118) return VRAM[(ChrA17[(Address >> 10) & 7] ? 0x400 : 0) | (Address & 0x3ff)];
     ushort Addr = (ushort)(Address & 0x3FF);
@@ -720,6 +726,11 @@ inline void TricMapper::AccessPPU() {
         PPU_DataIn=PPU_NonTiltData;
         if (!SeventyTwoPinConnector[20]) PPU_NonTiltData=PPU_DataOut=Cart.CHRROM[index];
         if (!SeventyTwoPinConnector[55] && Cart.UsingCHRRAM) Cart.CHRROM[index]=PPU_DataIn;
+    }
+    if (Cart.Mapper == 68 && SeventyTwoPinConnector[64] && (Ctrl & 16)) {
+        PPU_DataIn = PPU_NonTiltData;   // ROM: writes are dropped
+        if (!SeventyTwoPinConnector[20]) PPU_NonTiltData = PPU_DataOut = Cart.CHRROM[Sunsoft4Page(Address)];
+        return;
     }
     if (!SeventyTwoPinConnector[64] && ChrRamSelected(Address)) {
         byte &cell = Cart.CHRRAM[ChrLow[(Address >> 10) & 7] * 1024 + (Address & 1023)];
@@ -751,6 +762,7 @@ inline void TricMapper::Connector_CheckCIRAM() {
         return;
     }
     if (Cart.Mapper == 118) { SeventyTwoPinConnector[21] = ChrA17[(PPU_AddressBus >> 10) & 7]; return; }
+    if (Cart.Mapper == 68 && (Ctrl & 16)) SeventyTwoPinConnector[56] = true;   // CIRAM /CE high
     bool a10;
     if (Mirroring == TRIC_MIRROR_HORIZONTAL)    a10 = (PPU_AddressBus & 0x800) != 0;
     else if (Mirroring == TRIC_MIRROR_VERTICAL) a10 = (PPU_AddressBus & 0x400) != 0;

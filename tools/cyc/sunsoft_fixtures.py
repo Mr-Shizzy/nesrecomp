@@ -106,7 +106,33 @@ def s5b_fixtures():
     yield s5b_program('s5b_noise', [(7, 0x37), (6, 4), (8, 15)])
 
 
+def sunsoft4_contract():
+    ops = [('cpu', 0x8000, 5), ('read', 0, 10), ('read', 0x0400, 11),
+           ('cpu', 0xb000, 0x7f), ('read', 0x1800, 254), ('read', 0x1c00, 255),
+           ('cpu', 0xe000, 0), ('write', 0x2000, 0x31), ('read', 0x2800, 0x31),
+           # CHR ROM nametables: pages $85/$86 hold their page number.
+           ('cpu', 0xc000, 0x05), ('cpu', 0xd000, 0x06), ('cpu', 0xe000, 0x10),
+           ('read', 0x2000, 0x85), ('read', 0x2400, 0x86), ('read', 0x2800, 0x85),
+           ('read', 0x2c00, 0x86), ('read', 0x3400, 0x86),
+           ('write', 0x2000, 0x44), ('read', 0x2000, 0x85),
+           ('cpu', 0xe000, 0x11), ('read', 0x2400, 0x85), ('read', 0x2800, 0x86),
+           ('cpu', 0xe000, 0x13), ('read', 0x2000, 0x86),
+           ('cpu', 0xe000, 0x12), ('read', 0x2c00, 0x85),
+           ('cpu', 0xe000, 0x00), ('read', 0x2000, 0x31),
+           ('cpu', 0xe000, 0x02), ('read', 0x2c00, 0x31),
+           # Work RAM enable is $F000 bit 4 (the write also selects PRG bank 0).
+           ('cpu', 0xf000, 0x10), ('cpu', 0x6000, 0x5a), ('cpu_read', 0x6000, 0x5a),
+           ('cpu', 0xf000, 0x00), ('cpu_read', 0x6000, 0x60),
+           ('cpu', 0xf000, 0x10), ('cpu_read', 0x6000, 0x5a),
+           # Render from the CHR ROM nametables.
+           ('cpu', 0xe000, 0x10)]
+    return ppu_contract(68, 128, 256, ops, '_sunsoft4')
+
+
 def sunsoft_fixtures():
+    yield handoff('sunsoft4_prg', 68, [(0xf000, 3)], 6)
+    yield handoff('sunsoft4_prg_d', 68, [(0xfabc, 0x1e)], 12, chr_kb=256)
+    yield sunsoft4_contract()
     yield handoff('fme7_prg', 69, [(0x8000, 9), (0xa000, 3)], 3, chr_kb=8)
     yield handoff('fme7_prg_masked', 69, [(0x8000, 0xf9), (0xa000, 0xcb)], 11, chr_kb=8)
     yield fme7_contract()

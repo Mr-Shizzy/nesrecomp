@@ -508,6 +508,7 @@ static const struct {
 } MAPPERS[] = {
     { 5, "MMC5", 0, 1 },
     { 69, "Sunsoft FME-7 / 5B", 0, 1 },
+    { 68, "Sunsoft-4", 0, 1 },
     { 157, "Bandai Datach", 1, 0 },
     { 153, "Bandai BA-JUMP2", 1, 1 },
     { 16, "Bandai FCG / LZ93D50", 0, 0 },
@@ -615,6 +616,7 @@ void hw_cart_power_on(void)
     switch (hw_cart.mapper) {
     case 5: mmc5_reset(); break;
     case 69: fme7_apply(); break;
+    case 68: sunsoft4_apply(); break;
     case 16: case 159: case 153: case 157: bandai_apply(); break;
     case 85: hw_cart.m.reg[1]=1; hw_cart.m.reg[2]=2; hw_cart.m.irq_prescaler=341; vrc7_apply(); break;
     case 24: case 26:
@@ -806,6 +808,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 2:  uxrom_write(value); break;
     case 3:  cnrom_write(value); break;
     case 4: case 118: case 119: mmc3_write(addr, value); break;
+    case 68: sunsoft4_write(addr, value); break;
     case 7:  axrom_write(value); break;
     case 66: gxrom_write(value); break;
     default: break;              /* NROM: the ROM ignores writes */
@@ -878,6 +881,11 @@ uint16_t hw_cart_nt_a10(uint16_t addr)
 bool hw_cart_nt_read(uint16_t addr, bool read_bus, uint8_t *value)
 {
     if (hw_cart.mapper==5) { if (read_bus) *value=mmc5_nt_read(addr,true); return true; }
+    if (hw_cart.mapper==68) {
+        if (!(hw_cart.m.ctrl & 0x10)) return false;
+        if (read_bus) *value = hw_cart.chr[sunsoft4_nt_index(addr)];
+        return true;
+    }
     if (!vrc6_board() || !(hw_cart.m.ctrl & 0x10)) return false;
     if (read_bus) {
         unsigned index = (vrc6_nt_bank((addr >> 10) & 3) % hw_cart.chr_pages)*1024 + (addr & 1023);
@@ -888,6 +896,7 @@ bool hw_cart_nt_read(uint16_t addr, bool read_bus, uint8_t *value)
 bool hw_cart_nt_write(uint16_t addr, uint8_t value)
 {
     if (hw_cart.mapper==5) { mmc5_nt_write(addr,value); return true; }
+    if (hw_cart.mapper==68) return (hw_cart.m.ctrl & 0x10) != 0; /* ROM: CIRAM deselected */
     if (!vrc6_board() || !(hw_cart.m.ctrl & 0x10)) return false;
     if (hw_cart.chr_ram) {
         unsigned index = vrc6_nt_bank((addr >> 10) & 3)*1024 + (addr & 1023);

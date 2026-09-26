@@ -165,9 +165,53 @@ static void test_5b(void)
     }
 }
 
+
+/* Sunsoft-4: https://www.nesdev.org/wiki/INES_Mapper_068 */
+static void test_sunsoft4(void)
+{
+    cart(68, 128, 256);
+    for (unsigned p = 0; p < 256; ++p) memset(chr + p * 1024, (int)p, 1024);
+    CHECK(hw_cart.has_wram);
+    prg_banks(0, 1, 14, 15);
+    uint8_t value = 0xa5;
+    CHECK(!hw_cart_cpu_read(0x6000, &value) && value == 0xa5);   /* RAM disabled */
+    hw_cart_cpu_write(0xf123, 0x13); prg_banks(6, 7, 14, 15);
+    hw_cart_cpu_write(0x6000, 0x5a); CHECK(hw_cart_cpu_read(0x6000, &value) && value == 0x5a);
+    hw_cart_cpu_write(0xffff, 0x0e); prg_banks(12, 13, 14, 15);  /* bank 14 wraps to 6 */
+    value = 0xa5; CHECK(!hw_cart_cpu_read(0x6000, &value) && value == 0xa5);
+    hw_cart_cpu_write(0x8000, 5); hw_cart_cpu_write(0x9fff, 6);
+    hw_cart_cpu_write(0xa000, 0x80); hw_cart_cpu_write(0xb000, 0xff);
+    chr_bank(0, 10, 2); chr_bank(2, 12, 2); chr_bank(4, 0, 2); chr_bank(6, 254, 2);
+    /* Nametable registers force D7: the last 128 KiB. */
+    hw_cart_cpu_write(0xc000, 0x05); hw_cart_cpu_write(0xdfff, 0x86);
+    CHECK(hw_cart.m.reg[4] == 0x85 && hw_cart.m.reg[5] == 0x86);
+    static const uint8_t mirror[4] = { HW_MIRROR_VERTICAL, HW_MIRROR_HORIZONTAL,
+                                       HW_MIRROR_SCREEN_A, HW_MIRROR_SCREEN_B };
+    static const uint8_t sel[4][4] = { {0,1,0,1}, {0,0,1,1}, {0,0,0,0}, {1,1,1,1} };
+    for (unsigned m = 0; m < 4; ++m) {
+        hw_cart_cpu_write(0xe000, (uint8_t)m);
+        CHECK(hw_cart.mirroring == mirror[m]);
+        CHECK(!hw_cart_nt_read(0x2000, true, &value) && !hw_cart_nt_write(0x2000, 1));
+        hw_cart_cpu_write(0xe000, (uint8_t)(m | 0x10));
+        for (unsigned q = 0; q < 4; ++q) {
+            for (unsigned base = 0x2000; base < 0x4000; base += 0x1000) {
+                uint16_t addr = (uint16_t)(base + q * 0x400 + 0x3a);
+                if (addr >= 0x3f00) continue;
+                value = 0;
+                CHECK(hw_cart_nt_read(addr, true, &value) && value == (sel[m][q] ? 0x86 : 0x85));
+                value = 0x77; CHECK(hw_cart_nt_read(addr, false, &value) && value == 0x77);
+                CHECK(hw_cart_nt_write(addr, 0x12)); /* ROM: dropped, CIRAM deselected */
+            }
+        }
+    }
+    CHECK(chr[0x85 * 1024 + 0x3a] == 0x85);
+    CHECK(!hw_cart_irq());
+}
+
 static void test_sunsoft(void)
 {
     test_fme7_banks();
     test_fme7_irq();
     test_5b();
+    test_sunsoft4();
 }
