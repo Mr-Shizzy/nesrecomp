@@ -52,6 +52,11 @@ int main(void)
     memset(h,0,sizeof(h)); memcpy(h,"NES\x1a",4); h[4]=8; h[5]=8; h[6]=0xe2; h[7]=0xc0;
     CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==206 && c.prg_nvram==8192);
     h[6]=0xe0; CHECK(nes_cart_header(h,16,&c)); CHECK(c.prg_ram==0 && c.prg_nvram==0);
+    /* TxSROM: iNES keeps the MMC3 work-RAM default; no four-screen wiring. */
+    memset(h,0,sizeof(h)); memcpy(h,"NES\x1a",4); h[4]=8; h[5]=16; h[6]=0x60; h[7]=0x70;
+    CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==118 && c.prg_ram==8192);
+    CHECK(nes_cart_variant_supported(&c));
+    h[6]=0x68; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
     puts("cartridge header contracts passed");
     return 0;
 }

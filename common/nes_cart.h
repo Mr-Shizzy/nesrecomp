@@ -61,7 +61,7 @@ static inline bool nes_cart_header(const uint8_t *h, size_t size, NesCartInfo *c
         c->prg_size = (uint32_t)h[4] * 16384;
         c->chr_size = (uint32_t)h[5] * 8192;
         /* iNES leaves RAM ambiguous. Retain established per-board defaults. */
-        bool wram = c->mapper == 1 || c->mapper == 155 || c->mapper == 4 || c->mapper == 5 ||
+        bool wram = c->mapper == 1 || c->mapper == 155 || c->mapper == 4 || c->mapper == 118 || c->mapper == 5 ||
                     c->mapper == 10 || c->mapper == 21 || c->mapper == 23 || c->mapper == 25 || c->mapper == 73 ||
                     c->mapper == 24 || c->mapper == 26 || c->mapper == 85 ||
                     (c->mapper == 34 && c->chr_size > 8192) || (c->mapper==206 && c->battery);
@@ -138,6 +138,8 @@ static inline bool nes_cart_variant_supported(const NesCartInfo *c)
     }
     case 2: case 3: case 7: case 34: return c->submapper <= 2;
     case 71: case 206: case 232: return c->submapper <= 1;
+    /* CIRAM A10 comes from CHR A17; the board has no four-screen RAM. */
+    case 118: return !c->submapper && !c->four_screen;
     default: return c->submapper == 0;
     }
 }
