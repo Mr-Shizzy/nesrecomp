@@ -33,6 +33,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     checked = set()
     count = 0
+    identities = []
     for _, image, _, _ in chain(mapper_fixtures(), latch_fixtures(), fineprg_fixtures(), vrc_fixtures(), expansion_fixtures(), vrc7_fixtures(), bandai_fixtures(), mmc5_fixtures(), mmc1_fixtures(), mapper40_fixtures(), mmc3_variant_fixtures(), sunsoft_fixtures(), namco_fixtures(), jaleco_fixtures(), taito_fixtures()):
         mapper = (image[6] >> 4) | (image[7] & 0xf0)
         if mapper in checked:
@@ -47,6 +48,10 @@ def main():
             if not rom[5] or mapper == 119:  # TQROM also carries 8 KiB CHR RAM
                 rom[11] = 8 if mapper == 13 else 7
             (case / 'test.nes').write_bytes(rom)
+            sub = byte8 >> 4
+            if mapper == 210 and not sub and not byte8 & 15:
+                sub = 1 if rom[6] & 2 else 2  # unknown 210 submapper: 175 with battery, else 340
+            identities.append((case / 'test.nes', f'{mapper | (byte8 & 15) << 8} {sub}'))
             (case / 'game.toml').write_text('[game]\noutput_prefix="test"\ncycle_accurate=true\n')
             for name, exe, extra in [
                 ('compiler', args.recompiler, ['--game', 'game.toml']),
@@ -60,7 +65,21 @@ def main():
                 if (p.returncode == 0) != accepted:
                     raise AssertionError(f'{case.name}: {name} header acceptance was {p.returncode}, expected {accepted}')
                 count += 1
-    print(f'{count} header acceptance/rejection checks passed ({len(checked)} mapper IDs)')
+    # --cart-info reports each image's decoded board, accepted or not, and '? ?' for non-iNES files.
+    junk = out / 'not_ines.nes'
+    junk.write_bytes(bytes(32))
+    identities.append((junk, '? ?'))
+    p = subprocess.run([str(args.recompiler.resolve()), '--cart-info'], input=''.join(f'{r}\n' for r, _ in identities),
+                       capture_output=True, text=True, timeout=60,
+                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    got = [line.split(' ', 3) for line in p.stdout.splitlines() if line.startswith('CART ')]
+    if p.returncode != 0 or len(got) != len(identities):
+        raise AssertionError(f'--cart-info answered {len(got)} of {len(identities)} ROMs (exit {p.returncode})')
+    for (rom, expected), line in zip(identities, got):
+        if line[3] != str(rom) or f'{line[1]} {line[2]}' != expected:
+            raise AssertionError(f'--cart-info {rom}: got {line[1:3]}, expected {expected}')
+    print(f'{count} header acceptance/rejection checks passed ({len(checked)} mapper IDs); '
+          f'{len(identities)} --cart-info identities')
 
 
 if __name__ == '__main__':
