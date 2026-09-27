@@ -595,6 +595,7 @@ void hw_cart_ppu_rd(bool reading)
 #include "hw_sunsoft.inc"
 #include "hw_namco.inc"
 #include "hw_jaleco.inc"
+#include "hw_tengen.inc"
 #include "hw_taito.inc"
 #include "hw_taito_x1.inc"
 
@@ -608,6 +609,8 @@ static const struct {
     { 69, "Sunsoft FME-7 / 5B", 0, 1 },
     { 19, "Namco 163", 0, 0 },
     { 18, "Jaleco SS88006", 0, 0 },
+    { 64, "Tengen RAMBO-1", 1, 0 },
+    { 158, "Tengen 800037 (RAMBO-1, CHR A17 mirroring)", 1, 0 },
     { 33, "Taito TC0190", 0, 0 },
     { 32, "Irem G-101", 0, 0 },
     { 80, "Taito X1-005", 0, 0 },
@@ -708,7 +711,7 @@ void hw_cart_power_on(void)
     hw_cart.chr_ciram = 0;
     int i = mapper_index(hw_cart.mapper);
     hw_cart.watch_ppu_addr = i >= 0 ? MAPPERS[i].watch_ppu_addr : 0;
-    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==19 || hw_cart.mapper==18 || hw_cart.mapper==48 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
+    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==19 || hw_cart.mapper==18 || hw_cart.mapper==48 || hw_cart.mapper==64 || hw_cart.mapper==158 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
     hw_cart.mirroring = hw_cart.info.vertical ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
     hw_cart.wram_bank = 0;
     hw_cart.has_wram = hw_cart.info.prg_size ? hw_cart.wram_len != 0 : i >= 0 ? MAPPERS[i].wram : 0;
@@ -732,6 +735,7 @@ void hw_cart_power_on(void)
     case 69: fme7_apply(); break;
     case 19: case 210: hw_cart.m.namco.channel = 7; namco_apply(); break;
     case 18: jaleco_apply(); break;
+    case 64: case 158: rambo_apply(); break;
     case 33: case 48: taito_apply(); break;
     case 32: irem_g101_apply(); map_chr8(0); break;
     case 80: case 207: case 82: case 552: taito_x1_apply(); break;
@@ -977,6 +981,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 68: sunsoft4_write(addr, value); break;
     case 185: hw_cart.m.latch = value & hw_cart_prg_read(addr); break;
     case 18: jaleco_write(addr, value); break;
+    case 64: case 158: rambo_write(addr, value); break;
     case 33: case 48: taito_write(addr, value); break;
     case 32: irem_g101_write(addr, value); break;
     case 228: action52_write(addr, value); break;
@@ -1022,6 +1027,7 @@ void hw_cart_ppu_addr_watched(uint16_t vbus)
         unsigned a12=(vbus>>12)&1;
         if (hw_cart.m.a12!=a12) { hw_cart.m.a12=(uint8_t)a12; mmc1_apply(); }
     } else if (hw_cart.mapper == 4 || hw_cart.mapper == 118 || hw_cart.mapper == 119 || hw_cart.mapper == 48) mmc3_ppu_addr(vbus);
+    else if (hw_cart.mapper==64 || hw_cart.mapper==158) rambo_ppu_addr(vbus);
     else if (hw_cart.mapper==153 || hw_cart.mapper==157) bandai_ppu_addr(vbus);
 }
 
@@ -1045,6 +1051,7 @@ void hw_cart_cpu_clock(void)
     if (hw_cart.mapper==19) { namco_clock(); return; }
     if (hw_cart.mapper==18) { jaleco_clock(); return; }
     if (hw_cart.mapper==48) { tc0690_cpu_clock(); return; }
+    if (hw_cart.mapper==64 || hw_cart.mapper==158) { rambo_cpu_clock(); return; }
     if (bandai_board()) { bandai_clock(); return; }
     if (hw_cart.mapper==85) vrc7_audio_clock();
     if (vrc6_board()) vrc6_audio_clock();
@@ -1057,6 +1064,7 @@ void hw_cart_cpu_clock(void)
 uint16_t hw_cart_nt_a10(uint16_t addr)
 {
     if (hw_cart.mapper == 118) return txsrom_ciram_a10(addr);
+    if (hw_cart.mapper == 158) return rambo158_ciram_a10(addr);
     if (hw_cart.mapper == 19) return namco_nt_a10(addr);
     if (hw_cart.mapper == 207) return x1005_207_ciram_a10(addr);
     return (vrc6_nt_bank((addr >> 10) & 3) & 1) << 10;
@@ -1162,6 +1170,10 @@ uint64_t hw_cart_state_hash(uint64_t h)
         const uint8_t *b=(const uint8_t *)&hw_cart.m.namco;
         for (unsigned i=0;i<sizeof(HwNamco);++i) acc=acc*131+b[i];
         acc=acc*131+hw_cart.chr_ciram;
+    }
+    if (hw_cart.mapper==64 || hw_cart.mapper==158) {
+        const uint8_t *b=(const uint8_t *)&hw_cart.m.rambo;
+        for (unsigned i=0;i<sizeof(HwRambo);++i) acc=acc*131+b[i];
     }
     if (hw_cart.mapper==18) {
         const uint8_t *b=(const uint8_t *)&hw_cart.m.jaleco;

@@ -78,6 +78,7 @@ inline void TricMapper::CPUClock(bool PPUReadAtCPU) {
     if (Cart.Mapper==19 || Cart.Mapper==210) { NamcoClock(); return; }
     if (Cart.Mapper==18) { JalecoClock(); return; }
     if (Cart.Mapper==48) { if (TaitoDelay && --TaitoDelay == 0) IrqOut = true; return; }
+    if (Cart.Mapper==64 || Cart.Mapper==158) { RamboCPUClock(); return; }
     if (BandaiBoard()) { BandaiClock(); return; }
     if (!IrqEnable || totalCycles == LastWriteCycle) return;
     if (Cart.Mapper == 73) {

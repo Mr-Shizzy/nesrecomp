@@ -93,6 +93,12 @@ typedef struct {
     int16_t output;            /* the channel currently held on the DAC */
 } HwNamco;
 
+/* Tengen RAMBO-1 registers beyond the MMC3's (hw_tengen.inc). */
+typedef struct {
+    uint8_t reg[16], cycle_mode, prescaler, delay;
+    uint8_t chr_a17[8];        /* CHR A17 per physical pattern page (mapper 158 CIRAM A10) */
+} HwRambo;
+
 /* Jaleco SS88006 registers (hw_jaleco.inc). */
 typedef struct {
     uint8_t prg[3], chr[8], ram_ctrl, reload[4], ctrl, mirror;
@@ -171,6 +177,7 @@ typedef struct {
         HwVrc6Audio vrc6_audio;
         HwNamco namco;
         HwJaleco jaleco;
+        HwRambo rambo;
         HwFme7 fme7;
         Hw5B s5b;
         uint8_t vrc7_reg[64], vrc7_address;
@@ -202,7 +209,7 @@ HW_ALWAYS_INLINE uint32_t hw_cart_chr_index(uint16_t a)
 /* CIRAM A10 as the cartridge drives it, as a CIRAM index bit. */
 HW_ALWAYS_INLINE uint16_t hw_cart_ciram_a10(uint16_t vbus)
 {
-    if (hw_cart.mapper == 24 || hw_cart.mapper == 26 || hw_cart.mapper == 118 || hw_cart.mapper == 19 || hw_cart.mapper == 207)
+    if (hw_cart.mapper == 24 || hw_cart.mapper == 26 || hw_cart.mapper == 118 || hw_cart.mapper == 158 || hw_cart.mapper == 19 || hw_cart.mapper == 207)
         return hw_cart_nt_a10(vbus);
     if (hw_cart.info.four_screen) return vbus & 0xc00;
     switch (hw_cart.mirroring) {

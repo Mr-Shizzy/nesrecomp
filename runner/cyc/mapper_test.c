@@ -190,6 +190,74 @@ static void test_taito(void)
     cpu_cycles(2); hw_cart_cpu_write(0xc003, 0); cpu_cycles(10); CHECK(!hw_cart_irq());
 }
 
+/* nesdev wiki, RAMBO-1 (mapper 64) and INES Mapper 158. */
+static void rambo_rise(void) { hw_cart_ppu_addr(0x0000); hw.cycles += 4; hw_cart_ppu_addr(0x1000); }
+
+static void test_mapper64(void)
+{
+    cart(64, 256, 256);
+    CHECK(hw_cart.watch_ppu_addr && hw_cart.watch_cpu);
+    prg_banks(0, 0, 0, 31);
+    hw_cart_cpu_write(0x8000, 6); hw_cart_cpu_write(0x8001, 3);
+    hw_cart_cpu_write(0x8000, 7); hw_cart_cpu_write(0x8001, 4);
+    hw_cart_cpu_write(0x8000, 15); hw_cart_cpu_write(0x8001, 5);
+    prg_banks(3, 4, 5, 31);
+    hw_cart_cpu_write(0x8000, 0x4f); prg_banks(5, 4, 3, 31);          /* P swaps $8000/$C000 */
+    /* 2 KiB mode ignores the low bit; K uses R8/R9; C inverts A12. */
+    hw_cart_cpu_write(0x8000, 0); hw_cart_cpu_write(0x8001, 0x0b);
+    hw_cart_cpu_write(0x8000, 1); hw_cart_cpu_write(0x8001, 0x14);
+    hw_cart_cpu_write(0x8000, 2); hw_cart_cpu_write(0x8001, 0x30);
+    hw_cart_cpu_write(0x8000, 8); hw_cart_cpu_write(0x8001, 0x21);
+    hw_cart_cpu_write(0x8000, 9); hw_cart_cpu_write(0x8001, 0x22);
+    CHECK(hw_cart.chr_off[0] == 10*1024 && hw_cart.chr_off[1] == 11*1024 && hw_cart.chr_off[2] == 20*1024 &&
+          hw_cart.chr_off[3] == 21*1024 && hw_cart.chr_off[4] == 0x30*1024);
+    hw_cart_cpu_write(0x8000, 0x20);
+    CHECK(hw_cart.chr_off[0] == 11*1024 && hw_cart.chr_off[1] == 0x21*1024 && hw_cart.chr_off[2] == 20*1024 &&
+          hw_cart.chr_off[3] == 0x22*1024);
+    hw_cart_cpu_write(0x8000, 0xa0);
+    CHECK(hw_cart.chr_off[4] == 11*1024 && hw_cart.chr_off[5] == 0x21*1024 && hw_cart.chr_off[0] == 0x30*1024);
+    CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    hw_cart_cpu_write(0xa000, 1); CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    no_wram();
+    /* Scanline mode: a $C001 reload uses latch|1; /IRQ two CPU cycles after the rise. */
+    hw_cart_cpu_write(0xc000, 2); hw_cart_cpu_write(0xc001, 0); hw_cart_cpu_write(0xe001, 0);
+    hw.cycles = 100;
+    rambo_rise(); CHECK(hw_cart.m.irq_counter == 3);
+    rambo_rise(); rambo_rise(); CHECK(hw_cart.m.irq_counter == 1 && !hw_cart_irq());
+    rambo_rise(); CHECK(hw_cart.m.irq_counter == 0 && !hw_cart_irq());
+    cpu_cycles(1); CHECK(!hw_cart_irq());
+    cpu_cycles(1); CHECK(hw_cart_irq());
+    rambo_rise(); CHECK(hw_cart.m.irq_counter == 2);                  /* zero reloads the latch */
+    hw_cart_cpu_write(0xe000, 0); CHECK(!hw_cart_irq());
+    /* Cycle mode: one clock per 4 CPU cycles, restarted by $C001; /IRQ one cycle late. */
+    hw_cart_cpu_write(0xc000, 1); hw_cart_cpu_write(0xc001, 1); hw_cart_cpu_write(0xe001, 0);
+    rambo_rise(); CHECK(hw_cart.m.irq_counter == 2);                  /* A12 ignored in cycle mode */
+    cpu_cycles(3); CHECK(hw_cart.m.irq_reload);
+    cpu_cycles(1); CHECK(hw_cart.m.irq_counter == 1 && !hw_cart.m.irq_reload);
+    cpu_cycles(4); CHECK(hw_cart.m.irq_counter == 0 && !hw_cart_irq());
+    cpu_cycles(1); CHECK(hw_cart_irq());
+    hw_cart_cpu_write(0xe000, 0); CHECK(!hw_cart_irq());
+    /* $E000 also cancels a pending /IRQ: latch 0 triggers on the next clock. */
+    hw_cart_cpu_write(0xc000, 0); hw_cart_cpu_write(0xc001, 1); hw_cart_cpu_write(0xe001, 0);
+    cpu_cycles(4); CHECK(hw_cart.m.irq_counter == 0 && !hw_cart_irq());
+    hw_cart_cpu_write(0xe000, 0); cpu_cycles(8); CHECK(!hw_cart_irq());
+}
+
+static void test_mapper158(void)
+{
+    cart(158, 128, 256);
+    /* CHR A17 (bank bit 7) drives CIRAM A10; $A000 does nothing. */
+    hw_cart_cpu_write(0x8000, 0); hw_cart_cpu_write(0x8001, 0x80);
+    hw_cart_cpu_write(0x8000, 1); hw_cart_cpu_write(0x8001, 0x02);
+    CHECK(hw_cart_nt_a10(0x2000) == 0x400 && hw_cart_nt_a10(0x2400) == 0x400);
+    CHECK(hw_cart_nt_a10(0x2800) == 0 && hw_cart_nt_a10(0x2c00) == 0);
+    hw_cart_cpu_write(0x8000, 0x22); hw_cart_cpu_write(0x8001, 0x84);   /* K; R2 bit 7 */
+    hw_cart_cpu_write(0x8000, 0xa8); hw_cart_cpu_write(0x8001, 0x00);   /* C; R8 */
+    CHECK(hw_cart_nt_a10(0x2000) == 0x400 && hw_cart_nt_a10(0x2400) == 0);  /* C: pages 0-3 = R2-R5 */
+    hw_cart_cpu_write(0xa000, 1); CHECK(hw_cart_nt_a10(0x2000) == 0x400);
+    no_wram();
+}
+
 /* nesdev wiki, INES Mapper 018: Jaleco SS88006. */
 static void test_mapper18(void)
 {
@@ -778,6 +846,8 @@ int main(void)
     test_mapper180();
     test_mapper70();
     test_mapper152();
+    test_mapper64();
+    test_mapper158();
     test_mapper140();
     test_mapper113();
     test_mapper94();

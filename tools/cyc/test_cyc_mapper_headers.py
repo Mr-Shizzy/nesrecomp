@@ -20,6 +20,7 @@ from sunsoft_fixtures import sunsoft_fixtures
 from namco_fixtures import namco_fixtures
 from jaleco_fixtures import jaleco_fixtures
 from taito_fixtures import taito_fixtures
+from tengen_fixtures import tengen_fixtures
 
 
 def main():
@@ -34,7 +35,7 @@ def main():
     checked = set()
     count = 0
     identities = []
-    for _, image, _, _ in chain(mapper_fixtures(), latch_fixtures(), fineprg_fixtures(), vrc_fixtures(), expansion_fixtures(), vrc7_fixtures(), bandai_fixtures(), mmc5_fixtures(), mmc1_fixtures(), mapper40_fixtures(), mmc3_variant_fixtures(), sunsoft_fixtures(), namco_fixtures(), jaleco_fixtures(), taito_fixtures()):
+    for _, image, _, _ in chain(mapper_fixtures(), latch_fixtures(), fineprg_fixtures(), vrc_fixtures(), expansion_fixtures(), vrc7_fixtures(), bandai_fixtures(), mmc5_fixtures(), mmc1_fixtures(), mapper40_fixtures(), mmc3_variant_fixtures(), sunsoft_fixtures(), namco_fixtures(), jaleco_fixtures(), taito_fixtures(), tengen_fixtures()):
         mapper = (image[6] >> 4) | (image[7] & 0xf0)
         if mapper in checked:
             continue

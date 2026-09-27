@@ -98,6 +98,9 @@ struct TricMapper {
     byte TaitoDelay;
     // ---- Jaleco SS88006 ----
     byte JPrg[3], JChr[8], JRam, JReload[4], JCtrl, JMirror;
+    // ---- Tengen RAMBO-1 ----
+    byte RamboReg[16], RamboPrescale, RamboDelay;
+    bool RamboCycle;
     ushort JCounter;
     // ---- Sunsoft FME-7 ----
     byte Fme7Cmd, Fme7Reg[16], Fme7IrqCtrl;
@@ -143,6 +146,10 @@ struct TricMapper {
     void JalecoApply();
     void JalecoStore(ushort Address, byte Input);
     void JalecoClock();
+    void RamboApply();
+    void RamboStore(ushort Address, byte Input);
+    void RamboClockIRQ(byte Assert);
+    void RamboCPUClock();
     void FME7Apply();
     bool FME7Low(ushort Address, byte *Out, const byte *In);
     void FME7Store(ushort Address, byte Input);
@@ -261,6 +268,7 @@ inline bool TricMapper::CartMapperIRQ() { return Cart.Mapper==5 ? (M5.irq_enable
 #include "tric_sunsoft.inc"
 #include "tric_namco.inc"
 #include "tric_jaleco.inc"
+#include "tric_tengen.inc"
 #include "tric_taito.inc"
 #include "tric_taito_x1.inc"
 
@@ -401,14 +409,18 @@ inline void TricMapper::PPUClock() {
         unsigned select=(PPU_AddressBus/1024)%4;
         if (BankSelect!=select) { BankSelect=select; if (Cart.Mapper==157) DatachLines(); else BandaiApply(); }
     }
-    if (Cart.Mapper != 4 && Cart.Mapper != 118 && Cart.Mapper != 119 && Cart.Mapper != 48) return;
+    bool rambo = Cart.Mapper == 64 || Cart.Mapper == 158;
+    if (Cart.Mapper != 4 && Cart.Mapper != 118 && Cart.Mapper != 119 && Cart.Mapper != 48 && !rambo) return;
     if (!(PPU_AddressBus & 0x1000)) {
         if (A12) { A12 = false; A12LowCycle = totalCycles; }
         return;
     }
     if (!A12) {
         A12 = true;
-        if (totalCycles - A12LowCycle >= 3) MMC3ClockIRQ();
+        if (totalCycles - A12LowCycle >= 3) {
+            if (!rambo) MMC3ClockIRQ();
+            else if (!RamboCycle) RamboClockIRQ(2);   // /IRQ after M2 falls twice
+        }
     }
 }
 
@@ -471,6 +483,7 @@ inline void TricMapper::Reset() {
     DataReads = 0;
     memset(JPrg, 0, sizeof(JPrg)); memset(JChr, 0, sizeof(JChr)); memset(JReload, 0, sizeof(JReload));
     JRam = JCtrl = JMirror = 0; JCounter = 0;
+    memset(RamboReg, 0, sizeof(RamboReg)); RamboPrescale = RamboDelay = 0; RamboCycle = false;
     TaitoDelay = 0;
     memset(X1Prg, 0, sizeof(X1Prg)); memset(X1Key, 0, sizeof(X1Key)); X1Mode = 0;
     memset(NamcoChr, 0, sizeof(NamcoChr)); memset(NamcoNt, 0, sizeof(NamcoNt)); memset(NamcoPrg, 0, sizeof(NamcoPrg));
@@ -493,6 +506,7 @@ inline void TricMapper::Reset() {
     case 69: FME7Apply(); break;
     case 19: case 210: NamcoApply(); break;
     case 18: JalecoApply(); break;
+    case 64: case 158: RamboApply(); break;
     case 33: case 48: TaitoApply(); break;
     case 32: IremG101Apply(); MapCHR8(0); break;
     case 80: case 207: case 82: case 552: X1Apply(); break;
@@ -636,6 +650,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     if (Cart.Mapper==69) { FME7Store(Address,Input); return; }
     if (Cart.Mapper==19 || Cart.Mapper==210) { NamcoStore(Address,Input); return; }
     if (Cart.Mapper==18) { JalecoStore(Address,Input); return; }
+    if (Cart.Mapper==64 || Cart.Mapper==158) { RamboStore(Address,Input); return; }
     if (Cart.Mapper==80 || Cart.Mapper==207 || Cart.Mapper==82 || Cart.Mapper==552) {
         if (Address < 0x8000) X1Store(Address, Input);
         return;
@@ -871,7 +886,7 @@ inline byte TricMapper::SnoopPPU(ushort Address) {
         return rom >= 0 ? Cart.CHRROM[rom] : VRAM[(NamcoNt[(Address >> 10) % 4] % 2) * 1024 + Address % 1024];
     }
     if (Cart.AlternativeNametableArrangement) return VRAM[Address & 0xfff];
-    if (Cart.Mapper == 118) return VRAM[(ChrA17[(Address >> 10) & 7] ? 0x400 : 0) | (Address & 0x3ff)];
+    if (Cart.Mapper == 118 || Cart.Mapper == 158) return VRAM[(ChrA17[(Address >> 10) & 7] ? 0x400 : 0) | (Address & 0x3ff)];
     if (Cart.Mapper == 207) return VRAM[((Reg[(Address >> 11) & 1] & 0x80) ? 0x400 : 0) | (Address & 0x3ff)];
     ushort Addr = (ushort)(Address & 0x3FF);
     if (Mirroring == TRIC_MIRROR_HORIZONTAL) Addr |= (ushort)((Address & 0x800) ? 0x400 : 0);
@@ -935,7 +950,7 @@ inline void TricMapper::Connector_CheckCIRAM() {
         SeventyTwoPinConnector[21]=(VRC6Nametable((PPU_AddressBus>>10)&3)&1)!=0;
         return;
     }
-    if (Cart.Mapper == 118) { SeventyTwoPinConnector[21] = ChrA17[(PPU_AddressBus >> 10) & 7]; return; }
+    if (Cart.Mapper == 118 || Cart.Mapper == 158) { SeventyTwoPinConnector[21] = ChrA17[(PPU_AddressBus >> 10) & 7]; return; }
     // Mapper 207: the upper nametable pair follows $7EF0 bit 7, the lower $7EF1 bit 7.
     if (Cart.Mapper == 207) { SeventyTwoPinConnector[21] = (Reg[(PPU_AddressBus >> 11) & 1] & 0x80) != 0; return; }
     if (Cart.Mapper == 19) {
