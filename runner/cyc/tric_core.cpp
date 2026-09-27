@@ -9792,6 +9792,9 @@ void cyc_mem_state_dump(void *file)
                  Cart.Mapper == 119 ? sizeof(Cart.CHRRAM) : (size_t)Cart.CHRROM_Length,
                  Cart.MapperChip.HasWRAM ? Cart.MapperChip.WRAM : NULL, Cart.MapperChip.WRAM_Length,
                  cyc_frame_index_buffer);
+    unsigned n = Cart.Mapper==5 ? 1024 : Cart.Mapper==19 ? 128 : 0;
+    for (unsigned i = 0; i < n; ++i)
+        fprintf((FILE *)file, "%s%02X%s", i % 32 ? " " : i ? "\nexram " : "exram ", Cart.MapperChip.ExRAM[i], i + 1 == n ? "\n" : "");
 }
 
 const char *cyc_hw_name(void) { return "tricnes"; }

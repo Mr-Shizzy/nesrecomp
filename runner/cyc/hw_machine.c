@@ -337,9 +337,12 @@ void cyc_power_on(uint8_t ppu_alignment)
     hw_dma_stalls = 0;
 
     /* Tick 0 of the first CPU cycle has no CPU access, and the PPU clock
-     * starts at its alignment phase: its first dot is not on this tick. */
+     * starts at its alignment phase: its first dot is not on this tick. The
+     * cartridge's first M2 clock comes with the first CPU cycle, as in the
+     * oracle; a free-running divider (the N163 sound generator) keeps the
+     * oracle's phase, which CPU-readable RAM exposes. */
     if (hw.align == 2) ppu_half_dot();
-    clock_cpu_devices();
+    apu_cycle();
     hw.tick = 1;
 }
 
@@ -411,6 +414,10 @@ void cyc_mem_state_dump(void *file)
 {
     cyc_mem_dump(file, hw.cycles, hw.ram, ppu.ciram, hw_cart.info.four_screen ? 4096 : 2048, ppu.oam, ppu.palette,
                  hw_cart.chr_ram_len ? hw_cart.chr + hw_cart.chr_ram_base : NULL, hw_cart.chr_ram_len, hw_cart.has_wram ? hw_cart.wram : NULL, hw_cart.wram_len, hw_frame_index);
+    /* Cartridge-internal RAM that cyc_mem_state_hash also covers. */
+    unsigned n = hw_cart.mapper==5 ? 1024 : hw_cart.mapper==19 ? 128 : 0;
+    for (unsigned i = 0; i < n; ++i)
+        fprintf((FILE *)file, "%s%02X%s", i % 32 ? " " : i ? "\nexram " : "exram ", hw_cart.exram[i], i + 1 == n ? "\n" : "");
 }
 
 uint64_t cyc_hw_state_hash(void)

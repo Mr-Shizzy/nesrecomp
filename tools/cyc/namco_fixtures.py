@@ -135,6 +135,33 @@ def n163_tone():
     return nes2(('n163_tone', header + prg + bytes(8192), '00:8000\n', 'A=42'), sub=3)
 
 
+def n163_phase_sampler():
+    """The generator is a free-running 15-cycle divider from power-on, and its
+    phase registers are CPU-readable. Sample channel 8's phase low byte 256
+    times in a 14-cycle loop (co-prime with 15) into $0300-$03FF, so any
+    divider phase difference between implementations changes memory."""
+    code = bytearray([0x78, 0xd8, 0xa2, 0xff, 0x9a])
+
+    def store(a, v):
+        code.extend([0xa9, v, 0x8d, a & 255, a >> 8])
+
+    store(0xf800, 0x80 | 0x78)
+    for value in (0x01, 0, 0, 0, 256 - 16, 0, 0, 0x0f):   # freq 1, one channel
+        store(0x4800, value)
+    store(0xf800, 0x79)                                    # phase low, no increment
+    # LDX #0; loop: LDA $4800 (4); STA $0300,X (5); INX (2); BNE loop (3) = 14 cycles
+    code.extend([0xa2, 0, 0xad, 0x00, 0x48, 0x9d, 0x00, 0x03, 0xe8, 0xd0, 0xf7,
+                 0xa9, 0x42])
+    done = 0x8000 + len(code)
+    code.extend([0x4c, done & 255, done >> 8])
+    prg = bytearray([0xff]) * 131072
+    for bank in range(16):
+        prg[bank * 8192:bank * 8192 + len(code)] = code
+        prg[(bank + 1) * 8192 - 6:(bank + 1) * 8192] = bytes([0, 0x80]) * 3
+    header = b'NES\x1a' + bytes([8, 1, 0x30, 0x10]) + bytes(8)
+    return 'n163_phase', header + prg + bytes(8192), '00:8000\n', 'A=42'
+
+
 def namco_fixtures():
     yield handoff('namco163_prg', 19, [(0xe000, 3)], 3, chr_kb=8)
     yield handoff('namco163_prg_a000', 19, [(0xe800, 0xc7)], 0, chr_kb=8)
@@ -147,3 +174,4 @@ def namco_fixtures():
     yield n340_contract()
     yield n163_irq_program()
     yield n163_tone()
+    yield n163_phase_sampler()
