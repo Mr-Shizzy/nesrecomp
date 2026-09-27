@@ -752,6 +752,9 @@ static const struct {
     { 101, "Jaleco JF-10 (mapper 101)", 0, 0 },
     { 77, "Irem LROG017", 0, 0 },
     { 96, "Bandai Oeka Kids", 1, 0 },
+    { 144, "Color Dreams (Death Race)", 0, 0 },
+    { 146, "Sachen 3015 / SA-016", 0, 0 },
+    { 148, "Sachen SA-008-A / Tengen 800008", 0, 0 },
     { 152, "Bandai 74161/7432 (one-screen)", 0, 0 },
     { 140, "Jaleco JF-11/14", 0, 0 },
     { 113, "HES", 0, 0 },
@@ -979,7 +982,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
             if (addr == 0x7fff) map_chr4(1, value & 15);
         }
     }
-    if (hw_cart.mapper == 79 && (addr & 0xe100) == 0x4100) {
+    if ((hw_cart.mapper == 79 || hw_cart.mapper == 146) && (addr & 0xe100) == 0x4100) {
         hw_cart.m.latch = value;
         map_prg32((value >> 3) & 1);
         map_chr8(value & 7);
@@ -1028,7 +1031,9 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 24: case 26: vrc6_write(addr, value); break;
     case 73: vrc3_write(addr, value); break;
     case 9: case 10: mmc2_write(addr, value); break;
-    case 11: /* Color Dreams; see MAPPERS.md. */
+    case 11: case 144: /* Color Dreams; see MAPPERS.md. */
+        /* 144 (Death Race): a resistor on D0 lets the ROM's bit 0 win (nesdev INES Mapper 144). */
+        if (hw_cart.mapper == 144) value |= 1;
         value &= hw_cart_prg_read(addr);
         hw_cart.m.latch = value;
         map_prg32(value & 3);
@@ -1133,6 +1138,12 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
         map_prg32(value & 3);
         hw_cart.m.ctrl = value & 4;
         oeka_apply();
+        break;
+    case 148: /* Sachen SA-008-A / Tengen 800008; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg32((value >> 3) & 1);
+        map_chr8(value & 7);
         break;
     case 72: case 92: /* Jaleco JF-17 / JF-19; see MAPPERS.md. */
         value &= hw_cart_prg_read(addr);

@@ -295,6 +295,22 @@ static void test_chr_tricks_batch3(void)
     no_wram();
 }
 
+/* Unlicensed variants (nesdev wiki, INES Mapper 144, 146, 148). */
+static void test_unlicensed_batch3(void)
+{
+    cart(144, 128, 128);
+    prg[hw_cart.prg_off[0]] = 0xf3;
+    hw_cart_cpu_write(0x8000, 0x22); prg_banks(12, 13, 14, 15); chr_bank(0, 16, 8);  /* ROM D0 wins */
+    prg[hw_cart.prg_off[0]] = 0xf0; hw_cart_cpu_write(0x8000, 0x33); prg_banks(0, 1, 2, 3); chr_bank(0, 24, 8);
+    cart(146, 64, 64);
+    hw_cart_cpu_write(0x4100, 0x0b); prg_banks(4, 5, 6, 7); chr_bank(0, 24, 8);
+    hw_cart_cpu_write(0x4000, 0x00); hw_cart_cpu_write(0x8000, 0x00); prg_banks(4, 5, 6, 7);
+    cart(148, 64, 64);
+    hw_cart_cpu_write(0x8000, 0x0d); prg_banks(4, 5, 6, 7); chr_bank(0, 40, 8);
+    prg[hw_cart.prg_off[0]] = 0x07; hw_cart_cpu_write(0x8000, 0x0e); prg_banks(0, 1, 2, 3); chr_bank(0, 48, 8);
+    no_wram();
+}
+
 /* nesdev wiki, INES Mapper 067: Sunsoft-3. */
 static void test_mapper67(void)
 {
@@ -1015,6 +1031,7 @@ int main(void)
     test_mapper67();
     test_discrete_batch3();
     test_chr_tricks_batch3();
+    test_unlicensed_batch3();
     test_mapper_namco118();
     test_mapper140();
     test_mapper113();

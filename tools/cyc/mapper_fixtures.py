@@ -95,6 +95,10 @@ def mapper_fixtures():
     yield handoff('mapper97', 97, [(0x8000, 3)], 6, chr_kb=8, start=0xc000)
     yield handoff('mapper86', 86, [(0x6000, 0x20)], 8, chr_kb=64)
     yield handoff('mapper77', 77, [(0xb000, 0x02)], 8, chr_kb=8)
+    yield handoff('mapper144', 144, [(0xb000, 0x02)], 12, chr_kb=64)  # ROM $FF: its D0 sets bit 0
+    yield handoff('mapper148', 148, [(0xb000, 0x08)], 4, prg_kb=64, chr_kb=64)
+    for mode in ('absolute', 'indexed', 'indirect'):
+        yield handoff('mapper146_' + mode, 146, [(0x4100, 11)], 4, prg_kb=64, chr_kb=64, addressing=mode)
     yield handoff('mapper96', 96, [(0xb000, 0x02)], 8, chr_kb=0)
     yield handoff('mapper152', 152, [(0xb000, 0xb5)], 6, chr_kb=128)
     yield handoff('mapper184', 184, [(0x6000, 0x12)], 0, prg_kb=32, chr_kb=32)

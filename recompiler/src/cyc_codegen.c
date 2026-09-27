@@ -810,7 +810,7 @@ static unsigned mapper_write_floor(int mapper) {
     case 5: return 0x5000;
     case 16: return 0x6000;
     case 34: return 0x7ffd;
-    case 79: return 0x4100;
+    case 79: case 146: return 0x4100;
     case 31: return 0x5000;
     case 113: return 0x4100;
     case 140: return 0x6000;
@@ -1431,6 +1431,9 @@ static const char *mapper_name(int mapper) {
     case 101: return "Jaleco JF-10 (mapper 101)";
     case 77: return "Irem LROG017";
     case 96: return "Bandai Oeka Kids";
+    case 144: return "Color Dreams (Death Race)";
+    case 146: return "Sachen 3015 / SA-016";
+    case 148: return "Sachen SA-008-A / Tengen 800008";
     case 158: return "Tengen 800037";
     case 33: return "Taito TC0190";
     case 32: return "Irem G-101";

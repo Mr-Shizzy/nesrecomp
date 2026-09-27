@@ -146,6 +146,9 @@ def ppu_fixtures():
         # Staying inside $2xxx does not latch: $2101 -> $2300 keeps inner bank 1.
         ('write', 0x2100, 0), ('write', 0x2300, 0), ('write', 0x0020, 0x66),
         ('write', 0x2100, 0), ('read', 0x0020, 0x66)])
+    yield ppu_contract(144, 128, 128, [('cpu', 0xb000, 0x50), ('read', 0, 40), ('read', 0x1fff, 47)])
+    yield ppu_contract(146, 64, 64, [('cpu', 0x4100, 0x05), ('read', 0, 40), ('cpu', 0x5f00, 0x02), ('read', 0x1fff, 23)])
+    yield ppu_contract(148, 64, 64, [('cpu', 0xb000, 0x06), ('read', 0, 48), ('read', 0x1fff, 55)])
     yield ppu_contract(140, 128, 128, [('cpu', 0x6000, 0x2a), ('read', 0, 80), ('read', 0x1fff, 87)])
     yield ppu_contract(184, 32, 32, [
         ('cpu', 0x6000, 0x12), ('read', 0, 8), ('read', 0x1000, 20),

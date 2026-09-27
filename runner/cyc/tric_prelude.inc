@@ -764,7 +764,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
             }
         }
     }
-    if (Cart.Mapper == 79 && (Address & 0xe100) == 0x4100) {
+    if ((Cart.Mapper == 79 || Cart.Mapper == 146) && (Address & 0xe100) == 0x4100) {   // 146: Sachen 3015, same latch
         Latch = Input;
         MapPRG32((Input / 8) % 2);
         MapCHR8(Input % 8);
@@ -822,8 +822,8 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
         case 15: Mirroring = (Input & 1) ? TRIC_MIRROR_HORIZONTAL : TRIC_MIRROR_VERTICAL; break;
         }
         break;
-    case 11:
-        Input = (byte)(Input & SnoopCPU(Address));
+    case 11: case 144:   // nesdev INES Mapper 011; 144: EffectiveData = ROM & (Written | 1)
+        Input = (byte)((Cart.Mapper == 144 ? (Input | 1) : Input) & SnoopCPU(Address));
         Latch = Input;
         MapPRG32(Input % 4);
         MapCHR8(Input / 16);
@@ -898,6 +898,10 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
             MapPRG16(1, Input % 32);
             Mirroring = Input >= 128 ? TRIC_MIRROR_VERTICAL : TRIC_MIRROR_HORIZONTAL;
         }
+        break;
+    case 148:  // nesdev INES Mapper 148: $8000-$FFFF [...PCCC]; bus conflicts
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG32((Latch / 8) % 2); MapCHR8(Latch % 8);
         break;
     case 77:   // nesdev INES Mapper 077: [CCCC PPPP]; 2 KiB CHR ROM at $0000, RAM above; bus conflicts
         Latch = (byte)(Input & SnoopCPU(Address));
