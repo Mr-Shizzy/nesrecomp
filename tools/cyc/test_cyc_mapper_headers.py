@@ -46,8 +46,10 @@ def main():
             rom = bytearray(image)
             rom[7] |= 8
             rom[8] = byte8
-            if not rom[5] or mapper == 119:  # TQROM also carries 8 KiB CHR RAM
-                rom[11] = 8 if mapper == 13 else 7
+            if not rom[5] or mapper in (119, 77):  # TQROM and LROG017 also carry 8 KiB CHR RAM
+                rom[11] = 8 if mapper == 13 else 9 if mapper == 96 else 7
+            if mapper == 77:
+                rom[6] |= 8      # LROG017's nametables are RAM: a NES 2.0 header says four-screen
             (case / 'test.nes').write_bytes(rom)
             sub = byte8 >> 4
             if mapper == 210 and not sub and not byte8 & 15:
