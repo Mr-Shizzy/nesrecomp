@@ -113,6 +113,7 @@ int main(void)
       static const uint8_t lz93d50[4]={0xBA,0x47,0xE3,0xD8};    /* DB05106E: LZ93D50, no EEPROM */
       static const uint8_t x24c01[4]={0xA3,0x30,0x3F,0x08};     /* 0CF42E69: 159 dumped as 16 */
       static const uint8_t vrc4b[4]={0x76,0x36,0x94,0x00};      /* 5ADBF660: VRC4b, 2 KiB WRAM */
+      static const uint8_t battle_rush[4]={0x4F,0x71,0xB3,0x0A}; /* 983D8175: Datach + 24C01 */
       static const uint8_t data_unknown[4]={1,2,3,4};
       memset(h,0,sizeof(h)); memcpy(h,"NES",3); h[3]=26; h[4]=8; h[5]=16; h[6]=0x70; h[7]=0x10;
       CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==23 && c.prg_ram==8192);
@@ -132,6 +133,9 @@ int main(void)
       CHECK(c.submapper==5 && !c.prg_nvram && nes_cart_variant_supported(&c));
       h[6]=0x00; CHECK(nes_cart_header(h,16,&c)); nes_cart_known_dump(&c,x24c01,4);
       CHECK(c.mapper==159 && !c.submapper && c.prg_nvram==128 && nes_cart_variant_supported(&c));
+      h[5]=0; CHECK(nes_cart_header(h,16,&c)); nes_cart_known_dump(&c,battle_rush,4);
+      CHECK(c.mapper==157 && c.prg_nvram==128 && c.chr_ram==8192 && nes_cart_variant_supported(&c));
+      h[5]=16;
       h[6]=0x90; h[7]=0x10; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==25);
       nes_cart_known_dump(&c,vrc4b,4);
       CHECK(c.submapper==1 && c.prg_ram==2048 && !c.prg_nvram && nes_cart_variant_supported(&c)); }
