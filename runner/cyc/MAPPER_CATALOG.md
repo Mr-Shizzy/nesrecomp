@@ -10,16 +10,17 @@ of distinct games. Categories are coarse and partly curated.
 
 **Validation:** every supported mapper has board-contract tests and generated fixtures run
 natively, on both interpreters and on the independent oracle at all four CPU/PPU alignments.
-The *Title* column marks mappers also checked on one or two real owner titles (bounded
+The *Title* column is *yes* for mappers also checked on one or two real owner titles (bounded
 1500-frame reference route; newer ones also owner playtest). New mappers follow that policy;
-it is not exhaustive per-game or physical-hardware validation. Unmarked supported mappers
-still need a real title (tracked in beads-2dw.1.38).
+it is not exhaustive per-game or physical-hardware validation. *no* marks a supported mapper
+the owner has ROMs for that no campaign has checked yet (tracked in beads-2dw.1.38).
+*fixture-only* marks a supported mapper with no owner ROM; fixtures are its validation.
 
-**46 of 458 known mapper IDs supported, covering 6504 of 10632 known dumps (61.2%).**
+**57 of 458 known mapper IDs supported, covering 6682 of 10632 known dumps (62.8%).**
 
 | Category | IDs | Supported | Dumps | Dumps covered |
 |---|---:|---:|---:|---:|
-| licensed | 66 | 37 | 6522 | 96% |
+| licensed | 67 | 48 | 6526 | 99% |
 | unlicensed commercial | 10 | 7 | 247 | 90% |
 | homebrew | 7 | 1 | 148 | 0% |
 | Vs. System | 1 | 0 | 59 | 0% |
@@ -27,7 +28,7 @@ still need a real title (tracked in beads-2dw.1.38).
 | multicart | 31 | 0 | 618 | 0% |
 | copier | 5 | 0 | 922 | 0% |
 | famiclone SoC | 2 | 0 | 246 | 0% |
-| pirate / other | 335 | 0 | 1867 | 0% |
+| pirate / other | 334 | 0 | 1863 | 0% |
 
 ## Remaining, by priority
 
@@ -35,19 +36,10 @@ Ordered by category (licensed first), then dump count. Rows with fewer than abou
 
 | ID | Name | Category | Dumps | Owner ROMs | Title | Example board |
 |---:|---|---|---:|---:|:-:|---|
-| 19 | Namco163 | licensed | 49 | 17 |  | NAMCOT-163, NAMCOT-129 |
-| 18 | JalecoSs88006 | licensed | 27 | 1 |  | JALECO-JF-24, JALECO-JF-25 |
-| 210 | Namco163 | licensed | 25 |  |  | NAMCOT-340, NAMCOT-175 |
-| 185 | CnromProtect | licensed | 18 | 2 |  | HVC-CNROM+SECURITY, HVC-CNROM |
-| 33 | TaitoTc0190 | licensed | 15 | 10 |  | TAITO-TC0190FMC, TAITO-TC0350FMR |
-| 32 | IremG101 | licensed | 12 | 1 |  | IREM-G101 |
-| 80 | TaitoX1005 | licensed | 12 | 1 |  | TAITO-X1-005 |
 | 152 | Bandai74161_7432 | licensed | 11 | 1 |  | BANDAI-74*161/161/32, TAITO-74*161/161/32 |
 | 64 | Rambo1 | licensed | 9 | 1 |  | TENGEN-800032 |
-| 48 | TaitoTc0690 | licensed | 8 |  |  | TAITO-TC0190FMC+PAL16R4 |
 | 86 | JalecoJf13 | licensed | 7 |  |  | JALECO-JF-13 |
 | 65 | IremH3001 | licensed | 6 | 1 |  | IREM-H3001 |
-| 82 | TaitoX1017 | licensed | 6 |  |  | TAITO-X1-017 |
 | 88 | Namco108_88 | licensed | 5 | 3 |  | NAMCOT-3433, NAMCOT-3443 |
 | 70 | Bandai74161_7432 | licensed | 4 | 3 |  | BANDAI-74*161/161/32 |
 | 72 | JalecoJf17_19 | licensed | 4 |  |  | JALECO-JF-17 |
@@ -58,7 +50,6 @@ Ordered by category (licensed first), then dump count. Rows with fewer than abou
 | 92 | JalecoJf17_19 | licensed | 2 |  |  | JALECO-JF-19 |
 | 96 | OekaKids | licensed | 2 |  |  | BANDAI-74*161/02/74 |
 | 154 | Namco108_154 | licensed | 2 |  |  | NAMCOT-3453 |
-| 207 | TaitoX1005 | licensed | 2 |  |  | TAITO-X1-005 |
 | 77 | IremLrog017 | licensed | 1 |  |  | IREM-74*161/161/21/138 |
 | 89 | Sunsoft89 | licensed | 1 |  |  | SUNSOFT-2 |
 | 97 | IremTamS1 | licensed | 1 |  |  | IREM-TAM-S1 |
@@ -216,7 +207,6 @@ Ordered by category (licensed first), then dump count. Rows with fewer than abou
 | 446 | (no emulator class) | pirate / other | 4 |  |  |  |
 | 519 | Eh8813A | pirate / other | 4 |  |  |  |
 | 551 | (no emulator class) | pirate / other | 4 |  |  |  |
-| 552 | TaitoX1017 | pirate / other | 4 |  |  |  |
 | 44 | MMC3_44 | pirate / other | 3 |  |  |  |
 | 55 | (no emulator class) | pirate / other | 3 |  |  |  |
 | 81 | (no emulator class) | pirate / other | 3 |  |  |  |
@@ -452,49 +442,60 @@ Ordered by category (licensed first), then dump count. Rows with fewer than abou
 
 | ID | Name | Category | Dumps | Owner ROMs | Title | Example board |
 |---:|---|---|---:|---:|:-:|---|
-| 0 | NROM | licensed | 1454 | 111 | yes | HVC-NROM-128, HVC-NROM-256 |
-| 1 | MMC1 | licensed | 1187 | 332 | yes | NES-SLROM, HVC-SLROM |
+| 0 | NROM | licensed | 1454 | 108 | yes | HVC-NROM-128, HVC-NROM-256 |
+| 1 | MMC1 | licensed | 1187 | 331 | yes | NES-SLROM, HVC-SLROM |
 | 2 | UxROM | licensed | 696 | 117 | yes | NES-UNROM, HVC-UNROM |
 | 3 | CNROM | licensed | 453 | 97 | no | NES-CNROM, HVC-CNROM |
 | 4 | MMC3 | licensed | 1861 | 197 | yes | NES-TLROM, HVC-TLROM |
 | 5 | MMC5 | licensed | 61 | 9 | yes | HVC-ETROM, NES-ETROM |
 | 7 | AxROM | licensed | 80 | 22 | no | NES-AOROM, NES-AMROM |
-| 9 | MMC2 | licensed | 13 |  | no | NES-PNROM, NES-PEEOROM |
-| 10 | MMC4 | licensed | 13 | 3 | no | HVC-FKROM, HVC-FJROM |
+| 9 | MMC2 | licensed | 13 |  | fixture-only | NES-PNROM, NES-PEEOROM |
+| 10 | MMC4 | licensed | 13 | 2 | no | HVC-FKROM, HVC-FJROM |
 | 11 | Color Dreams | unlicensed commercial | 79 | 19 | yes | COLORDREAMS-74*377, COLORDREAMS |
-| 13 | CPROM | licensed | 3 |  | no | NES-CPROM |
+| 13 | CPROM | licensed | 3 |  | fixture-only | NES-CPROM |
 | 16 | Bandai FCG / LZ93D50 | licensed | 28 | 18 | no | BANDAI-LZ93D50+24C02, BANDAI-FCG-2 |
+| 18 | Jaleco SS88006 | licensed | 27 | 1 | yes | JALECO-JF-24, JALECO-JF-25 |
+| 19 | Namco 163 | licensed | 49 | 10 | yes | NAMCOT-163, NAMCOT-129 |
 | 21 | VRC4a/c | licensed | 7 | 1 | no | KONAMI-VRC-4 |
 | 22 | VRC2a | licensed | 5 | 1 | no | KONAMI-VRC-2 |
 | 23 | VRC2b / VRC4e/f | licensed | 51 | 7 | no | KONAMI-VRC-2, KONAMI-VRC-4 |
 | 24 | VRC6a | licensed | 20 | 1 | no | KONAMI-VRC-6 |
 | 25 | VRC2c / VRC4b/d | licensed | 21 | 3 | no | KONAMI-VRC-4, KONAMI-VRC-2 |
 | 26 | VRC6b | licensed | 4 | 1 | no | KONAMI-VRC-6 |
-| 31 | NSF cartridge | homebrew | 0 |  | no |  |
+| 31 | NSF cartridge | homebrew | 0 |  | fixture-only |  |
+| 32 | Irem G-101 | licensed | 12 | 1 | yes | IREM-G101 |
+| 33 | Taito TC0190 | licensed | 15 | 5 | yes | TAITO-TC0190FMC, TAITO-TC0350FMR |
 | 34 | BNROM / NINA-001 | licensed | 26 | 1 | yes | AVE-NINA-01, IREM-BNROM |
 | 40 | NTDEC 2722 | FDS conversion | 3 |  | yes |  |
 | 41 | Caltron 6-in-1 | unlicensed commercial | 1 | 1 | yes | MLT-CALTRON6IN1 |
+| 48 | Taito TC0690 | licensed | 8 | 5 | yes | TAITO-TC0190FMC+PAL16R4 |
 | 66 | GxROM | licensed | 40 | 11 | yes | NES-GNROM, HVC-GNROM |
 | 68 | Sunsoft-4 | licensed | 10 | 2 | yes | SUNSOFT-4, TENGEN-800042 |
 | 69 | Sunsoft FME-7 / 5B | licensed | 27 | 12 | yes | SUNSOFT-FME-7, SUNSOFT-5A |
 | 71 | Camerica | unlicensed commercial | 46 | 9 | yes | CAMERICA-BF9093, CAMERICA-ALGN |
-| 73 | VRC3 | licensed | 2 |  | no | KONAMI-VRC-3 |
+| 73 | VRC3 | licensed | 2 |  | fixture-only | KONAMI-VRC-3 |
 | 75 | VRC1 | licensed | 17 | 2 | no | KONAMI-VRC-1, JALECO-JF-22 |
 | 76 | Namco 109 | licensed | 4 | 1 | no | NAMCOT-3446 |
 | 79 | NINA-003/006 | unlicensed commercial | 58 | 11 | yes | AVE-NINA-06, AVE-MB-91 |
-| 85 | VRC7 | licensed | 7 |  | no | KONAMI-VRC-7 |
+| 80 | Taito X1-005 | licensed | 12 |  | fixture-only | TAITO-X1-005 |
+| 82 | Taito X1-017 | licensed | 6 |  | fixture-only | TAITO-X1-017 |
+| 85 | VRC7 | licensed | 7 |  | fixture-only | KONAMI-VRC-7 |
 | 87 | J87 | licensed | 24 | 6 | no | KONAMI-74*139/74, JALECO-JF-10 |
-| 94 | UN1ROM | licensed | 1 |  | no | HVC-UN1ROM |
+| 94 | UN1ROM | licensed | 1 |  | fixture-only | HVC-UN1ROM |
 | 113 | HES | unlicensed commercial | 10 | 3 | no |  |
 | 118 | TxSROM | licensed | 13 | 4 | yes | NES-TLSROM, HVC-TKSROM |
 | 119 | TQROM | licensed | 5 | 2 | yes | NES-TQROM |
 | 140 | Jaleco JF-11/14 | licensed | 7 | 1 | no | JALECO-JF-11, JALECO-JF-14 |
-| 153 | Bandai BA-JUMP2 | licensed | 1 |  | no | BANDAI-JUMP2 |
-| 155 | MMC1A | licensed | 2 |  | no |  |
-| 157 | Bandai Datach | licensed | 9 |  | no |  |
-| 159 | Bandai LZ93D50 / X24C01 | licensed | 14 |  | no | BANDAI-LZ93D50+24C01 |
+| 153 | Bandai BA-JUMP2 | licensed | 1 |  | fixture-only | BANDAI-JUMP2 |
+| 155 | MMC1A | licensed | 2 |  | fixture-only |  |
+| 157 | Bandai Datach | licensed | 9 |  | fixture-only |  |
+| 159 | Bandai LZ93D50 / X24C01 | licensed | 14 |  | fixture-only | BANDAI-LZ93D50+24C01 |
 | 180 | Crazy Climber | licensed | 2 | 1 | no | HVC-UNROM+74HC08 |
 | 184 | Sunsoft-1 | licensed | 11 | 2 | no | SUNSOFT-1 |
+| 185 | CNROM + copy protection | licensed | 18 | 2 | yes | HVC-CNROM+SECURITY, HVC-CNROM |
 | 206 | DxROM | licensed | 99 | 2 | no | NAMCOT-3416, TENGEN-800030 |
+| 207 | Taito X1-005 (CHR mirroring) | licensed | 2 | 1 | yes | TAITO-X1-005 |
+| 210 | Namco 175 / 340 | licensed | 25 | 7 | yes | NAMCOT-340, NAMCOT-175 |
 | 228 | Active Enterprises | unlicensed commercial | 20 | 3 | yes | MLT-ACTION52 |
-| 232 | Camerica Quattro | unlicensed commercial | 9 |  | no | CAMERICA-ALGQ, CAMERICA-BF9096 |
+| 232 | Camerica Quattro | unlicensed commercial | 9 |  | fixture-only | CAMERICA-ALGQ, CAMERICA-BF9096 |
+| 552 | Taito X1-017 (NES 2.0) | licensed | 4 |  | fixture-only |  |

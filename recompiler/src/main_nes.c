@@ -368,6 +368,10 @@ static void print_usage(void) {
         "                         Write the cycle-accurate 6502 interpreter generated\n"
         "                         from the same templates (runner/cyc/cpu6502_interp.c)\n"
         "                         and exit. No ROM needed.\n"
+        "  --cart-info            Read ROM paths (one per line) from stdin and print\n"
+        "                         'CART <mapper> <submapper> <path>' for each, decoded as\n"
+        "                         the cycle runtime does (known-dump corrections\n"
+        "                         included), or 'CART ? ? <path>' if it does not load.\n"
         "  --help, -h             Show this help message.\n"
         "\n"
         "Output:\n"
@@ -381,6 +385,24 @@ static void print_usage(void) {
         "  NESRecomp \"Super Mario Bros.nes\"                    # quick start\n"
         "  NESRecomp \"Super Mario Bros.nes\" --game game.toml   # with config\n"
     );
+}
+
+/* --cart-info: board identity of each ROM, for catalogs of a ROM library. */
+static int cart_info(void) {
+    char path[4096];
+    while (fgets(path, sizeof(path), stdin)) {
+        path[strcspn(path, "\r\n")] = 0;
+        if (!path[0]) continue;
+        NESRom rom;
+        memset(&rom, 0, sizeof(rom));
+        if (rom_parse(path, &rom)) {
+            printf("CART %u %u %s\n", (unsigned)rom.cart.mapper, (unsigned)rom.cart.submapper, path);
+            rom_free(&rom);
+        } else {
+            printf("CART ? ? %s\n", path);
+        }
+    }
+    return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -400,6 +422,8 @@ int main(int argc, char *argv[]) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage();
             return 0;
+        } else if (strcmp(argv[i], "--cart-info") == 0) {
+            return cart_info();
         } else if (strcmp(argv[i], "--cycle-accurate") == 0) {
             cycle_accurate = true;
         } else if (strcmp(argv[i], "--emit-cycle-interpreter") == 0 && i+1 < argc) {
