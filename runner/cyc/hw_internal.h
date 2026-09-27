@@ -93,6 +93,12 @@ typedef struct {
     int16_t output;            /* the channel currently held on the DAC */
 } HwNamco;
 
+/* Jaleco SS88006 registers (hw_jaleco.inc). */
+typedef struct {
+    uint8_t prg[3], chr[8], ram_ctrl, reload[4], ctrl, mirror;
+    uint16_t counter;
+} HwJaleco;
+
 /* Sunsoft FME-7 registers, and the 5B's sound generator (hw_sunsoft.inc). */
 typedef struct {
     uint8_t command, chr[8], prg[4], mirror, irq_ctrl;
@@ -164,6 +170,7 @@ typedef struct {
         Mmc5State mmc5;
         HwVrc6Audio vrc6_audio;
         HwNamco namco;
+        HwJaleco jaleco;
         HwFme7 fme7;
         Hw5B s5b;
         uint8_t vrc7_reg[64], vrc7_address;

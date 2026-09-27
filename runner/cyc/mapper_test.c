@@ -64,6 +64,8 @@ static void no_wram(void)
 }
 
 /* Per-board tests. */
+static void cpu_cycles(unsigned n);   /* sunsoft_test.inc */
+
 static void mmc3_reg(unsigned index, uint8_t value, uint8_t mode)
 {
     hw_cart_cpu_write(0x8000, (uint8_t)(mode | index));
@@ -71,6 +73,56 @@ static void mmc3_reg(unsigned index, uint8_t value, uint8_t mode)
 }
 
 static unsigned txsrom_nt(uint16_t addr) { return hw_cart_ciram_a10(addr) ? 1 : 0; }
+
+/* nesdev wiki, INES Mapper 018: Jaleco SS88006. */
+static void test_mapper18(void)
+{
+    cart(18, 512, 256);
+    CHECK(hw_cart.watch_cpu);
+    prg_banks(0, 0, 0, 63);
+    hw_cart_cpu_write(0x8000, 0xf5); hw_cart_cpu_write(0x8001, 0x02);    /* $25 */
+    hw_cart_cpu_write(0x8002, 0x09); hw_cart_cpu_write(0x8003, 0x03);    /* $39 */
+    hw_cart_cpu_write(0x9000, 0x0e); hw_cart_cpu_write(0x9001, 0x0f);    /* $FE -> 6 bits */
+    prg_banks(0x25, 0x39, 0x3e, 63);
+    for (unsigned p = 0; p < 8; ++p) {
+        uint16_t base = (uint16_t)(0xa000 + (p >> 1) * 0x1000 + (p & 1) * 2);
+        hw_cart_cpu_write(base, (uint8_t)(p + 1)); hw_cart_cpu_write((uint16_t)(base + 1), (uint8_t)(15 - p));
+    }
+    for (unsigned p = 0; p < 8; ++p) chr_bank(p, (15 - p) << 4 | (p + 1), 1);
+    /* Other address bits are ignored: $AFFD = $A001 (page 0 high nibble). */
+    hw_cart_cpu_write(0xaffd, 0x0a); chr_bank(0, 0xa1, 1);
+    static const uint8_t mirror[4] = { HW_MIRROR_HORIZONTAL, HW_MIRROR_VERTICAL, HW_MIRROR_SCREEN_A, HW_MIRROR_SCREEN_B };
+    for (unsigned m = 0; m < 4; ++m) { hw_cart_cpu_write(0xf002, (uint8_t)m); CHECK(hw_cart.mirroring == mirror[m]); }
+    /* $9002: bit 0 enables the RAM chip, bit 1 allows writes. */
+    hw_cart.has_wram = 1; hw_cart.wram_len = 8192;
+    uint8_t value = 0xa5;
+    hw_cart_cpu_write(0x9002, 0); CHECK(!hw_cart_cpu_read(0x6000, &value) && value == 0xa5);
+    hw_cart_cpu_write(0x9002, 3); hw_cart_cpu_write(0x6000, 0x5a); CHECK(hw_cart_cpu_read(0x6000, &value) && value == 0x5a);
+    hw_cart_cpu_write(0x9002, 1); hw_cart_cpu_write(0x6000, 0x11); CHECK(hw_cart_cpu_read(0x6000, &value) && value == 0x5a);
+    hw_cart_cpu_write(0x9003, 0); CHECK(hw_cart_cpu_read(0x6000, &value));   /* $9003 is not the RAM register */
+    hw_cart_cpu_write(0x9002, 2); value = 0xa5; CHECK(!hw_cart_cpu_read(0x6000, &value));
+    /* IRQ: 16-bit reload $1234, underflow interrupts, counting continues. */
+    hw_cart_cpu_write(0xe000, 4); hw_cart_cpu_write(0xe001, 3); hw_cart_cpu_write(0xe002, 2); hw_cart_cpu_write(0xe003, 1);
+    cpu_cycles(100); CHECK(!hw_cart_irq());
+    hw_cart_cpu_write(0xf000, 0); CHECK(hw_cart.m.jaleco.counter == 0x1234);
+    cpu_cycles(100); CHECK(hw_cart.m.jaleco.counter == 0x1234);          /* disabled */
+    hw_cart_cpu_write(0xf001, 1);
+    cpu_cycles(0x1234); CHECK(!hw_cart_irq() && hw_cart.m.jaleco.counter == 0);
+    cpu_cycles(1); CHECK(hw_cart_irq() && hw_cart.m.jaleco.counter == 0xffff);
+    cpu_cycles(2); CHECK(hw_cart_irq() && hw_cart.m.jaleco.counter == 0xfffd);
+    hw_cart_cpu_write(0xf001, 1); CHECK(!hw_cart_irq());                   /* acknowledge */
+    /* 4-, 8- and 12-bit widths leave the upper bits alone. */
+    static const uint8_t ctrl[3] = { 9, 5, 3 };
+    static const uint16_t mask[3] = { 0x000f, 0x00ff, 0x0fff };
+    for (unsigned w = 0; w < 3; ++w) {
+        hw_cart_cpu_write(0xf000, 0); hw_cart_cpu_write(0xf001, ctrl[w]);
+        unsigned low = 0x1234 & mask[w];
+        cpu_cycles(low); CHECK(!hw_cart_irq() && hw_cart.m.jaleco.counter == (0x1234 & ~mask[w]));
+        cpu_cycles(1); CHECK(hw_cart_irq() && hw_cart.m.jaleco.counter == ((0x1234 & ~mask[w]) | mask[w]));
+        hw_cart_cpu_write(0xf000, 0); CHECK(!hw_cart_irq());                /* $F000 also acknowledges */
+    }
+    hw_cart_cpu_write(0xf001, 0);
+}
 
 /* nesdev wiki, INES Mapper 185: chip-select values gate CHR ROM. */
 static void test_mapper185(void)
@@ -567,6 +619,7 @@ int main(void)
     test_mapper41();
     test_mapper228();
     test_mapper185();
+    test_mapper18();
     test_mapper118();
     test_mapper119();
     test_mapper232();

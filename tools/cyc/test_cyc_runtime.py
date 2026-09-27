@@ -26,6 +26,7 @@ from namco108_probe import fixture as namco108_fixture
 from mmc3_variant_fixtures import mmc3_variant_fixtures
 from sunsoft_fixtures import sunsoft_fixtures
 from namco_fixtures import namco_fixtures
+from jaleco_fixtures import jaleco_fixtures
 
 
 def run(cmd, cwd, log, timeout=180):
@@ -103,6 +104,7 @@ def main():
     cases += list(mmc3_variant_fixtures())
     cases += list(sunsoft_fixtures())
     cases += list(namco_fixtures())
+    cases += list(jaleco_fixtures())
     cases = [case for case in cases if case[0].startswith(args.case_prefix)]
     if not cases:
         ap.error('no matching fixtures')
