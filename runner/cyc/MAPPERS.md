@@ -3,6 +3,9 @@
 This applies to `cycle_accurate=true`, `cyc_interp`, and `cyc_oracle`.
 The legacy runner has a separate cartridge implementation.
 
+[MAPPER_CATALOG.md](MAPPER_CATALOG.md) lists every known mapper ID with support status, dump
+counts, real-title validation and a priority order for the remaining boards.
+
 Start with the [NESdev mapper index](https://www.nesdev.org/wiki/List_of_mappers),
 then the board's register description and
 [NES 2.0 submapper assignments](https://www.nesdev.org/wiki/NES_2.0_submappers).
