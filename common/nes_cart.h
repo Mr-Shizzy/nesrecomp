@@ -247,6 +247,8 @@ static inline bool nes_cart_variant_supported(const NesCartInfo *c)
     /* CNROM with copy protection: submappers 4-7 name the CHR-enabling chip
      * select; 0 uses the nesdev power-on heuristic. One 8 KiB CHR ROM. */
     /* Jaleco SS88006: up to 8 KiB work RAM. */
+    /* Irem G-101: submapper 1 is Major League (one-screen, fixed PRG mode). */
+    case 32: return c->submapper <= 1 && !c->four_screen;
     case 18: return !c->submapper && !c->four_screen && c->prg_ram + c->prg_nvram <= 8192;
     case 185: return (c->submapper == 0 || (c->submapper >= 4 && c->submapper <= 7)) &&
         c->chr_size == 8192 && c->prg_size <= 32768 && !c->prg_ram && !c->prg_nvram;

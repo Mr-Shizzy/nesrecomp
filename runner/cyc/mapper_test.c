@@ -74,6 +74,27 @@ static void mmc3_reg(unsigned index, uint8_t value, uint8_t mode)
 
 static unsigned txsrom_nt(uint16_t addr) { return hw_cart_ciram_a10(addr) ? 1 : 0; }
 
+/* nesdev wiki, INES Mapper 032: Irem G-101. */
+static void test_mapper32(void)
+{
+    cart(32, 256, 256);
+    prg_banks(0, 0, 30, 31);
+    hw_cart_cpu_write(0x8fff, 0xe5); hw_cart_cpu_write(0xa123, 0x27);   /* 5 bits */
+    prg_banks(5, 7, 30, 31);
+    hw_cart_cpu_write(0x9000, 2); prg_banks(30, 7, 5, 31);              /* swap */
+    CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    hw_cart_cpu_write(0x9000, 1); prg_banks(5, 7, 30, 31); CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    for (unsigned i = 0; i < 8; ++i) hw_cart_cpu_write((uint16_t)(0xb000 + i), (uint8_t)(0xf0 + i));
+    for (unsigned i = 0; i < 8; ++i) chr_bank(i, 0xf0 + i, 1);
+    hw_cart_cpu_write(0xbff9, 0x11); chr_bank(1, 0x11, 1);              /* A2-A0 decode */
+    no_wram();
+    /* Submapper 1 (Major League): one-screen high, PRG mode fixed. */
+    cart(32, 256, 256); hw_cart.info.submapper = 1; hw_cart_power_on();
+    CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_B);
+    hw_cart_cpu_write(0x8000, 3); hw_cart_cpu_write(0x9000, 3);
+    prg_banks(3, 0, 30, 31); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_B);
+}
+
 /* nesdev wiki, INES Mapper 033 / 048: Taito TC0190 / TC0690. */
 static void test_taito(void)
 {
@@ -658,6 +679,7 @@ int main(void)
     test_mapper185();
     test_mapper18();
     test_taito();
+    test_mapper32();
     test_mapper118();
     test_mapper119();
     test_mapper232();
