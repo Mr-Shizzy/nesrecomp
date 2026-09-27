@@ -140,8 +140,9 @@ int main(void)
       h[5]=16;
       h[6]=0x61; h[7]=0x40; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==70);
       nes_cart_known_dump(&c,kitarou2,4); CHECK(c.mapper==152 && !c.submapper && nes_cart_variant_supported(&c));
-      h[6]=0x80; h[7]=0x50; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==88);
-      nes_cart_known_dump(&c,devilman,4); CHECK(c.mapper==154 && nes_cart_variant_supported(&c));
+      h[6]=0x89; h[7]=0x50; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==88 && c.four_screen);  /* the dump's own header */
+      nes_cart_known_dump(&c,devilman,4); CHECK(c.mapper==154 && !c.four_screen && nes_cart_variant_supported(&c));
+      h[6]=0x80;
       h[6]=0x90; h[7]=0x10; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==25);
       nes_cart_known_dump(&c,vrc4b,4);
       CHECK(c.submapper==1 && c.prg_ram==2048 && !c.prg_nvram && nes_cart_variant_supported(&c)); }
