@@ -34,8 +34,8 @@ COPIER = {6, 8, 17, 561, 562}
 # Mappers checked on at least one real owner title through a bounded reference
 # route (CARTRIDGE_REVIEW.md, nesrecomp-core-playtest campaigns). Keep current.
 TITLE_CHECKED = {0, 1, 2, 3, 4, 5, 7, 10, 11, 16, 18, 19, 21, 22, 23, 24, 25, 26, 32, 33, 34, 40, 41,
-                 48, 66, 68, 69, 71, 75, 76, 79, 87, 113, 118, 119, 140, 180, 184, 185, 206, 207,
-                 210, 228}
+                 48, 65, 66, 67, 68, 69, 71, 75, 76, 78, 79, 87, 88, 93, 95, 113, 118, 119, 140, 152,
+                 154, 180, 184, 185, 206, 207, 210, 228}
 FAMICLONE = {256, 270}
 
 
