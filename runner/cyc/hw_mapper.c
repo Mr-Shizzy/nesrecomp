@@ -427,6 +427,37 @@ static void mmc3_ppu_addr(uint16_t vbus)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Mapper 32: Irem G-101                                                    */
+/* ------------------------------------------------------------------------- */
+/* nesdev wiki, INES Mapper 032. Registers decode A15-A12 ($B000 also A2-A0):
+ * $8000 and $A000 select 8 KiB PRG banks (5 bits); $9000 bit 1 swaps the
+ * $8000 bank with the fixed second-to-last bank at $C000, bit 0 selects
+ * mirroring (1 = horizontal); $B000-$B007 select the eight 1 KiB CHR banks.
+ * Submapper 1 (Major League) ties CIRAM A10 high and fixes the PRG mode. */
+static void irem_g101_apply(void)
+{
+    bool swap = (hw_cart.m.ctrl & 2) && hw_cart.info.submapper != 1;
+    map_prg8(swap ? 2 : 0, hw_cart.m.reg[0] & 0x1f);
+    map_prg8(swap ? 0 : 2, -2);
+    map_prg8(1, hw_cart.m.reg[1] & 0x1f);
+    map_prg8(3, -1);
+    hw_cart.mirroring = hw_cart.info.submapper == 1 ? HW_MIRROR_SCREEN_B :
+        (hw_cart.m.ctrl & 1) ? HW_MIRROR_HORIZONTAL : HW_MIRROR_VERTICAL;
+}
+
+static void irem_g101_write(uint16_t addr, uint8_t value)
+{
+    switch (addr & 0xf000) {
+    case 0x8000: hw_cart.m.reg[0] = value; break;
+    case 0x9000: hw_cart.m.ctrl = value; break;
+    case 0xa000: hw_cart.m.reg[1] = value; break;
+    case 0xb000: map_chr1(addr & 7, value); return;
+    default: return;
+    }
+    irem_g101_apply();
+}
+
+/* ------------------------------------------------------------------------- */
 /* Mapper 228: Active Enterprises (Action 52, Cheetahmen II)                */
 /* ------------------------------------------------------------------------- */
 /* nesdev wiki, INES Mapper 228. A write to $8000-$FFFF latches the address
@@ -577,6 +608,7 @@ static const struct {
     { 19, "Namco 163", 0, 0 },
     { 18, "Jaleco SS88006", 0, 0 },
     { 33, "Taito TC0190", 0, 0 },
+    { 32, "Irem G-101", 0, 0 },
     { 48, "Taito TC0690", 1, 0 },
     { 210, "Namco 175 / 340", 0, 0 },
     { 68, "Sunsoft-4", 0, 1 },
@@ -694,6 +726,7 @@ void hw_cart_power_on(void)
     case 19: case 210: hw_cart.m.namco.channel = 7; namco_apply(); break;
     case 18: jaleco_apply(); break;
     case 33: case 48: taito_apply(); break;
+    case 32: irem_g101_apply(); map_chr8(0); break;
     case 68: sunsoft4_apply(); break;
     case 41: nrom_reset(); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
     case 185: nrom_reset(); break;
@@ -919,6 +952,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 185: hw_cart.m.latch = value & hw_cart_prg_read(addr); break;
     case 18: jaleco_write(addr, value); break;
     case 33: case 48: taito_write(addr, value); break;
+    case 32: irem_g101_write(addr, value); break;
     case 228: action52_write(addr, value); break;
     case 7:  axrom_write(value); break;
     case 66: gxrom_write(value); break;

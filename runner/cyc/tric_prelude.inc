@@ -132,6 +132,7 @@ struct TricMapper {
     void NamcoClock();
     int  NamcoNtRom(ushort Address);
     void TaitoApply();
+    void IremG101Apply();
     void TaitoStore(ushort Address, byte Input);
     void JalecoApply();
     void JalecoStore(ushort Address, byte Input);
@@ -426,6 +427,16 @@ inline bool TricMapper::Cnrom185Chr() {
     return DataReads >= 3;   // submapper 0: the first two $2007 fetches see no CHR
 }
 
+// ---- Irem G-101 (nesdev wiki, INES Mapper 032) ----
+inline void TricMapper::IremG101Apply() {
+    bool fixed = Cart.Info.submapper == 1;             // Major League
+    if ((Ctrl & 2) && !fixed) { MapPRG8(0, -2); MapPRG8(2, Reg[0] % 32); }
+    else { MapPRG8(0, Reg[0] % 32); MapPRG8(2, -2); }
+    MapPRG8(1, Reg[1] % 32); MapPRG8(3, -1);
+    if (fixed) Mirroring = TRIC_MIRROR_SCREEN_B;       // CIRAM A10 tied high
+    else Mirroring = (Ctrl & 1) ? TRIC_MIRROR_HORIZONTAL : TRIC_MIRROR_VERTICAL;
+}
+
 // ---- reset ----
 
 inline void TricMapper::Reset() {
@@ -475,6 +486,7 @@ inline void TricMapper::Reset() {
     case 19: case 210: NamcoApply(); break;
     case 18: JalecoApply(); break;
     case 33: case 48: TaitoApply(); break;
+    case 32: IremG101Apply(); MapCHR8(0); break;
     case 68: Sunsoft4Apply(); break;
     case 41: MapPRG32(0); MapCHR8(0); Mirroring = TRIC_MIRROR_VERTICAL; break;
     case 228: Action52Store(0x8000, 0); break;
@@ -756,6 +768,15 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     case 68: Sunsoft4Store(Address, Input); break;
     case 228: Action52Store(Address, Input); break;
     case 185: Latch = (byte)(Input & SnoopCPU(Address)); break;
+    case 32:
+        switch (Address >> 12) {
+        case 8: Reg[0] = Input; break;
+        case 9: Ctrl = Input; break;
+        case 10: Reg[1] = Input; break;
+        case 11: MapCHR1(Address % 8, Input); break;
+        }
+        IremG101Apply();
+        break;
     case 7:
         Latch = Input;
         MapPRG32(Input & 7);

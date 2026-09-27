@@ -89,6 +89,20 @@ def scanline_irq_phase(mapper):
     return 'irq_phase_%d' % mapper, header + prg + chr_rom, '00:8000\n00:8100\n', 'final:A=42'
 
 
+def irem_g101_fixtures():
+    from cart_variant_fixtures import nes2
+    yield handoff('g101_prg', 32, [(0x8000, 0x25)], 5, chr_kb=8)
+    yield handoff('g101_prg_swap', 32, [(0x9000, 2), (0x8000, 6)], 6, chr_kb=8, start=0xc000)
+    yield ppu_contract(32, 256, 256, [
+        ('cpu', 0xb000, 0x21), ('cpu', 0xb007, 0xfe), ('read', 0, 0x21), ('read', 0x1c00, 0xfe),
+        ('cpu', 0x9000, 0), ('write', 0x2000, 0x31), ('read', 0x2800, 0x31),
+        ('cpu', 0x9000, 1), ('read', 0x2400, 0x31)], '_g101')
+    # Major League: CIRAM A10 high; $9000 has no effect.
+    yield nes2(ppu_contract(32, 256, 256, [
+        ('write', 0x2000, 0x31), ('read', 0x2c00, 0x31), ('cpu', 0x9000, 3), ('read', 0x2400, 0x31)],
+        '_g101_major_league'), sub=1)
+
+
 def taito_fixtures():
     yield handoff('tc0190_prg', 33, [(0x8000, 0x45)], 5, chr_kb=8)
     yield handoff('tc0190_prg_c000', 33, [(0xc000, 0x06)], 6, chr_kb=8)   # A14 not decoded
@@ -108,3 +122,4 @@ def taito_fixtures():
     yield tc0690_irq_program(dma=True)
     yield scanline_irq_phase(48)
     yield scanline_irq_phase(4)
+    yield from irem_g101_fixtures()
