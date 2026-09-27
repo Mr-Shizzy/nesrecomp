@@ -103,6 +103,39 @@ def irem_g101_fixtures():
         '_g101_major_league'), sub=1)
 
 
+def taito_x1_fixtures():
+    from cart_variant_fixtures import nes2
+    # $7EF0-$7EFF writes switch PRG: compiled blocks must end after them.
+    for mode in ('absolute', 'indexed', 'indirect'):
+        yield handoff('x1005_prg_' + mode, 80, [(0x7efa, 5)], 5, chr_kb=8, addressing=mode)
+    yield handoff('x1005_prg_b', 80, [(0x7efb, 6)], 6, chr_kb=8)
+    yield handoff('x1017_prg', 82, [(0x7efa, 5 << 2)], 5, chr_kb=8)
+    name, image, seeds, expected = nes2(handoff('x1017_552_prg', 552, [(0x7efa, 0x18)], 6, chr_kb=8))
+    image = bytearray(image)
+    image[8] |= 552 >> 8                  # mapper bits 8-11 (nes2() writes only the submapper)
+    yield name, bytes(image), seeds, expected
+    yield ppu_contract(80, 256, 256, [
+        ('cpu', 0x7ef0, 0x13), ('read', 0, 0x12), ('read', 0x0400, 0x13),
+        ('cpu', 0x7ef5, 0xfe), ('read', 0x1c00, 0xfe),
+        ('cpu', 0x7ef6, 0), ('write', 0x2000, 0x31), ('read', 0x2400, 0x31),
+        ('cpu', 0x7ef7, 1), ('read', 0x2400, 0x31),
+        ('cpu', 0x7ef6, 1), ('read', 0x2800, 0x31),
+        ('cpu_read', 0x7f00, 0x7f), ('cpu', 0x7ef8, 0xa3), ('cpu', 0x7f10, 0x5a), ('cpu_read', 0x7f90, 0x5a),
+        ('cpu', 0x7ef9, 0x00), ('cpu_read', 0x7f10, 0x7f)], '_x1005')
+    yield ppu_contract(207, 256, 256, [
+        ('cpu', 0x7ef0, 0x00), ('cpu', 0x7ef1, 0x80), ('write', 0x2000, 0x31), ('write', 0x2800, 0x32),
+        ('read', 0x2400, 0x31), ('read', 0x2c00, 0x32),
+        ('cpu', 0x7ef6, 0), ('read', 0x2c00, 0x32),
+        ('cpu', 0x7ef0, 0x80), ('read', 0x2000, 0x32), ('read', 0x0000, 0x80)], '_x1005_207')
+    yield ppu_contract(82, 128, 256, [
+        ('cpu', 0x7ef0, 0x13), ('cpu', 0x7ef2, 0x40), ('read', 0, 0x12), ('read', 0x1000, 0x40),
+        ('cpu', 0x7ef6, 2), ('read', 0, 0x40), ('read', 0x1000, 0x12), ('read', 0x1400, 0x13),
+        ('cpu_read', 0x6000, 0x60), ('cpu', 0x7ef7, 0xca), ('cpu', 0x6000, 0x5a), ('cpu_read', 0x6000, 0x5a),
+        ('cpu_read', 0x6800, 0x68), ('cpu', 0x7ef8, 0x69), ('cpu', 0x6800, 0x5b), ('cpu_read', 0x6800, 0x5b),
+        ('cpu', 0x7ef9, 0x84), ('cpu', 0x73ff, 0x5c), ('cpu_read', 0x73ff, 0x5c), ('cpu_read', 0x7400, 0x74),
+        ('cpu', 0x7ef6, 0)], '_x1017')
+
+
 def taito_fixtures():
     yield handoff('tc0190_prg', 33, [(0x8000, 0x45)], 5, chr_kb=8)
     yield handoff('tc0190_prg_c000', 33, [(0xc000, 0x06)], 6, chr_kb=8)   # A14 not decoded
@@ -123,3 +156,4 @@ def taito_fixtures():
     yield scanline_irq_phase(48)
     yield scanline_irq_phase(4)
     yield from irem_g101_fixtures()
+    yield from taito_x1_fixtures()

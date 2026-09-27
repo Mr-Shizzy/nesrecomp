@@ -510,7 +510,7 @@ static int fixed_bank_for(int mapper, uint32_t banks, uint32_t slot) {
     case 0: case 3: case 13: case 87: case 184: case 185: slots = 255; break; /* all PRG fixed */
     case 157: case 159: case 16: case 2: case 68: case 33: case 48: case 10: case 22: case 73: case 71: case 76: case 94: case 206: slots = 240; break; /* last 16 KiB */
     case 9: slots = 252; break;                                  /* last 24 KiB */
-    case 85: case 24: case 26: case 4: case 118: case 119: case 69: case 19: case 210: case 18: case 32: case 21: case 23: case 25: case 75: slots = 192; break;         /* last 8 KiB */
+    case 85: case 24: case 26: case 4: case 118: case 119: case 69: case 19: case 210: case 18: case 32: case 80: case 207: case 82: case 552: case 21: case 23: case 25: case 75: slots = 192; break;         /* last 8 KiB */
     case 180: slots = 15; break;                                 /* first 16 KiB */
     default: slots = 0; break;
     }
@@ -540,7 +540,8 @@ static int power_on_bank8_for(int mapper, uint32_t banks, uint32_t slot) {
     case 232: return slot < 2 ? (int)slot : (int)(slot + 4);
     case 1: case 155: return (int)((slot>=2 ? slot+28 : slot)&(banks-1)); /* first 256K outer bank */
     case 2: case 68: return slot >= 2 ? (int)(banks - 2 + (slot - 2)) : (int)slot;
-    case 69: case 19: case 210: case 18: return slot == 3 ? (int)(banks - 1) : 0;
+    case 69: case 19: case 210: case 18: case 80: case 207: case 82: case 552:
+        return slot == 3 ? (int)(banks - 1) : 0;
     case 33: case 48: case 32: return slot >= 2 ? (int)(banks - 4 + slot) : 0;
     case 4: case 118: case 119: return slot == 2 ? (int)(banks - 2) : slot == 3 ? (int)(banks - 1) : (int)slot;
     default: return (int)(slot & (banks - 1));
@@ -810,6 +811,7 @@ static unsigned mapper_write_floor(int mapper) {
     case 113: return 0x4100;
     case 140: return 0x6000;
     case 41: return 0x6000;
+    case 80: case 207: case 82: case 552: return 0x7ef0;
     default: return 0x8000;
     }
 }
@@ -1408,6 +1410,10 @@ static const char *mapper_name(int mapper) {
     case 18: return "Jaleco SS88006";
     case 33: return "Taito TC0190";
     case 32: return "Irem G-101";
+    case 80: return "Taito X1-005";
+    case 207: return "Taito X1-005 (CHR mirroring)";
+    case 82: return "Taito X1-017";
+    case 552: return "Taito X1-017 (NES 2.0)";
     case 48: return "Taito TC0690";
     case 210: return "Namco 175 / 340";
     case 68: return "Sunsoft-4";

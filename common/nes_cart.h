@@ -80,6 +80,11 @@ static inline bool nes_cart_header(const uint8_t *h, size_t size, NesCartInfo *c
         if (c->mapper == 153) { c->prg_ram=0; c->prg_nvram=8192; }
         if (c->mapper == 159) { c->prg_ram=0; c->prg_nvram=128; }
         if (c->mapper == 16) { c->prg_ram=0; c->prg_nvram=c->battery?256:0; }
+        /* Taito X1-005 / X1-017 RAM is inside the chip: 128 bytes / 5 KiB. */
+        if (c->mapper == 80 || c->mapper == 207 || c->mapper == 82) {
+            uint32_t chip = c->mapper == 82 ? 5120 : 128;
+            c->prg_ram = c->battery ? 0 : chip; c->prg_nvram = c->battery ? chip : 0;
+        }
         if (!c->chr_size) c->chr_ram = c->mapper == 13 ? 16384 : 8192;
         /* Namco 340 has no RAM; its iNES battery bit is how nesdev tells the
          * submapper-0 boards apart (see nes_cart_image). */
@@ -176,6 +181,9 @@ static inline void nes_cart_known_dump(NesCartInfo *c, const uint8_t *data, size
             return;
         }
     }
+    /* Taito X1 RAM is on the chip even when a NES 2.0 header omits it. */
+    if ((c->mapper == 80 || c->mapper == 207 || c->mapper == 82 || c->mapper == 552) && !c->prg_ram && !c->prg_nvram)
+        c->prg_ram = (c->mapper == 82 || c->mapper == 552) ? 5120 : 128;
     /* Unknown submapper-0 mapper 210: 175 if battery-backed, else 340. */
     if (c->mapper == 210 && !c->submapper) c->submapper = c->battery ? 1 : 2;
 }
@@ -249,6 +257,8 @@ static inline bool nes_cart_variant_supported(const NesCartInfo *c)
     /* Jaleco SS88006: up to 8 KiB work RAM. */
     /* Irem G-101: submapper 1 is Major League (one-screen, fixed PRG mode). */
     case 32: return c->submapper <= 1 && !c->four_screen;
+    case 80: case 207: case 82: case 552:
+        return !c->submapper && !c->four_screen && c->prg_ram + c->prg_nvram <= 8192;
     case 18: return !c->submapper && !c->four_screen && c->prg_ram + c->prg_nvram <= 8192;
     case 185: return (c->submapper == 0 || (c->submapper >= 4 && c->submapper <= 7)) &&
         c->chr_size == 8192 && c->prg_size <= 32768 && !c->prg_ram && !c->prg_nvram;
