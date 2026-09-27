@@ -20,6 +20,7 @@ from sunsoft_fixtures import sunsoft_fixtures
 from namco_fixtures import namco_fixtures
 from jaleco_fixtures import jaleco_fixtures
 from taito_fixtures import taito_fixtures
+from tengen_fixtures import tengen_fixtures
 
 
 def main():
@@ -34,7 +35,7 @@ def main():
     checked = set()
     count = 0
     identities = []
-    for _, image, _, _ in chain(mapper_fixtures(), latch_fixtures(), fineprg_fixtures(), vrc_fixtures(), expansion_fixtures(), vrc7_fixtures(), bandai_fixtures(), mmc5_fixtures(), mmc1_fixtures(), mapper40_fixtures(), mmc3_variant_fixtures(), sunsoft_fixtures(), namco_fixtures(), jaleco_fixtures(), taito_fixtures()):
+    for _, image, _, _ in chain(mapper_fixtures(), latch_fixtures(), fineprg_fixtures(), vrc_fixtures(), expansion_fixtures(), vrc7_fixtures(), bandai_fixtures(), mmc5_fixtures(), mmc1_fixtures(), mapper40_fixtures(), mmc3_variant_fixtures(), sunsoft_fixtures(), namco_fixtures(), jaleco_fixtures(), taito_fixtures(), tengen_fixtures()):
         mapper = (image[6] >> 4) | (image[7] & 0xf0)
         if mapper in checked:
             continue
@@ -45,8 +46,10 @@ def main():
             rom = bytearray(image)
             rom[7] |= 8
             rom[8] = byte8
-            if not rom[5] or mapper == 119:  # TQROM also carries 8 KiB CHR RAM
-                rom[11] = 8 if mapper == 13 else 7
+            if not rom[5] or mapper in (119, 77):  # TQROM and LROG017 also carry 8 KiB CHR RAM
+                rom[11] = 8 if mapper == 13 else 9 if mapper == 96 else 7
+            if mapper == 77:
+                rom[6] |= 8      # LROG017's nametables are RAM: a NES 2.0 header says four-screen
             (case / 'test.nes').write_bytes(rom)
             sub = byte8 >> 4
             if mapper == 210 and not sub and not byte8 & 15:

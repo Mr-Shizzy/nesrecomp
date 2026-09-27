@@ -98,6 +98,17 @@ struct TricMapper {
     byte TaitoDelay;
     // ---- Jaleco SS88006 ----
     byte JPrg[3], JChr[8], JRam, JReload[4], JCtrl, JMirror;
+    // ---- Tengen RAMBO-1 ----
+    byte RamboReg[16], RamboPrescale, RamboDelay;
+    // ---- Irem H3001 ----
+    ushort H3Counter, H3Reload;
+    // ---- Sunsoft-3 ----
+    ushort S3Counter;
+    bool S3LowNext;
+    bool Chr93Off;                 // mapper 93: CHR RAM disabled
+    byte OekaInner, OekaOuter;     // mapper 96: CHR banks
+    ushort OekaLastBus;            // mapper 96: the PPU address the latch last saw
+    bool RamboCycle;
     ushort JCounter;
     // ---- Sunsoft FME-7 ----
     byte Fme7Cmd, Fme7Reg[16], Fme7IrqCtrl;
@@ -139,10 +150,18 @@ struct TricMapper {
     void X1Store(ushort Address, byte Input);
     void TaitoApply();
     void IremG101Apply();
+    void IremH3001Apply();
+    void Sunsoft3Store(ushort Address, byte Input);
+    void Sunsoft3Clock();
+    void IremH3001Store(ushort Address, byte Input);
     void TaitoStore(ushort Address, byte Input);
     void JalecoApply();
     void JalecoStore(ushort Address, byte Input);
     void JalecoClock();
+    void RamboApply();
+    void RamboStore(ushort Address, byte Input);
+    void RamboClockIRQ(byte Assert);
+    void RamboCPUClock();
     void FME7Apply();
     bool FME7Low(ushort Address, byte *Out, const byte *In);
     void FME7Store(ushort Address, byte Input);
@@ -261,6 +280,7 @@ inline bool TricMapper::CartMapperIRQ() { return Cart.Mapper==5 ? (M5.irq_enable
 #include "tric_sunsoft.inc"
 #include "tric_namco.inc"
 #include "tric_jaleco.inc"
+#include "tric_tengen.inc"
 #include "tric_taito.inc"
 #include "tric_taito_x1.inc"
 
@@ -328,12 +348,16 @@ inline void TricMapper::MMC3Apply() {
     if (Cart.Mapper == 206 && Cart.Info.submapper == 1) MapPRG32(0);
     uint big = (BankSelect & 0x80) ? 4u : 0u;
     uint small_ = big ^ 4u;
-    MapCHR2(big / 2 + 0, Reg[0] >> 1);
-    MapCHR2(big / 2 + 1, Reg[1] >> 1);
-    MapCHR1(small_ + 0, Reg[2]);
-    MapCHR1(small_ + 1, Reg[3]);
-    MapCHR1(small_ + 2, Reg[4]);
-    MapCHR1(small_ + 3, Reg[5]);
+    // NAMCOT-3433/3453 (88, 154): PPU A12 drives CHR A16 (nesdev wiki, INES Mapper 088).
+    bool a16 = Cart.Mapper == 88 || Cart.Mapper == 154;
+    uint big_hi = a16 ? (big ? 64u : 0u) : 0u, small_hi = a16 ? (small_ ? 64u : 0u) : 0u;
+    uint big_mask = a16 ? 63u : 255u;
+    MapCHR2(big / 2 + 0, (int)(((Reg[0] & big_mask) | big_hi) >> 1));
+    MapCHR2(big / 2 + 1, (int)(((Reg[1] & big_mask) | big_hi) >> 1));
+    MapCHR1(small_ + 0, (int)((Reg[2] & big_mask) | small_hi));
+    MapCHR1(small_ + 1, (int)((Reg[3] & big_mask) | small_hi));
+    MapCHR1(small_ + 2, (int)((Reg[4] & big_mask) | small_hi));
+    MapCHR1(small_ + 3, (int)((Reg[5] & big_mask) | small_hi));
     // The chip's CHR A17 pin for each pattern page, before any ROM-size wrap
     // (nesdev wiki, TxSROM: the pin drives CIRAM A10 on that board).
     for (uint i = 0; i < 4; ++i) {
@@ -351,6 +375,7 @@ inline void TricMapper::MMC3Apply() {
 }
 // TQROM: A16 high enables the 6264 SRAM instead of the ROM (nesdev wiki).
 inline bool TricMapper::ChrRamSelected(ushort Address) {
+    if (Cart.Mapper == 77) return ((Address >> 10) & 7) >= 2;   // LROG017: RAM at $0800-$1FFF
     return Cart.Mapper == 119 && ChrA16[(Address >> 10) & 7];
 }
 
@@ -397,18 +422,31 @@ inline void TricMapper::PPUClock() {
         bool high=(PPU_AddressBus&4096)!=0;
         if (A12!=high) { A12=high; MMC1Apply(); }
     }
+    // Oeka Kids (nesdev INES Mapper 096): moving the PPU address into $2xxx from
+    // outside it latches A9-A8 as the inner 4 KiB CHR bank at $0000.
+    if (Cart.Mapper == 96) {
+        if ((OekaLastBus & 0x3000) != 0x2000 && (PPU_AddressBus & 0x3000) == 0x2000) {
+            OekaInner = (byte)((PPU_AddressBus >> 8) & 3);
+            MapCHR4(0, OekaOuter + OekaInner);
+        }
+        OekaLastBus = PPU_AddressBus;
+    }
     if (Cart.Mapper==153 || Cart.Mapper==157) {
         unsigned select=(PPU_AddressBus/1024)%4;
         if (BankSelect!=select) { BankSelect=select; if (Cart.Mapper==157) DatachLines(); else BandaiApply(); }
     }
-    if (Cart.Mapper != 4 && Cart.Mapper != 118 && Cart.Mapper != 119 && Cart.Mapper != 48) return;
+    bool rambo = Cart.Mapper == 64 || Cart.Mapper == 158;
+    if (Cart.Mapper != 4 && Cart.Mapper != 118 && Cart.Mapper != 119 && Cart.Mapper != 48 && !rambo) return;
     if (!(PPU_AddressBus & 0x1000)) {
         if (A12) { A12 = false; A12LowCycle = totalCycles; }
         return;
     }
     if (!A12) {
         A12 = true;
-        if (totalCycles - A12LowCycle >= 3) MMC3ClockIRQ();
+        if (totalCycles - A12LowCycle >= 3) {
+            if (!rambo) MMC3ClockIRQ();
+            else if (!RamboCycle) RamboClockIRQ(2);   // /IRQ after M2 falls twice
+        }
     }
 }
 
@@ -432,6 +470,41 @@ inline void TricMapper::DataPortRead() { if (Cart.Mapper == 185 && DataReads != 
 inline bool TricMapper::Cnrom185Chr() {
     if (Cart.Info.submapper >= 4) return Latch % 4 == Cart.Info.submapper - 4;
     return DataReads >= 3;   // submapper 0: the first two $2007 fetches see no CHR
+}
+
+// ---- Irem H3001 (nesdev wiki, INES Mapper 065) ----
+// $8000/$A000 PRG; $9000 [X...] puts the $8000 bank at $C000 and $3E at $8000;
+// $9001 [MM..] 00 V / 10 H / x1 1scA; $9003 [E...] enable; $9004 reload;
+// $9005/$9006 reload high/low; $B000-$B007 1 KiB CHR. 16-bit down counter,
+// one per CPU cycle while enabled, IRQ on reaching 0, stops at 0.
+inline void TricMapper::IremH3001Apply() {
+    bool alt = Ctrl >= 128;
+    MapPRG8(alt ? 2 : 0, Reg[0]);
+    MapPRG8(alt ? 0 : 2, 0x3e);
+    MapPRG8(1, Reg[1]);
+    MapPRG8(3, 0x3f);
+    switch (MirrorReg / 64) {
+    case 0: Mirroring = TRIC_MIRROR_VERTICAL; break;
+    case 2: Mirroring = TRIC_MIRROR_HORIZONTAL; break;
+    default: Mirroring = TRIC_MIRROR_SCREEN_A; break;
+    }
+}
+inline void TricMapper::IremH3001Store(ushort Address, byte Input) {
+    unsigned group = Address >> 12;
+    if (group == 8) Reg[0] = Input;
+    else if (group == 10) Reg[1] = Input;
+    else if (group == 11) { MapCHR1(Address % 8, Input); return; }
+    else if (group == 9) {
+        unsigned r = Address % 8;
+        if (r == 0) Ctrl = Input;
+        else if (r == 1) MirrorReg = Input;
+        else if (r == 3) { IrqEnable = Input >= 128; IrqOut = false; return; }
+        else if (r == 4) { H3Counter = H3Reload; IrqOut = false; return; }
+        else if (r == 5) { H3Reload = (ushort)((H3Reload % 256) + Input * 256); return; }
+        else if (r == 6) { H3Reload = (ushort)((H3Reload / 256) * 256 + Input); return; }
+        else return;
+    } else return;
+    IremH3001Apply();
 }
 
 // ---- Irem G-101 (nesdev wiki, INES Mapper 032) ----
@@ -471,6 +544,10 @@ inline void TricMapper::Reset() {
     DataReads = 0;
     memset(JPrg, 0, sizeof(JPrg)); memset(JChr, 0, sizeof(JChr)); memset(JReload, 0, sizeof(JReload));
     JRam = JCtrl = JMirror = 0; JCounter = 0;
+    memset(RamboReg, 0, sizeof(RamboReg)); RamboPrescale = RamboDelay = 0; RamboCycle = false;
+    H3Counter = H3Reload = 0;
+    S3Counter = 0; S3LowNext = false; Chr93Off = false;
+    OekaInner = OekaOuter = 0; OekaLastBus = 0;
     TaitoDelay = 0;
     memset(X1Prg, 0, sizeof(X1Prg)); memset(X1Key, 0, sizeof(X1Key)); X1Mode = 0;
     memset(NamcoChr, 0, sizeof(NamcoChr)); memset(NamcoNt, 0, sizeof(NamcoNt)); memset(NamcoPrg, 0, sizeof(NamcoPrg));
@@ -493,10 +570,13 @@ inline void TricMapper::Reset() {
     case 69: FME7Apply(); break;
     case 19: case 210: NamcoApply(); break;
     case 18: JalecoApply(); break;
+    case 64: case 158: RamboApply(); break;
     case 33: case 48: TaitoApply(); break;
     case 32: IremG101Apply(); MapCHR8(0); break;
+    case 65: Reg[0] = 0; Reg[1] = 1; IremH3001Apply(); MapCHR8(0); break;
     case 80: case 207: case 82: case 552: X1Apply(); break;
     case 68: Sunsoft4Apply(); break;
+    case 67: MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0); break;
     case 41: MapPRG32(0); MapCHR8(0); Mirroring = TRIC_MIRROR_VERTICAL; break;
     case 228: Action52Store(0x8000, 0); break;
     case 16: case 159: case 153: case 157: BandaiApply(); break;
@@ -518,10 +598,20 @@ inline void TricMapper::Reset() {
     case 13: MapPRG32(0); MapCHR4(0, 0); MapCHR4(1, 0); Mirroring = TRIC_MIRROR_VERTICAL; break;
     case 71: MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0); break;
     case 75: MapPRG32(0); MapPRG8(3, -1); MapCHR4(0, 0); MapCHR4(1, 0); Mirroring = TRIC_MIRROR_VERTICAL; break;
-    case 206: Reg[7] = 1; MMC3Apply(); break;
+    case 206: case 88: case 95: Reg[7] = 1; MMC3Apply(); break;
+    case 154: Reg[7] = 1; MMC3Apply(); Mirroring = TRIC_MIRROR_SCREEN_A; break;
     case 76: MapPRG16(0, 0); MapPRG16(1, -1); Reg[7] = 1; for (uint j = 0; j < 4; ++j) MapCHR2(j, 0); break;
     case 94: MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0); break;
     case 180: MapPRG16(0, 0); MapPRG16(1, 0); MapCHR8(0); break;
+    case 78: case 89: case 93: case 72: case 92: MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0); break;
+    case 97: MapPRG16(0, -1); MapPRG16(1, 0); MapCHR8(0); break;
+    case 86: case 101: MapPRG32(0); MapCHR8(0); break;
+    case 77: MapPRG32(0); MapCHR1(0, 0); MapCHR1(1, 1); for (uint i = 2; i < 8; ++i) ChrLow[i] = (byte)(i - 2); break;
+    case 96: MapPRG32(0); MapCHR4(0, 0); MapCHR4(1, 3); break;
+    case 70: case 152:
+        MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0);
+        if (Cart.Mapper == 152) Mirroring = TRIC_MIRROR_SCREEN_A;
+        break;
     case 184: MapPRG32(0); MapCHR4(0, 0); MapCHR4(1, 4); break;
     case 232: MapPRG16(0, 0); MapPRG16(1, 3); MapCHR8(0); break;
     case 1: case 155:
@@ -632,6 +722,9 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     if (Cart.Mapper==69) { FME7Store(Address,Input); return; }
     if (Cart.Mapper==19 || Cart.Mapper==210) { NamcoStore(Address,Input); return; }
     if (Cart.Mapper==18) { JalecoStore(Address,Input); return; }
+    if (Cart.Mapper==64 || Cart.Mapper==158) { RamboStore(Address,Input); return; }
+    if (Cart.Mapper==65) { IremH3001Store(Address,Input); return; }
+    if (Cart.Mapper==67) { Sunsoft3Store(Address,Input); return; }
     if (Cart.Mapper==80 || Cart.Mapper==207 || Cart.Mapper==82 || Cart.Mapper==552) {
         if (Address < 0x8000) X1Store(Address, Input);
         return;
@@ -671,12 +764,19 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
             }
         }
     }
-    if (Cart.Mapper == 79 && (Address & 0xe100) == 0x4100) {
+    if ((Cart.Mapper == 79 || Cart.Mapper == 146) && (Address & 0xe100) == 0x4100) {   // 146: Sachen 3015, same latch
         Latch = Input;
         MapPRG32((Input / 8) % 2);
         MapCHR8(Input % 8);
         return;
     }
+    // Jaleco JF-13 (nesdev INES Mapper 086): $6000-$6FFF [.CPP ..CC]; $7000 speech (not modeled).
+    if (Cart.Mapper == 86 && Address >= 0x6000 && Address < 0x8000) {
+        if (Address < 0x7000) { MapPRG32((Input / 16) % 4); MapCHR8(Input % 4 + ((Input & 64) ? 4 : 0)); }
+        return;
+    }
+    // Mapper 101 (nesdev INES Mapper 101): $6000-$7FFF selects 8 KiB CHR, bits in order.
+    if (Cart.Mapper == 101 && Address >= 0x6000 && Address < 0x8000) { MapCHR8(Input); return; }
     if (Cart.Mapper == 87 && Address >= 0x6000 && Address < 0x8000) {
         MapCHR8((Input % 2) * 2 + (Input / 2) % 2);
         return;
@@ -722,8 +822,8 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
         case 15: Mirroring = (Input & 1) ? TRIC_MIRROR_HORIZONTAL : TRIC_MIRROR_VERTICAL; break;
         }
         break;
-    case 11:
-        Input = (byte)(Input & SnoopCPU(Address));
+    case 11: case 144:   // nesdev INES Mapper 011; 144: EffectiveData = ROM & (Written | 1)
+        Input = (byte)((Cart.Mapper == 144 ? (Input | 1) : Input) & SnoopCPU(Address));
         Latch = Input;
         MapPRG32(Input % 4);
         MapCHR8(Input / 16);
@@ -753,7 +853,8 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
         MapCHR4(0, Chr0 + ((Ctrl & 2) ? 16 : 0));
         MapCHR4(1, Chr1 + ((Ctrl & 4) ? 16 : 0));
         break;
-    case 206:
+    case 206: case 88: case 95: case 154:
+        if (Cart.Mapper == 154) Mirroring = (Input & 64) ? TRIC_MIRROR_SCREEN_B : TRIC_MIRROR_SCREEN_A;  // [.N.. ....] at $8000-$FFFF
         if ((Address & 0xe000) == 0x8000) {
             if (Address % 2 == 0) BankSelect = Input % 8;
             else Reg[BankSelect] = Input % (BankSelect < 6 ? 64 : 16);
@@ -776,6 +877,56 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     case 180:
         Latch = (byte)(Input & SnoopCPU(Address));
         MapPRG16(1, Latch % 8);
+        break;
+    case 78:   // nesdev INES Mapper 078: [CCCC MPPP]; sub 3 M = H/V, else 1scA/1scB; bus conflicts
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG16(0, Latch % 8); MapCHR8(Latch / 16);
+        if (Cart.Info.submapper == 3) Mirroring = (Latch & 8) ? TRIC_MIRROR_VERTICAL : TRIC_MIRROR_HORIZONTAL;
+        else Mirroring = (Latch & 8) ? TRIC_MIRROR_SCREEN_B : TRIC_MIRROR_SCREEN_A;
+        break;
+    case 89:   // nesdev INES Mapper 089: [CPPP MCCC]; bus conflicts
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG16(0, (Latch / 16) % 8); MapCHR8(Latch % 8 + (Latch >= 128 ? 8 : 0));
+        Mirroring = (Latch & 8) ? TRIC_MIRROR_SCREEN_B : TRIC_MIRROR_SCREEN_A;
+        break;
+    case 93:   // nesdev INES Mapper 093: [.PPP ...E]; E = CHR RAM enable; bus conflicts
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG16(0, (Latch / 16) % 8); Chr93Off = Latch % 2 == 0;
+        break;
+    case 97:   // nesdev INES Mapper 097: $8000-$BFFF [M..P PPPP]; 16 KiB at $C000; M 0 = H, 1 = V
+        if (Address < 0xc000) {
+            MapPRG16(1, Input % 32);
+            Mirroring = Input >= 128 ? TRIC_MIRROR_VERTICAL : TRIC_MIRROR_HORIZONTAL;
+        }
+        break;
+    case 148:  // nesdev INES Mapper 148: $8000-$FFFF [...PCCC]; bus conflicts
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG32((Latch / 8) % 2); MapCHR8(Latch % 8);
+        break;
+    case 77:   // nesdev INES Mapper 077: [CCCC PPPP]; 2 KiB CHR ROM at $0000, RAM above; bus conflicts
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG32(Latch % 16); MapCHR1(0, (Latch / 16) * 2); MapCHR1(1, (Latch / 16) * 2 + 1);
+        break;
+    case 96:   // nesdev INES Mapper 096: [.... .CPP]; bus conflicts
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG32(Latch % 4); OekaOuter = Latch & 4;
+        MapCHR4(0, OekaOuter + OekaInner); MapCHR4(1, OekaOuter + 3);
+        break;
+    case 72: case 92: {  // nesdev INES Mapper 072/092: load on a 0 -> 1 of bit 7 (PRG) / bit 6 (CHR)
+        byte v = (byte)(Input & SnoopCPU(Address));
+        if ((v & 128) && !(Latch & 128)) MapPRG16(Cart.Mapper == 92 ? 1 : 0, v % 16);
+        if ((v & 64) && !(Latch & 64)) MapCHR8(v % 16);
+        Latch = v;
+        break;
+    }
+    case 70:   // nesdev INES Mapper 070: [PPPP CCCC], bus conflicts
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG16(0, Latch / 16); MapCHR8(Latch % 16);
+        break;
+    case 152:  // nesdev INES Mapper 152: [MPPP CCCC], M = one-screen A/B
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG16(0, (Latch / 16) % 8); MapCHR8(Latch % 16);
+        Mirroring = Latch >= 128 ? TRIC_MIRROR_SCREEN_B : TRIC_MIRROR_SCREEN_A;
         break;
     case 232:
         if (Address >= 0xc000) PrgReg = Input % 4;
@@ -858,7 +1009,8 @@ inline byte TricMapper::SnoopPPU(ushort Address) {
         return rom >= 0 ? Cart.CHRROM[rom] : VRAM[(NamcoNt[(Address >> 10) % 4] % 2) * 1024 + Address % 1024];
     }
     if (Cart.AlternativeNametableArrangement) return VRAM[Address & 0xfff];
-    if (Cart.Mapper == 118) return VRAM[(ChrA17[(Address >> 10) & 7] ? 0x400 : 0) | (Address & 0x3ff)];
+    if (Cart.Mapper == 118 || Cart.Mapper == 158) return VRAM[(ChrA17[(Address >> 10) & 7] ? 0x400 : 0) | (Address & 0x3ff)];
+    if (Cart.Mapper == 95) return VRAM[((Reg[(Address >> 11) & 1] & 32) ? 0x400 : 0) | (Address & 0x3ff)];   // NAMCOT-3425: CHR A15
     if (Cart.Mapper == 207) return VRAM[((Reg[(Address >> 11) & 1] & 0x80) ? 0x400 : 0) | (Address & 0x3ff)];
     ushort Addr = (ushort)(Address & 0x3FF);
     if (Mirroring == TRIC_MIRROR_HORIZONTAL) Addr |= (ushort)((Address & 0x800) ? 0x400 : 0);
@@ -893,6 +1045,11 @@ inline void TricMapper::AccessPPU() {
         if (!SeventyTwoPinConnector[20]) PPU_NonTiltData = PPU_DataOut = (byte)(Address | 1);
         return;
     }
+    // Mapper 93 with CHR RAM disabled: writes are ignored, reads see the address byte (open bus).
+    if (!SeventyTwoPinConnector[64] && Cart.Mapper == 93 && Chr93Off) {
+        if (!SeventyTwoPinConnector[20]) PPU_NonTiltData = PPU_DataOut = (byte)Address;
+        return;
+    }
     if (!SeventyTwoPinConnector[64] && ChrRamSelected(Address)) {
         byte &cell = Cart.CHRRAM[ChrLow[(Address >> 10) & 7] * 1024 + (Address & 1023)];
         PPU_DataIn = PPU_NonTiltData;
@@ -922,7 +1079,8 @@ inline void TricMapper::Connector_CheckCIRAM() {
         SeventyTwoPinConnector[21]=(VRC6Nametable((PPU_AddressBus>>10)&3)&1)!=0;
         return;
     }
-    if (Cart.Mapper == 118) { SeventyTwoPinConnector[21] = ChrA17[(PPU_AddressBus >> 10) & 7]; return; }
+    if (Cart.Mapper == 118 || Cart.Mapper == 158) { SeventyTwoPinConnector[21] = ChrA17[(PPU_AddressBus >> 10) & 7]; return; }
+    if (Cart.Mapper == 95) { SeventyTwoPinConnector[21] = (Reg[(PPU_AddressBus >> 11) & 1] & 32) != 0; return; }
     // Mapper 207: the upper nametable pair follows $7EF0 bit 7, the lower $7EF1 bit 7.
     if (Cart.Mapper == 207) { SeventyTwoPinConnector[21] = (Reg[(PPU_AddressBus >> 11) & 1] & 0x80) != 0; return; }
     if (Cart.Mapper == 19) {

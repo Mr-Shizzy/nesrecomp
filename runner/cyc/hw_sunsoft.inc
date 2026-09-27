@@ -203,3 +203,35 @@ static uint32_t sunsoft4_nt_index(uint16_t addr)
     unsigned bank = hw_cart.m.reg[a10 ? 5 : 4];
     return (bank & (hw_cart.chr_pages - 1)) * 1024u + (addr & 0x3ff);
 }
+
+/* Sunsoft-3 (mapper 67), https://www.nesdev.org/wiki/INES_Mapper_067.
+ * Registers decode A15-A11: $8000 acknowledges the IRQ; $8800/$9800/$A800/
+ * $B800 select the four 2 KiB CHR banks; $C800 writes the counter itself, high
+ * byte then low (a toggle $D800 resets); $D800 bit 4 runs the counter; $E800
+ * bits 0-1 mirroring (vertical, horizontal, one-screen A, B); $F800 the 16 KiB
+ * PRG bank at $8000, the last bank fixed at $C000. The running counter
+ * decrements every CPU cycle; wrapping $0000 -> $FFFF stops it and asserts. */
+static void sunsoft3_write(uint16_t addr, uint8_t value)
+{
+    static const uint8_t mirror[4] = { HW_MIRROR_VERTICAL, HW_MIRROR_HORIZONTAL,
+                                       HW_MIRROR_SCREEN_A, HW_MIRROR_SCREEN_B };
+    switch (addr & 0xf800) {
+    case 0x8000: hw_cart.m.irq_out = 0; break;
+    case 0x8800: case 0x9800: case 0xa800: case 0xb800: map_chr2((addr >> 12) & 3, value); break;
+    case 0xc800:
+        hw_cart.m.irq_counter16 = hw_cart.m.irq_mode ?
+            (uint16_t)((hw_cart.m.irq_counter16 & 0xff00) | value) :
+            (uint16_t)((hw_cart.m.irq_counter16 & 0x00ff) | (value << 8));
+        hw_cart.m.irq_mode ^= 1;
+        break;
+    case 0xd800: hw_cart.m.irq_enable = (value >> 4) & 1; hw_cart.m.irq_mode = 0; break;
+    case 0xe800: hw_cart.mirroring = mirror[value & 3]; break;
+    case 0xf800: map_prg16(0, value); break;
+    default: break;
+    }
+}
+
+static void sunsoft3_clock(void)
+{
+    if (hw_cart.m.irq_enable && hw_cart.m.irq_counter16-- == 0) { hw_cart.m.irq_enable = 0; hw_cart.m.irq_out = 1; }
+}

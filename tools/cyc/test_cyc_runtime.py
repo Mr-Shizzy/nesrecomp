@@ -28,6 +28,7 @@ from sunsoft_fixtures import sunsoft_fixtures
 from namco_fixtures import namco_fixtures
 from jaleco_fixtures import jaleco_fixtures
 from taito_fixtures import taito_fixtures
+from tengen_fixtures import tengen_fixtures
 
 
 def run(cmd, cwd, log, timeout=180):
@@ -107,6 +108,7 @@ def main():
     cases += list(namco_fixtures())
     cases += list(jaleco_fixtures())
     cases += list(taito_fixtures())
+    cases += list(tengen_fixtures())
     cases = [case for case in cases if case[0].startswith(args.case_prefix)]
     if not cases:
         ap.error('no matching fixtures')

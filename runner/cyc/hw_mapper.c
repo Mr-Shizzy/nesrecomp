@@ -271,6 +271,15 @@ static void mmc3_chr1(unsigned page, unsigned bank)
     else map_chr1(page, (int)bank);
 }
 
+/* Namco 118 boards NAMCOT-3433/3453 (mappers 88, 154) wire PPU A12 to CHR
+ * A16: the left pattern table reads the first 64 KiB, the right the second
+ * (nesdev wiki, INES Mapper 088). */
+static unsigned namco108_chr_a16(unsigned page, unsigned bank)
+{
+    if (hw_cart.mapper != 88 && hw_cart.mapper != 154) return bank;
+    return (bank & 0x3f) | (page >= 4 ? 0x40 : 0);
+}
+
 static void mmc3_apply(void)
 {
     const uint8_t *r = hw_cart.m.reg;
@@ -290,8 +299,8 @@ static void mmc3_apply(void)
     unsigned big = (hw_cart.m.bank_select & 0x80) ? 4 : 0;   /* page of the 2KB pair */
     unsigned small = big ^ 4;
     for (unsigned i = 0; i < 4; ++i) {
-        mmc3_chr1(big + i, (r[i >> 1] & 0xfe) | (i & 1));
-        mmc3_chr1(small + i, r[2 + i]);
+        mmc3_chr1(big + i, namco108_chr_a16(big + i, (r[i >> 1] & 0xfe) | (i & 1)));
+        mmc3_chr1(small + i, namco108_chr_a16(small + i, r[2 + i]));
     }
 }
 
@@ -458,6 +467,93 @@ static void irem_g101_write(uint16_t addr, uint8_t value)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Mapper 65: Irem H3001                                                    */
+/* ------------------------------------------------------------------------- */
+/* nesdev wiki, INES Mapper 065. $8000 and $A000 select 8 KiB PRG banks;
+ * $9000 bit 7 moves the $8000 bank to $C000 and bank $3E to $8000 ($C000 is
+ * otherwise $3E; $E000 is always $3F). $9001 bits 7-6: 00 vertical, 10
+ * horizontal, x1 one-screen A. $B000-$B007 select the eight 1 KiB CHR banks.
+ * IRQ: $9005/$9006 set the 16-bit reload value, a $9004 write copies it into
+ * the counter, $9003 bit 7 enables; either write acknowledges. The enabled
+ * counter decrements every CPU cycle and asserts on reaching 0, where it
+ * stops. Power-on PRG registers are $00/$01 ("games do rely on this"). The
+ * $C000 bank register some documents (and Mesen2) describe does not exist. */
+static void irem_h3001_apply(void)
+{
+    bool swap = (hw_cart.m.ctrl & 0x80) != 0;
+    map_prg8(swap ? 2 : 0, hw_cart.m.reg[0]);
+    map_prg8(swap ? 0 : 2, 0x3e);
+    map_prg8(1, hw_cart.m.reg[1]);
+    map_prg8(3, 0x3f);
+    unsigned m = hw_cart.m.mirror_reg >> 6;
+    hw_cart.mirroring = m == 0 ? HW_MIRROR_VERTICAL : m == 2 ? HW_MIRROR_HORIZONTAL : HW_MIRROR_SCREEN_A;
+}
+
+static void irem_h3001_write(uint16_t addr, uint8_t value)
+{
+    switch (addr & 0xf000) {
+    case 0x8000: hw_cart.m.reg[0] = value; break;
+    case 0xa000: hw_cart.m.reg[1] = value; break;
+    case 0xb000: map_chr1(addr & 7, value); return;
+    case 0x9000:
+        switch (addr & 7) {
+        case 0: hw_cart.m.ctrl = value; break;
+        case 1: hw_cart.m.mirror_reg = value; break;
+        case 3: hw_cart.m.irq_enable = value >> 7; hw_cart.m.irq_out = 0; return;
+        case 4: hw_cart.m.irq_counter16 = hw_cart.m.irq_latch16; hw_cart.m.irq_out = 0; return;
+        case 5: hw_cart.m.irq_latch16 = (uint16_t)((hw_cart.m.irq_latch16 & 0x00ff) | (value << 8)); return;
+        case 6: hw_cart.m.irq_latch16 = (uint16_t)((hw_cart.m.irq_latch16 & 0xff00) | value); return;
+        default: return;
+        }
+        break;
+    default: return;
+    }
+    irem_h3001_apply();
+}
+
+static void irem_h3001_clock(void)
+{
+    if (hw_cart.m.irq_enable && hw_cart.m.irq_counter16 && --hw_cart.m.irq_counter16 == 0) hw_cart.m.irq_out = 1;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Mapper 77: Irem LROG017 (Napoleon Senki)                                 */
+/* ------------------------------------------------------------------------- */
+/* nesdev wiki, INES Mapper 077. [CCCC PPPP] at $8000-$FFFF with AND bus
+ * conflicts: a 32 KiB PRG bank and a 2 KiB CHR ROM bank at $0000. CHR RAM is
+ * fixed at $0800-$1FFF (the RAM chip after the ROM), and the four nametables
+ * are RAM too (four_screen). */
+static void irem77_chr(unsigned bank)
+{
+    for (unsigned page = 0; page < 8; ++page) {
+        if (page < 2) { map_chr1(page, (int)(bank * 2 + page)); hw_cart.chr_write[page] = 0; }
+        else { hw_cart.chr_off[page] = hw_cart.chr_ram_base + (page - 2) * 0x400u; hw_cart.chr_write[page] = 1; }
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Mapper 96: Bandai Oeka Kids                                              */
+/* ------------------------------------------------------------------------- */
+/* nesdev wiki, INES Mapper 096. [.... .CPP] at $8000-$FFFF with AND bus
+ * conflicts: a 32 KiB PRG bank and the 16 KiB outer CHR RAM bank. The inner
+ * 4 KiB bank at $0000 is PPU A9-A8, latched when the PPU address moves into
+ * $2xxx from anywhere else (whoever drives it); $1000 holds inner bank 3. */
+static void oeka_apply(void)
+{
+    map_chr4(0, (hw_cart.m.ctrl & 4) | hw_cart.m.chr0);
+    map_chr4(1, (hw_cart.m.ctrl & 4) | 3);
+}
+
+static void oeka_ppu_addr(uint16_t vbus)
+{
+    if ((hw_cart.m.pattern_addr & 0x3000) != 0x2000 && (vbus & 0x3000) == 0x2000) {
+        hw_cart.m.chr0 = (vbus >> 8) & 3;
+        oeka_apply();
+    }
+    hw_cart.m.pattern_addr = vbus;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Mapper 228: Active Enterprises (Action 52, Cheetahmen II)                */
 /* ------------------------------------------------------------------------- */
 /* nesdev wiki, INES Mapper 228. A write to $8000-$FFFF latches the address
@@ -560,6 +656,7 @@ void hw_cart_ppu_data_read(void)
 uint8_t hw_cart_chr_read(uint16_t addr)
 {
     if (hw_cart.mapper == 185 && !cnrom185_enabled()) return (uint8_t)(addr | 1);
+    if (hw_cart.mapper == 93 && !hw_cart.m.ctrl) return (uint8_t)addr;   /* CHR RAM disabled: open bus */
     if (hw_cart.mapper==5) mmc5_ppu_read(addr);
     uint8_t value = hw_cart.chr[hw_cart_chr_index(addr)];
     if ((hw_cart.mapper == 9 || hw_cart.mapper == 10) && !hw_cart.m.pattern_pending) {
@@ -595,6 +692,7 @@ void hw_cart_ppu_rd(bool reading)
 #include "hw_sunsoft.inc"
 #include "hw_namco.inc"
 #include "hw_jaleco.inc"
+#include "hw_tengen.inc"
 #include "hw_taito.inc"
 #include "hw_taito_x1.inc"
 
@@ -608,8 +706,11 @@ static const struct {
     { 69, "Sunsoft FME-7 / 5B", 0, 1 },
     { 19, "Namco 163", 0, 0 },
     { 18, "Jaleco SS88006", 0, 0 },
+    { 64, "Tengen RAMBO-1", 1, 0 },
+    { 158, "Tengen 800037 (RAMBO-1, CHR A17 mirroring)", 1, 0 },
     { 33, "Taito TC0190", 0, 0 },
     { 32, "Irem G-101", 0, 0 },
+    { 65, "Irem H3001", 0, 0 },
     { 80, "Taito X1-005", 0, 0 },
     { 207, "Taito X1-005 (CHR mirroring)", 0, 0 },
     { 82, "Taito X1-017", 0, 0 },
@@ -617,6 +718,7 @@ static const struct {
     { 48, "Taito TC0690", 1, 0 },
     { 210, "Namco 175 / 340", 0, 0 },
     { 68, "Sunsoft-4", 0, 1 },
+    { 67, "Sunsoft-3", 0, 0 },
     { 41, "Caltron 6-in-1", 0, 0 },
     { 185, "CNROM + copy protection", 0, 0 },
     { 228, "Active Enterprises", 0, 0 },
@@ -639,6 +741,21 @@ static const struct {
     { 232, "Camerica Quattro", 0, 0 },
     { 184, "Sunsoft-1", 0, 0 },
     { 180, "Crazy Climber", 0, 0 },
+    { 70, "Bandai 74161/7432", 0, 0 },
+    { 78, "Irem 74HC161 / Jaleco JF-16", 0, 0 },
+    { 89, "Sunsoft-2 (Sunsoft-3 board)", 0, 0 },
+    { 93, "Sunsoft-2 (Sunsoft-3R board)", 0, 0 },
+    { 97, "Irem TAM-S1", 0, 0 },
+    { 72, "Jaleco JF-17", 0, 0 },
+    { 92, "Jaleco JF-19", 0, 0 },
+    { 86, "Jaleco JF-13", 0, 0 },
+    { 101, "Jaleco JF-10 (mapper 101)", 0, 0 },
+    { 77, "Irem LROG017", 0, 0 },
+    { 96, "Bandai Oeka Kids", 1, 0 },
+    { 144, "Color Dreams (Death Race)", 0, 0 },
+    { 146, "Sachen 3015 / SA-016", 0, 0 },
+    { 148, "Sachen SA-008-A / Tengen 800008", 0, 0 },
+    { 152, "Bandai 74161/7432 (one-screen)", 0, 0 },
     { 140, "Jaleco JF-11/14", 0, 0 },
     { 113, "HES", 0, 0 },
     { 94, "UN1ROM", 0, 0 },
@@ -646,6 +763,9 @@ static const struct {
     { 79, "NINA-003/006", 0, 0 },
     { 76, "Namco 109", 0, 0 },
     { 206, "DxROM", 0, 0 },
+    { 88, "Namco 118 (CHR A16 = PPU A12)", 0, 0 },
+    { 95, "Namco 118 (CHR A15 = CIRAM A10)", 0, 0 },
+    { 154, "Namco 118 (CHR A16 = PPU A12, one-screen)", 0, 0 },
     { 75, "VRC1", 0, 0 },
     { 71, "Camerica", 0, 0 },
     { 34, "BNROM / NINA-001", 0, 0 },
@@ -706,7 +826,7 @@ void hw_cart_power_on(void)
     hw_cart.chr_ciram = 0;
     int i = mapper_index(hw_cart.mapper);
     hw_cart.watch_ppu_addr = i >= 0 ? MAPPERS[i].watch_ppu_addr : 0;
-    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==19 || hw_cart.mapper==18 || hw_cart.mapper==48 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
+    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==19 || hw_cart.mapper==18 || hw_cart.mapper==48 || hw_cart.mapper==64 || hw_cart.mapper==158 || hw_cart.mapper==65 || hw_cart.mapper==67 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
     hw_cart.mirroring = hw_cart.info.vertical ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
     hw_cart.wram_bank = 0;
     hw_cart.has_wram = hw_cart.info.prg_size ? hw_cart.wram_len != 0 : i >= 0 ? MAPPERS[i].wram : 0;
@@ -730,10 +850,13 @@ void hw_cart_power_on(void)
     case 69: fme7_apply(); break;
     case 19: case 210: hw_cart.m.namco.channel = 7; namco_apply(); break;
     case 18: jaleco_apply(); break;
+    case 64: case 158: rambo_apply(); break;
     case 33: case 48: taito_apply(); break;
     case 32: irem_g101_apply(); map_chr8(0); break;
+    case 65: hw_cart.m.reg[1] = 1; irem_h3001_apply(); map_chr8(0); break;
     case 80: case 207: case 82: case 552: taito_x1_apply(); break;
     case 68: sunsoft4_apply(); break;
+    case 67: uxrom_reset(); break;
     case 41: nrom_reset(); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
     case 185: nrom_reset(); break;
     /* The games expect $00 written to $8000 at power-on and reset. */
@@ -759,10 +882,19 @@ void hw_cart_power_on(void)
     case 13: nrom_reset(); map_chr4(1, 0); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
     case 71: uxrom_reset(); break;
     case 75: nrom_reset(); map_prg8(3, -1); map_chr4(1, 0); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
-    case 206: hw_cart.m.reg[7] = 1; mmc3_apply(); break;
+    case 206: case 88: case 95: hw_cart.m.reg[7] = 1; mmc3_apply(); break;
+    case 154: hw_cart.m.reg[7] = 1; mmc3_apply(); hw_cart.mirroring = HW_MIRROR_SCREEN_A; break;
     case 76: uxrom_reset(); hw_cart.m.reg[7] = 1; for (unsigned j = 0; j < 4; ++j) map_chr2(j, 0); break;
     case 94: uxrom_reset(); break;
     case 180: map_prg16(0, 0); map_prg16(1, 0); map_chr8(0); break;
+    case 70: uxrom_reset(); break;
+    case 78: case 89: case 72: case 92: uxrom_reset(); break;
+    case 93: uxrom_reset(); hw_cart.m.ctrl = 1; break;   /* CHR RAM enabled at power-on */
+    case 97: map_prg16(0, -1); map_prg16(1, 0); map_chr8(0); break;
+    case 86: case 101: nrom_reset(); break;
+    case 77: map_prg32(0); irem77_chr(0); break;
+    case 96: map_prg32(0); hw_cart.m.pattern_addr = 0; oeka_apply(); break;
+    case 152: uxrom_reset(); hw_cart.mirroring = HW_MIRROR_SCREEN_A; break;
     case 184: nrom_reset(); map_chr4(1, 4); break;
     case 232: map_prg16(0, 0); map_prg16(1, 3); map_chr8(0); break;
     case 1: case 155: mmc1_reset(); break;
@@ -850,7 +982,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
             if (addr == 0x7fff) map_chr4(1, value & 15);
         }
     }
-    if (hw_cart.mapper == 79 && (addr & 0xe100) == 0x4100) {
+    if ((hw_cart.mapper == 79 || hw_cart.mapper == 146) && (addr & 0xe100) == 0x4100) {
         hw_cart.m.latch = value;
         map_prg32((value >> 3) & 1);
         map_chr8(value & 7);
@@ -860,6 +992,15 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
         map_chr8(((value & 1) << 1) | ((value & 2) >> 1));
         return;
     }
+    /* Jaleco JF-13 (mapper 86): $6000-$6FFF [.CPP ..CC] 32 KiB PRG, 8 KiB CHR
+     * (bit 6 the high CHR bit); $7000-$7FFF drives the uPD7756 speech chip,
+     * which is not modeled; no PRG RAM, no bus conflicts. */
+    if (hw_cart.mapper == 86 && addr >= 0x6000 && addr < 0x8000) {
+        if (addr < 0x7000) { map_prg32((value >> 4) & 3); map_chr8((value & 3) | ((value >> 4) & 4)); }
+        return;
+    }
+    /* Mapper 101 (a JF-10 misdump): 8 KiB CHR at $6000-$7FFF, bits in order. */
+    if (hw_cart.mapper == 101 && addr >= 0x6000 && addr < 0x8000) { map_chr8(value); return; }
     if (hw_cart.mapper == 113 && (addr & 0xe100) == 0x4100) {
         hw_cart.m.latch = value;
         map_prg32((value >> 3) & 7);
@@ -890,7 +1031,9 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 24: case 26: vrc6_write(addr, value); break;
     case 73: vrc3_write(addr, value); break;
     case 9: case 10: mmc2_write(addr, value); break;
-    case 11: /* Color Dreams; see MAPPERS.md. */
+    case 11: case 144: /* Color Dreams; see MAPPERS.md. */
+        /* 144 (Death Race): a resistor on D0 lets the ROM's bit 0 win (nesdev INES Mapper 144). */
+        if (hw_cart.mapper == 144) value |= 1;
         value &= hw_cart_prg_read(addr);
         hw_cart.m.latch = value;
         map_prg32(value & 3);
@@ -922,7 +1065,9 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
         map_chr4(0, hw_cart.m.chr0 | ((hw_cart.m.ctrl & 2) << 3));
         map_chr4(1, hw_cart.m.chr1 | ((hw_cart.m.ctrl & 4) << 2));
         break;
-    case 206: /* DxROM; see MAPPERS.md. */
+    case 206: case 88: case 95: case 154: /* Namco 108 family; see MAPPERS.md. */
+        /* 154's one-screen select answers at all of $8000-$FFFF (nesdev INES Mapper 154). */
+        if (hw_cart.mapper == 154) hw_cart.mirroring = (value & 0x40) ? HW_MIRROR_SCREEN_B : HW_MIRROR_SCREEN_A;
         if (addr < 0xa000) {
             if (!(addr & 1)) hw_cart.m.bank_select = value & 7;
             else {
@@ -951,6 +1096,69 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
         hw_cart.m.latch = value;
         map_prg16(1, value & 7);
         break;
+    case 78: /* Irem 74HC161 / Jaleco JF-16; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg16(0, value & 7);
+        map_chr8(value >> 4);
+        if (hw_cart.info.submapper == 3)
+            hw_cart.mirroring = (value & 8) ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
+        else hw_cart.mirroring = (value & 8) ? HW_MIRROR_SCREEN_B : HW_MIRROR_SCREEN_A;
+        break;
+    case 89: /* Sunsoft-2 on the Sunsoft-3 board; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg16(0, (value >> 4) & 7);
+        map_chr8((value & 7) | ((value >> 4) & 8));
+        hw_cart.mirroring = (value & 8) ? HW_MIRROR_SCREEN_B : HW_MIRROR_SCREEN_A;
+        break;
+    case 93: /* Sunsoft-2 on the Sunsoft-3R board; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg16(0, (value >> 4) & 7);
+        hw_cart.m.ctrl = value & 1;               /* CHR RAM enable */
+        for (unsigned i = 0; i < 8; ++i) hw_cart.chr_write[i] = hw_cart.chr_ram && hw_cart.m.ctrl;
+        break;
+    case 97: /* Irem TAM-S1; see MAPPERS.md. */
+        if (addr < 0xc000) {
+            hw_cart.m.latch = value;
+            map_prg16(1, value & 31);
+            hw_cart.mirroring = (value & 0x80) ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
+        }
+        break;
+    case 77: /* Irem LROG017; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg32(value & 15);
+        irem77_chr(value >> 4);
+        break;
+    case 96: /* Oeka Kids; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg32(value & 3);
+        hw_cart.m.ctrl = value & 4;
+        oeka_apply();
+        break;
+    case 148: /* Sachen SA-008-A / Tengen 800008; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg32((value >> 3) & 1);
+        map_chr8(value & 7);
+        break;
+    case 72: case 92: /* Jaleco JF-17 / JF-19; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        if ((value & 0x80) && !(hw_cart.m.latch & 0x80)) map_prg16(hw_cart.mapper == 92 ? 1 : 0, value & 15);
+        if ((value & 0x40) && !(hw_cart.m.latch & 0x40)) map_chr8(value & 15);
+        hw_cart.m.latch = value;
+        break;
+    case 70: case 152: /* Bandai 74161/7432; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg16(0, (value >> 4) & (hw_cart.mapper == 70 ? 15 : 7));
+        map_chr8(value & 15);
+        if (hw_cart.mapper == 152)
+            hw_cart.mirroring = (value & 0x80) ? HW_MIRROR_SCREEN_B : HW_MIRROR_SCREEN_A;
+        break;
     case 232: /* Camerica Quattro; see MAPPERS.md. */
         if (addr < 0xc000) hw_cart.m.ctrl = hw_cart.info.submapper == 1 ?
             ((value & 8) | ((value >> 2) & 4)) : (value >> 1) & 12;
@@ -963,10 +1171,13 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 3:  cnrom_write(value); break;
     case 4: case 118: case 119: mmc3_write(addr, value); break;
     case 68: sunsoft4_write(addr, value); break;
+    case 67: sunsoft3_write(addr, value); break;
     case 185: hw_cart.m.latch = value & hw_cart_prg_read(addr); break;
     case 18: jaleco_write(addr, value); break;
+    case 64: case 158: rambo_write(addr, value); break;
     case 33: case 48: taito_write(addr, value); break;
     case 32: irem_g101_write(addr, value); break;
+    case 65: irem_h3001_write(addr, value); break;
     case 228: action52_write(addr, value); break;
     case 7:  axrom_write(value); break;
     case 66: gxrom_write(value); break;
@@ -1010,6 +1221,8 @@ void hw_cart_ppu_addr_watched(uint16_t vbus)
         unsigned a12=(vbus>>12)&1;
         if (hw_cart.m.a12!=a12) { hw_cart.m.a12=(uint8_t)a12; mmc1_apply(); }
     } else if (hw_cart.mapper == 4 || hw_cart.mapper == 118 || hw_cart.mapper == 119 || hw_cart.mapper == 48) mmc3_ppu_addr(vbus);
+    else if (hw_cart.mapper==64 || hw_cart.mapper==158) rambo_ppu_addr(vbus);
+    else if (hw_cart.mapper==96) oeka_ppu_addr(vbus);
     else if (hw_cart.mapper==153 || hw_cart.mapper==157) bandai_ppu_addr(vbus);
 }
 
@@ -1033,6 +1246,9 @@ void hw_cart_cpu_clock(void)
     if (hw_cart.mapper==19) { namco_clock(); return; }
     if (hw_cart.mapper==18) { jaleco_clock(); return; }
     if (hw_cart.mapper==48) { tc0690_cpu_clock(); return; }
+    if (hw_cart.mapper==64 || hw_cart.mapper==158) { rambo_cpu_clock(); return; }
+    if (hw_cart.mapper==65) { irem_h3001_clock(); return; }
+    if (hw_cart.mapper==67) { sunsoft3_clock(); return; }
     if (bandai_board()) { bandai_clock(); return; }
     if (hw_cart.mapper==85) vrc7_audio_clock();
     if (vrc6_board()) vrc6_audio_clock();
@@ -1045,6 +1261,9 @@ void hw_cart_cpu_clock(void)
 uint16_t hw_cart_nt_a10(uint16_t addr)
 {
     if (hw_cart.mapper == 118) return txsrom_ciram_a10(addr);
+    if (hw_cart.mapper == 158) return rambo158_ciram_a10(addr);
+    /* NAMCOT-3425 (mapper 95): CHR A15 of R0 (upper nametables) or R1 (lower) is CIRAM A10. */
+    if (hw_cart.mapper == 95) return (hw_cart.m.reg[(addr >> 11) & 1] & 0x20) ? 0x400 : 0;
     if (hw_cart.mapper == 19) return namco_nt_a10(addr);
     if (hw_cart.mapper == 207) return x1005_207_ciram_a10(addr);
     return (vrc6_nt_bank((addr >> 10) & 3) & 1) << 10;
@@ -1120,12 +1339,12 @@ uint64_t hw_cart_state_hash(uint64_t h)
     acc = acc * 131 + hw_cart.m.irq_out;
     acc = acc * 131 + hw_cart.m.a12;
     acc = acc * 131 + hw_cart.m.latch;
-    if (hw_cart.mapper == 9 || hw_cart.mapper == 10) {
+    if (hw_cart.mapper == 9 || hw_cart.mapper == 10 || hw_cart.mapper == 96) {
         acc = acc * 131 + hw_cart.m.pattern_pending;
         acc = acc * 131 + hw_cart.m.pattern_addr;
     }
     if (hw_cart.mapper==40 || bandai_board() || vrc24_board() || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85 ||
-        hw_cart.mapper==80 || hw_cart.mapper==207 || hw_cart.mapper==82 || hw_cart.mapper==552) {
+        hw_cart.mapper==80 || hw_cart.mapper==207 || hw_cart.mapper==82 || hw_cart.mapper==552 || hw_cart.mapper==65 || hw_cart.mapper==67) {
         for (unsigned i=0; i<8; ++i) acc = acc*131 + hw_cart.m.vrc_chr[i];
         acc = acc*131 + hw_cart.m.irq_latch16;
         acc = acc*131 + hw_cart.m.irq_counter16;
@@ -1150,6 +1369,10 @@ uint64_t hw_cart_state_hash(uint64_t h)
         const uint8_t *b=(const uint8_t *)&hw_cart.m.namco;
         for (unsigned i=0;i<sizeof(HwNamco);++i) acc=acc*131+b[i];
         acc=acc*131+hw_cart.chr_ciram;
+    }
+    if (hw_cart.mapper==64 || hw_cart.mapper==158) {
+        const uint8_t *b=(const uint8_t *)&hw_cart.m.rambo;
+        for (unsigned i=0;i<sizeof(HwRambo);++i) acc=acc*131+b[i];
     }
     if (hw_cart.mapper==18) {
         const uint8_t *b=(const uint8_t *)&hw_cart.m.jaleco;
@@ -1200,7 +1423,7 @@ void hw_cart_state_dump(void *file)
             fprintf(f,"cart.vrc6.ch%u %02X %02X %02X timer=%u step=%u\n",ch,
                     a->reg[ch][0],a->reg[ch][1],a->reg[ch][2],a->timer[ch],a->step[ch]);
     }
-    if (hw_cart.mapper==40 || bandai_board() || vrc24_board() || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85) {
+    if (hw_cart.mapper==40 || bandai_board() || vrc24_board() || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85 || hw_cart.mapper == 65 || hw_cart.mapper == 67) {
         for (unsigned i=0; i<8; ++i) fprintf(f, "cart.vrc_chr[%u] %03X\n", i, hw_cart.m.vrc_chr[i]);
         fprintf(f, "cart.irq_latch16 %04X\ncart.irq_counter16 %04X\ncart.irq_prescaler %d\ncart.irq_mode %u\n",
                 hw_cart.m.irq_latch16, hw_cart.m.irq_counter16, hw_cart.m.irq_prescaler, hw_cart.m.irq_mode);

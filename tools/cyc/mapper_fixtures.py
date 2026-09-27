@@ -70,6 +70,8 @@ def mapper_fixtures():
     yield handoff('mapper71', 71, [(0xc100, 3)], 6, chr_kb=0)
     yield handoff('mapper75', 75, [(0x8123, 3)], 3, chr_kb=128)
     yield handoff('mapper206', 206, [(0x8000, 6), (0x8001, 3)], 3, chr_kb=64)
+    for m in (88, 95, 154):
+        yield handoff('mapper%d' % m, m, [(0x8000, 6), (0x8001, 3)], 3, chr_kb=128)
     yield handoff('mapper76', 76, [(0x8000, 6), (0x8001, 3)], 3, chr_kb=128)
     for mode in ('absolute', 'indexed', 'indirect'):
         yield handoff('mapper79_' + mode, 79, [(0x4100, 11)], 4,
@@ -83,6 +85,22 @@ def mapper_fixtures():
         yield handoff('mapper140_' + mode, 140, [(0x6000, 0x21)], 8,
                       chr_kb=128, addressing=mode)
     yield handoff('mapper180', 180, [(0xb000, 3)], 6, chr_kb=0, start=0xc000)
+    yield handoff('mapper70', 70, [(0xb000, 0x35)], 6, chr_kb=128)
+    yield handoff('mapper78', 78, [(0xb000, 0x03)], 6, chr_kb=128)
+    yield handoff('mapper89', 89, [(0xb000, 0x30)], 6, chr_kb=128)
+    yield handoff('mapper93', 93, [(0xb000, 0x31)], 6, chr_kb=0)
+    yield handoff('mapper72', 72, [(0xb000, 0x83)], 6, chr_kb=128)
+    yield handoff('mapper72_edge', 72, [(0xb000, 0x83), (0xb000, 0x85)], 6, chr_kb=128)   # no second load
+    yield handoff('mapper92', 92, [(0xb000, 0x83)], 6, chr_kb=128, start=0xc000)
+    yield handoff('mapper97', 97, [(0x8000, 3)], 6, chr_kb=8, start=0xc000)
+    yield handoff('mapper86', 86, [(0x6000, 0x20)], 8, chr_kb=64)
+    yield handoff('mapper77', 77, [(0xb000, 0x02)], 8, chr_kb=8)
+    yield handoff('mapper144', 144, [(0xb000, 0x02)], 12, chr_kb=64)  # ROM $FF: its D0 sets bit 0
+    yield handoff('mapper148', 148, [(0xb000, 0x08)], 4, prg_kb=64, chr_kb=64)
+    for mode in ('absolute', 'indexed', 'indirect'):
+        yield handoff('mapper146_' + mode, 146, [(0x4100, 11)], 4, prg_kb=64, chr_kb=64, addressing=mode)
+    yield handoff('mapper96', 96, [(0xb000, 0x02)], 8, chr_kb=0)
+    yield handoff('mapper152', 152, [(0xb000, 0xb5)], 6, chr_kb=128)
     yield handoff('mapper184', 184, [(0x6000, 0x12)], 0, prg_kb=32, chr_kb=32)
     yield handoff('mapper232', 232, [(0x8000, 0x10), (0xc000, 1)], 18, prg_kb=256, chr_kb=0)
     for mode in ('absolute', 'indexed', 'indirect'):
