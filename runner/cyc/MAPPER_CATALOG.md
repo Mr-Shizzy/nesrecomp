@@ -445,23 +445,23 @@ Ordered by category (licensed first), then dump count. Rows with fewer than abou
 | 0 | NROM | licensed | 1454 | 108 | yes | HVC-NROM-128, HVC-NROM-256 |
 | 1 | MMC1 | licensed | 1187 | 331 | yes | NES-SLROM, HVC-SLROM |
 | 2 | UxROM | licensed | 696 | 117 | yes | NES-UNROM, HVC-UNROM |
-| 3 | CNROM | licensed | 453 | 97 | no | NES-CNROM, HVC-CNROM |
+| 3 | CNROM | licensed | 453 | 97 | yes | NES-CNROM, HVC-CNROM |
 | 4 | MMC3 | licensed | 1861 | 197 | yes | NES-TLROM, HVC-TLROM |
 | 5 | MMC5 | licensed | 61 | 9 | yes | HVC-ETROM, NES-ETROM |
-| 7 | AxROM | licensed | 80 | 22 | no | NES-AOROM, NES-AMROM |
+| 7 | AxROM | licensed | 80 | 22 | yes | NES-AOROM, NES-AMROM |
 | 9 | MMC2 | licensed | 13 |  | fixture-only | NES-PNROM, NES-PEEOROM |
-| 10 | MMC4 | licensed | 13 | 2 | no | HVC-FKROM, HVC-FJROM |
+| 10 | MMC4 | licensed | 13 | 2 | yes | HVC-FKROM, HVC-FJROM |
 | 11 | Color Dreams | unlicensed commercial | 79 | 19 | yes | COLORDREAMS-74*377, COLORDREAMS |
 | 13 | CPROM | licensed | 3 |  | fixture-only | NES-CPROM |
-| 16 | Bandai FCG / LZ93D50 | licensed | 28 | 18 | no | BANDAI-LZ93D50+24C02, BANDAI-FCG-2 |
+| 16 | Bandai FCG / LZ93D50 | licensed | 28 | 10 | yes | BANDAI-LZ93D50+24C02, BANDAI-FCG-2 |
 | 18 | Jaleco SS88006 | licensed | 27 | 1 | yes | JALECO-JF-24, JALECO-JF-25 |
 | 19 | Namco 163 | licensed | 49 | 10 | yes | NAMCOT-163, NAMCOT-129 |
-| 21 | VRC4a/c | licensed | 7 | 1 | no | KONAMI-VRC-4 |
-| 22 | VRC2a | licensed | 5 | 1 | no | KONAMI-VRC-2 |
-| 23 | VRC2b / VRC4e/f | licensed | 51 | 7 | no | KONAMI-VRC-2, KONAMI-VRC-4 |
-| 24 | VRC6a | licensed | 20 | 1 | no | KONAMI-VRC-6 |
-| 25 | VRC2c / VRC4b/d | licensed | 21 | 3 | no | KONAMI-VRC-4, KONAMI-VRC-2 |
-| 26 | VRC6b | licensed | 4 | 1 | no | KONAMI-VRC-6 |
+| 21 | VRC4a/c | licensed | 7 | 1 | yes | KONAMI-VRC-4 |
+| 22 | VRC2a | licensed | 5 | 1 | yes | KONAMI-VRC-2 |
+| 23 | VRC2b / VRC4e/f | licensed | 51 | 7 | yes | KONAMI-VRC-2, KONAMI-VRC-4 |
+| 24 | VRC6a | licensed | 20 | 1 | yes | KONAMI-VRC-6 |
+| 25 | VRC2c / VRC4b/d | licensed | 21 | 3 | yes | KONAMI-VRC-4, KONAMI-VRC-2 |
+| 26 | VRC6b | licensed | 4 | 1 | yes | KONAMI-VRC-6 |
 | 31 | NSF cartridge | homebrew | 0 |  | fixture-only |  |
 | 32 | Irem G-101 | licensed | 12 | 1 | yes | IREM-G101 |
 | 33 | Taito TC0190 | licensed | 15 | 5 | yes | TAITO-TC0190FMC, TAITO-TC0350FMR |
@@ -474,26 +474,26 @@ Ordered by category (licensed first), then dump count. Rows with fewer than abou
 | 69 | Sunsoft FME-7 / 5B | licensed | 27 | 12 | yes | SUNSOFT-FME-7, SUNSOFT-5A |
 | 71 | Camerica | unlicensed commercial | 46 | 9 | yes | CAMERICA-BF9093, CAMERICA-ALGN |
 | 73 | VRC3 | licensed | 2 |  | fixture-only | KONAMI-VRC-3 |
-| 75 | VRC1 | licensed | 17 | 2 | no | KONAMI-VRC-1, JALECO-JF-22 |
-| 76 | Namco 109 | licensed | 4 | 1 | no | NAMCOT-3446 |
+| 75 | VRC1 | licensed | 17 | 2 | yes | KONAMI-VRC-1, JALECO-JF-22 |
+| 76 | Namco 109 | licensed | 4 | 1 | yes | NAMCOT-3446 |
 | 79 | NINA-003/006 | unlicensed commercial | 58 | 11 | yes | AVE-NINA-06, AVE-MB-91 |
 | 80 | Taito X1-005 | licensed | 12 |  | fixture-only | TAITO-X1-005 |
 | 82 | Taito X1-017 | licensed | 6 |  | fixture-only | TAITO-X1-017 |
 | 85 | VRC7 | licensed | 7 |  | fixture-only | KONAMI-VRC-7 |
-| 87 | J87 | licensed | 24 | 6 | no | KONAMI-74*139/74, JALECO-JF-10 |
+| 87 | J87 | licensed | 24 | 6 | yes | KONAMI-74*139/74, JALECO-JF-10 |
 | 94 | UN1ROM | licensed | 1 |  | fixture-only | HVC-UN1ROM |
-| 113 | HES | unlicensed commercial | 10 | 3 | no |  |
+| 113 | HES | unlicensed commercial | 10 | 3 | yes |  |
 | 118 | TxSROM | licensed | 13 | 4 | yes | NES-TLSROM, HVC-TKSROM |
 | 119 | TQROM | licensed | 5 | 2 | yes | NES-TQROM |
-| 140 | Jaleco JF-11/14 | licensed | 7 | 1 | no | JALECO-JF-11, JALECO-JF-14 |
+| 140 | Jaleco JF-11/14 | licensed | 7 | 1 | yes | JALECO-JF-11, JALECO-JF-14 |
 | 153 | Bandai BA-JUMP2 | licensed | 1 |  | fixture-only | BANDAI-JUMP2 |
 | 155 | MMC1A | licensed | 2 |  | fixture-only |  |
-| 157 | Bandai Datach | licensed | 9 |  | fixture-only |  |
-| 159 | Bandai LZ93D50 / X24C01 | licensed | 14 |  | fixture-only | BANDAI-LZ93D50+24C01 |
-| 180 | Crazy Climber | licensed | 2 | 1 | no | HVC-UNROM+74HC08 |
-| 184 | Sunsoft-1 | licensed | 11 | 2 | no | SUNSOFT-1 |
+| 157 | Bandai Datach | licensed | 9 | 7 | no |  |
+| 159 | Bandai LZ93D50 / X24C01 | licensed | 14 | 1 | no | BANDAI-LZ93D50+24C01 |
+| 180 | Crazy Climber | licensed | 2 | 1 | yes | HVC-UNROM+74HC08 |
+| 184 | Sunsoft-1 | licensed | 11 | 2 | yes | SUNSOFT-1 |
 | 185 | CNROM + copy protection | licensed | 18 | 2 | yes | HVC-CNROM+SECURITY, HVC-CNROM |
-| 206 | DxROM | licensed | 99 | 2 | no | NAMCOT-3416, TENGEN-800030 |
+| 206 | DxROM | licensed | 99 | 2 | yes | NAMCOT-3416, TENGEN-800030 |
 | 207 | Taito X1-005 (CHR mirroring) | licensed | 2 | 1 | yes | TAITO-X1-005 |
 | 210 | Namco 175 / 340 | licensed | 25 | 7 | yes | NAMCOT-340, NAMCOT-175 |
 | 228 | Active Enterprises | unlicensed commercial | 20 | 3 | yes | MLT-ACTION52 |

@@ -33,8 +33,9 @@ SPECIAL = {99: 'Vs. System', 40: 'FDS conversion'}
 COPIER = {6, 8, 17, 561, 562}
 # Mappers checked on at least one real owner title through a bounded reference
 # route (CARTRIDGE_REVIEW.md, nesrecomp-core-playtest campaigns). Keep current.
-TITLE_CHECKED = {0, 1, 2, 4, 5, 11, 18, 19, 32, 33, 34, 40, 41, 48, 66, 68, 69, 71, 79, 118, 119,
-                 185, 207, 210, 228}
+TITLE_CHECKED = {0, 1, 2, 3, 4, 5, 7, 10, 11, 16, 18, 19, 21, 22, 23, 24, 25, 26, 32, 33, 34, 40, 41,
+                 48, 66, 68, 69, 71, 75, 76, 79, 87, 113, 118, 119, 140, 180, 184, 185, 206, 207,
+                 210, 228}
 FAMICLONE = {256, 270}
 
 
