@@ -7,8 +7,9 @@
  * 1 KiB CHR banks. TC0190 decodes A14 away ($C000 mirrors $8000) and keeps
  * mirroring in $8000 bit 6. TC0690 adds an MMC3-style A12 scanline counter:
  * $C000 latch (written inverted), $C001 reload, $C002 enable, $C003 disable
- * and acknowledge, with the IRQ output about 4 CPU cycles after the MMC3
- * would assert it; mirroring moves to $E000 bit 6. reg[0-1] PRG, reg[2-7] CHR. */
+ * and acknowledge, with the IRQ output 22 CPU cycles after the MMC3 would
+ * assert it (see TC0690_IRQ_DELAY); mirroring moves to $E000 bit 6.
+ * reg[0-1] PRG, reg[2-7] CHR. */
 
 static void taito_apply(void)
 {

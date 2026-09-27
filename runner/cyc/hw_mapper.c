@@ -376,9 +376,13 @@ static void mmc3_trace_clock(void)
             ppu.dot, hw_cart.m.irq_counter, hw_cart.m.irq_out, ppu.vbus);
 }
 
-/* Taito TC0690 (mapper 48) asserts about 4 CPU cycles after the MMC3 would
- * (nesdev wiki, INES Mapper 048); m.latch counts the delay (hw_taito.inc). */
-enum { TC0690_IRQ_DELAY = 4 };
+/* Taito TC0690 (mapper 48) asserts later than the MMC3 would; m.latch counts
+ * the delay (hw_taito.inc). nesdev says "about 4 CPU cycles", but with 4 the
+ * Flintstones status-bar split lands mid-scanline and flickers (seen in owner
+ * playtest). A sweep over its route renders the split identically and cleanly
+ * for 20-24 cycles and glitches below 18 or above 26; 22 is the middle, and is
+ * also the value Mesen2 tuned for Flintstones and Captain Saver. */
+enum { TC0690_IRQ_DELAY = 22 };
 
 static void mmc3_clock_irq(void)
 {

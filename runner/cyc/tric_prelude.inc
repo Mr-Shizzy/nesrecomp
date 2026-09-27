@@ -375,7 +375,7 @@ inline void TricMapper::MMC3ClockIRQ() {
     else IrqCounter--;
     if (IrqCounter == 0 && IrqEnable) {
         if (Cart.Mapper != 48) IrqOut = true;
-        else if (!TaitoDelay && !IrqOut) TaitoDelay = 4;   // nesdev: ~4 CPU cycles after the MMC3
+        else if (!TaitoDelay && !IrqOut) TaitoDelay = 22;  // observed: Flintstones' split is clean for 20-24
     }
     IrqReload = false;
     TricMmc3TraceClock(IrqCounter, IrqOut, PPU_AddressBus);

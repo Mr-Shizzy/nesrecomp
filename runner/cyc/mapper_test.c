@@ -101,7 +101,7 @@ static void test_taito(void)
     hw_cart_ppu_addr(0x0000); hw.cycles += 4; hw_cart_ppu_addr(0x1000);   /* reload to 1 */
     hw_cart_ppu_addr(0x0000); hw.cycles += 4; hw_cart_ppu_addr(0x1000);   /* 0: delay starts */
     CHECK(!hw_cart_irq());
-    cpu_cycles(3); CHECK(!hw_cart_irq());
+    cpu_cycles(21); CHECK(!hw_cart_irq());
     cpu_cycles(1); CHECK(hw_cart_irq());
     hw_cart_cpu_write(0xc003, 0); CHECK(!hw_cart_irq());
     /* $C003 also cancels a pending delayed IRQ. */
