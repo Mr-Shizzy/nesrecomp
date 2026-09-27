@@ -96,6 +96,16 @@ def ppu_fixtures():
         ('cpu', 0x4100, 0xeb), ('read', 0, 88), ('read', 0x1fff, 95),
         ('write', 0x2000, 0x31), ('read', 0x2800, 0x31),
         ('cpu', 0x4100, 0x6b), ('read', 0x2400, 0x31)])
+    # Bandai 74161/7432: CHR in the low nibble; 70 keeps the header's
+    # horizontal mirroring, 152's bit 7 selects one screen.
+    yield ppu_contract(70, 128, 128, [
+        ('cpu', 0xb000, 0x05), ('read', 0, 40), ('read', 0x1fff, 47),
+        ('write', 0x2000, 0x31), ('read', 0x2400, 0x31), ('write', 0x2800, 0x32), ('read', 0x2c00, 0x32),
+        ('read', 0x2000, 0x31)])
+    yield ppu_contract(152, 128, 128, [
+        ('cpu', 0xb000, 0x06), ('read', 0, 48), ('write', 0x2000, 0x31), ('read', 0x2c00, 0x31),
+        ('cpu', 0xb000, 0x86), ('write', 0x2400, 0x32), ('read', 0x2800, 0x32),
+        ('cpu', 0xb000, 0x06), ('read', 0x2800, 0x31)])
     yield ppu_contract(140, 128, 128, [('cpu', 0x6000, 0x2a), ('read', 0, 80), ('read', 0x1fff, 87)])
     yield ppu_contract(184, 32, 32, [
         ('cpu', 0x6000, 0x12), ('read', 0, 8), ('read', 0x1000, 20),

@@ -522,6 +522,10 @@ inline void TricMapper::Reset() {
     case 76: MapPRG16(0, 0); MapPRG16(1, -1); Reg[7] = 1; for (uint j = 0; j < 4; ++j) MapCHR2(j, 0); break;
     case 94: MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0); break;
     case 180: MapPRG16(0, 0); MapPRG16(1, 0); MapCHR8(0); break;
+    case 70: case 152:
+        MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0);
+        if (Cart.Mapper == 152) Mirroring = TRIC_MIRROR_SCREEN_A;
+        break;
     case 184: MapPRG32(0); MapCHR4(0, 0); MapCHR4(1, 4); break;
     case 232: MapPRG16(0, 0); MapPRG16(1, 3); MapCHR8(0); break;
     case 1: case 155:
@@ -776,6 +780,15 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     case 180:
         Latch = (byte)(Input & SnoopCPU(Address));
         MapPRG16(1, Latch % 8);
+        break;
+    case 70:   // nesdev INES Mapper 070: [PPPP CCCC], bus conflicts
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG16(0, Latch / 16); MapCHR8(Latch % 16);
+        break;
+    case 152:  // nesdev INES Mapper 152: [MPPP CCCC], M = one-screen A/B
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG16(0, (Latch / 16) % 8); MapCHR8(Latch % 16);
+        Mirroring = Latch >= 128 ? TRIC_MIRROR_SCREEN_B : TRIC_MIRROR_SCREEN_A;
         break;
     case 232:
         if (Address >= 0xc000) PrgReg = Input % 4;

@@ -453,6 +453,38 @@ static void test_mapper180(void)
     no_wram();
 }
 
+/* Bandai 74161/7432 (nesdev INES Mapper 070, 152): one latch, 16 KiB PRG at
+ * $8000 in the high nibble, 8 KiB CHR in the low one, last 16 KiB fixed, AND
+ * bus conflicts. 70's mirroring is soldered; 152 selects one screen in bit 7
+ * and has three PRG bits. */
+static void test_mapper70(void)
+{
+    cart(70, 256, 128);
+    prg_banks(0, 1, 30, 31); chr_bank(0, 0, 8);
+    hw_cart_cpu_write(0x8000, 0xa5);
+    prg_banks(20, 21, 30, 31); chr_bank(0, 40, 8);
+    CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    prg[hw_cart.prg_off[0]] = 0x0f;
+    hw_cart_cpu_write(0x8000, 0xff);                     /* AND bus conflict */
+    prg_banks(0, 1, 30, 31); chr_bank(0, 120, 8);
+    CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    no_wram();
+}
+
+static void test_mapper152(void)
+{
+    cart(152, 256, 128);
+    prg_banks(0, 1, 30, 31); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_A);
+    hw_cart_cpu_write(0xc000, 0xd3);
+    prg_banks(10, 11, 30, 31); chr_bank(0, 24, 8); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_B);
+    hw_cart_cpu_write(0x8000, 0x7f);                     /* three PRG bits */
+    prg_banks(14, 15, 30, 31); chr_bank(0, 120, 8); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_A);
+    prg[hw_cart.prg_off[0]] = 0x25;
+    hw_cart_cpu_write(0x8000, 0xff);                     /* AND bus conflict */
+    prg_banks(4, 5, 30, 31); chr_bank(0, 40, 8); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_A);
+    no_wram();
+}
+
 static void test_mapper140(void)
 {
     cart(140, 128, 128);
@@ -744,6 +776,8 @@ int main(void)
     test_mapper232();
     test_mapper184();
     test_mapper180();
+    test_mapper70();
+    test_mapper152();
     test_mapper140();
     test_mapper113();
     test_mapper94();

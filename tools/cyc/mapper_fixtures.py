@@ -83,6 +83,8 @@ def mapper_fixtures():
         yield handoff('mapper140_' + mode, 140, [(0x6000, 0x21)], 8,
                       chr_kb=128, addressing=mode)
     yield handoff('mapper180', 180, [(0xb000, 3)], 6, chr_kb=0, start=0xc000)
+    yield handoff('mapper70', 70, [(0xb000, 0x35)], 6, chr_kb=128)
+    yield handoff('mapper152', 152, [(0xb000, 0xb5)], 6, chr_kb=128)
     yield handoff('mapper184', 184, [(0x6000, 0x12)], 0, prg_kb=32, chr_kb=32)
     yield handoff('mapper232', 232, [(0x8000, 0x10), (0xc000, 1)], 18, prg_kb=256, chr_kb=0)
     for mode in ('absolute', 'indexed', 'indirect'):

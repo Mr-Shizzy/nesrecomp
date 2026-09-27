@@ -63,6 +63,12 @@ def datach157(sub, wram, sram, battery, mirror):
     return 0, 0, 1, 0, 128 if battery == '1' else 0
 
 
+def bandai152(sub, wram, sram, battery, mirror):
+    # Bandai 74161/7432 with mapper-controlled one-screen mirroring, often dumped as mapper
+    # 70 (Gegege no Kitarou 2), whose mirroring is soldered.
+    return 0, 0, 0, 0, 0
+
+
 def konami_vrc(sub, wram, sram, battery, mirror):
     # VRC2 vs VRC4 address wiring (submappers) and PRG RAM: VRC2 boards have none, only
     # the $6000 microwire latch, which iNES cannot distinguish from 8 KiB of WRAM.
@@ -72,6 +78,7 @@ def konami_vrc(sub, wram, sram, battery, mirror):
 
 RULES = {
     210: (19, namco210), 48: (33, tc0690), 207: (80, x1005_207), 185: (185, cnrom185),
+    152: (70, bandai152),
     16: (16, bandai16), 159: (16, bandai159), 157: (16, datach157),
     21: (21, konami_vrc), 23: (23, konami_vrc), 25: (25, konami_vrc),
 }
