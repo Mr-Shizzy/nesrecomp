@@ -102,6 +102,9 @@ struct TricMapper {
     byte RamboReg[16], RamboPrescale, RamboDelay;
     // ---- Irem H3001 ----
     ushort H3Counter, H3Reload;
+    // ---- Sunsoft-3 ----
+    ushort S3Counter;
+    bool S3LowNext;
     bool RamboCycle;
     ushort JCounter;
     // ---- Sunsoft FME-7 ----
@@ -145,6 +148,8 @@ struct TricMapper {
     void TaitoApply();
     void IremG101Apply();
     void IremH3001Apply();
+    void Sunsoft3Store(ushort Address, byte Input);
+    void Sunsoft3Clock();
     void IremH3001Store(ushort Address, byte Input);
     void TaitoStore(ushort Address, byte Input);
     void JalecoApply();
@@ -528,6 +533,7 @@ inline void TricMapper::Reset() {
     JRam = JCtrl = JMirror = 0; JCounter = 0;
     memset(RamboReg, 0, sizeof(RamboReg)); RamboPrescale = RamboDelay = 0; RamboCycle = false;
     H3Counter = H3Reload = 0;
+    S3Counter = 0; S3LowNext = false;
     TaitoDelay = 0;
     memset(X1Prg, 0, sizeof(X1Prg)); memset(X1Key, 0, sizeof(X1Key)); X1Mode = 0;
     memset(NamcoChr, 0, sizeof(NamcoChr)); memset(NamcoNt, 0, sizeof(NamcoNt)); memset(NamcoPrg, 0, sizeof(NamcoPrg));
@@ -556,6 +562,7 @@ inline void TricMapper::Reset() {
     case 65: Reg[0] = 0; Reg[1] = 1; IremH3001Apply(); MapCHR8(0); break;
     case 80: case 207: case 82: case 552: X1Apply(); break;
     case 68: Sunsoft4Apply(); break;
+    case 67: MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0); break;
     case 41: MapPRG32(0); MapCHR8(0); Mirroring = TRIC_MIRROR_VERTICAL; break;
     case 228: Action52Store(0x8000, 0); break;
     case 16: case 159: case 153: case 157: BandaiApply(); break;
@@ -698,6 +705,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     if (Cart.Mapper==18) { JalecoStore(Address,Input); return; }
     if (Cart.Mapper==64 || Cart.Mapper==158) { RamboStore(Address,Input); return; }
     if (Cart.Mapper==65) { IremH3001Store(Address,Input); return; }
+    if (Cart.Mapper==67) { Sunsoft3Store(Address,Input); return; }
     if (Cart.Mapper==80 || Cart.Mapper==207 || Cart.Mapper==82 || Cart.Mapper==552) {
         if (Address < 0x8000) X1Store(Address, Input);
         return;

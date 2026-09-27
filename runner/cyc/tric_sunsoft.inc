@@ -73,3 +73,28 @@ inline void TricMapper::Sunsoft4Store(ushort Address, byte Input) {
     }
     Sunsoft4Apply();
 }
+
+// ---- Sunsoft-3 (nesdev wiki, INES Mapper 067) ----
+// mask $F800: $8000 IRQ ack; $8800/$9800/$A800/$B800 2 KiB CHR; $C800 counter
+// high then low (like PPUADDR); $D800 bit 4 count/pause, resets the byte
+// toggle; $E800 mirroring 0 V / 1 H / 2 1scA / 3 1scB; $F800 16 KiB PRG.
+// Counts down each CPU cycle; on $0000 -> $FFFF it disables itself and asserts.
+inline void TricMapper::Sunsoft3Store(ushort Address, byte Input) {
+    unsigned reg = (Address >> 11) & 31;           // A15-A11
+    if (reg == 16) IrqOut = false;                 // $8000
+    else if (reg == 17 || reg == 19 || reg == 21 || reg == 23) MapCHR2((reg - 17) / 2, Input);
+    else if (reg == 25) {                          // $C800
+        if (S3LowNext) S3Counter = (ushort)((S3Counter / 256) * 256 + Input);
+        else S3Counter = (ushort)(Input * 256 + S3Counter % 256);
+        S3LowNext = !S3LowNext;
+    } else if (reg == 27) { IrqEnable = (Input & 16) != 0; S3LowNext = false; }   // $D800
+    else if (reg == 29) {                          // $E800
+        static const byte m[4] = { TRIC_MIRROR_VERTICAL, TRIC_MIRROR_HORIZONTAL, TRIC_MIRROR_SCREEN_A, TRIC_MIRROR_SCREEN_B };
+        Mirroring = m[Input % 4];
+    } else if (reg == 31) MapPRG16(0, Input);      // $F800
+}
+inline void TricMapper::Sunsoft3Clock() {
+    if (!IrqEnable) return;
+    if (S3Counter == 0) { S3Counter = 0xffff; IrqEnable = false; IrqOut = true; }
+    else --S3Counter;
+}

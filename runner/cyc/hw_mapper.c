@@ -680,6 +680,7 @@ static const struct {
     { 48, "Taito TC0690", 1, 0 },
     { 210, "Namco 175 / 340", 0, 0 },
     { 68, "Sunsoft-4", 0, 1 },
+    { 67, "Sunsoft-3", 0, 0 },
     { 41, "Caltron 6-in-1", 0, 0 },
     { 185, "CNROM + copy protection", 0, 0 },
     { 228, "Active Enterprises", 0, 0 },
@@ -774,7 +775,7 @@ void hw_cart_power_on(void)
     hw_cart.chr_ciram = 0;
     int i = mapper_index(hw_cart.mapper);
     hw_cart.watch_ppu_addr = i >= 0 ? MAPPERS[i].watch_ppu_addr : 0;
-    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==19 || hw_cart.mapper==18 || hw_cart.mapper==48 || hw_cart.mapper==64 || hw_cart.mapper==158 || hw_cart.mapper==65 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
+    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==19 || hw_cart.mapper==18 || hw_cart.mapper==48 || hw_cart.mapper==64 || hw_cart.mapper==158 || hw_cart.mapper==65 || hw_cart.mapper==67 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
     hw_cart.mirroring = hw_cart.info.vertical ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
     hw_cart.wram_bank = 0;
     hw_cart.has_wram = hw_cart.info.prg_size ? hw_cart.wram_len != 0 : i >= 0 ? MAPPERS[i].wram : 0;
@@ -804,6 +805,7 @@ void hw_cart_power_on(void)
     case 65: hw_cart.m.reg[1] = 1; irem_h3001_apply(); map_chr8(0); break;
     case 80: case 207: case 82: case 552: taito_x1_apply(); break;
     case 68: sunsoft4_apply(); break;
+    case 67: uxrom_reset(); break;
     case 41: nrom_reset(); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
     case 185: nrom_reset(); break;
     /* The games expect $00 written to $8000 at power-on and reset. */
@@ -1046,6 +1048,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 3:  cnrom_write(value); break;
     case 4: case 118: case 119: mmc3_write(addr, value); break;
     case 68: sunsoft4_write(addr, value); break;
+    case 67: sunsoft3_write(addr, value); break;
     case 185: hw_cart.m.latch = value & hw_cart_prg_read(addr); break;
     case 18: jaleco_write(addr, value); break;
     case 64: case 158: rambo_write(addr, value); break;
@@ -1121,6 +1124,7 @@ void hw_cart_cpu_clock(void)
     if (hw_cart.mapper==48) { tc0690_cpu_clock(); return; }
     if (hw_cart.mapper==64 || hw_cart.mapper==158) { rambo_cpu_clock(); return; }
     if (hw_cart.mapper==65) { irem_h3001_clock(); return; }
+    if (hw_cart.mapper==67) { sunsoft3_clock(); return; }
     if (bandai_board()) { bandai_clock(); return; }
     if (hw_cart.mapper==85) vrc7_audio_clock();
     if (vrc6_board()) vrc6_audio_clock();
@@ -1216,7 +1220,7 @@ uint64_t hw_cart_state_hash(uint64_t h)
         acc = acc * 131 + hw_cart.m.pattern_addr;
     }
     if (hw_cart.mapper==40 || bandai_board() || vrc24_board() || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85 ||
-        hw_cart.mapper==80 || hw_cart.mapper==207 || hw_cart.mapper==82 || hw_cart.mapper==552 || hw_cart.mapper==65) {
+        hw_cart.mapper==80 || hw_cart.mapper==207 || hw_cart.mapper==82 || hw_cart.mapper==552 || hw_cart.mapper==65 || hw_cart.mapper==67) {
         for (unsigned i=0; i<8; ++i) acc = acc*131 + hw_cart.m.vrc_chr[i];
         acc = acc*131 + hw_cart.m.irq_latch16;
         acc = acc*131 + hw_cart.m.irq_counter16;
@@ -1295,7 +1299,7 @@ void hw_cart_state_dump(void *file)
             fprintf(f,"cart.vrc6.ch%u %02X %02X %02X timer=%u step=%u\n",ch,
                     a->reg[ch][0],a->reg[ch][1],a->reg[ch][2],a->timer[ch],a->step[ch]);
     }
-    if (hw_cart.mapper==40 || bandai_board() || vrc24_board() || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85 || hw_cart.mapper == 65) {
+    if (hw_cart.mapper==40 || bandai_board() || vrc24_board() || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85 || hw_cart.mapper == 65 || hw_cart.mapper == 67) {
         for (unsigned i=0; i<8; ++i) fprintf(f, "cart.vrc_chr[%u] %03X\n", i, hw_cart.m.vrc_chr[i]);
         fprintf(f, "cart.irq_latch16 %04X\ncart.irq_counter16 %04X\ncart.irq_prescaler %d\ncart.irq_mode %u\n",
                 hw_cart.m.irq_latch16, hw_cart.m.irq_counter16, hw_cart.m.irq_prescaler, hw_cart.m.irq_mode);

@@ -219,6 +219,35 @@ static void test_mapper_namco118(void)
     no_wram();
 }
 
+/* nesdev wiki, INES Mapper 067: Sunsoft-3. */
+static void test_mapper67(void)
+{
+    cart(67, 256, 256);
+    CHECK(hw_cart.watch_cpu);
+    prg_banks(0, 1, 30, 31);
+    hw_cart_cpu_write(0xf800, 5); prg_banks(10, 11, 30, 31);
+    hw_cart_cpu_write(0xffff, 2); prg_banks(4, 5, 30, 31);
+    hw_cart_cpu_write(0x8800, 3); chr_bank(0, 6, 2);
+    hw_cart_cpu_write(0xb800, 0x40); chr_bank(6, 0x80, 2);
+    hw_cart_cpu_write(0x9000, 9); chr_bank(2, 2, 2);                    /* not a register */
+    hw_cart_cpu_write(0xe800, 1); CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    hw_cart_cpu_write(0xe800, 3); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_B);
+    no_wram();
+    /* Counter loaded high then low; runs with $D800 bit 4; wrap disables and asserts. */
+    hw_cart_cpu_write(0xc800, 0x00); hw_cart_cpu_write(0xc800, 0x03);
+    CHECK(hw_cart.m.irq_counter16 == 3);
+    cpu_cycles(5); CHECK(hw_cart.m.irq_counter16 == 3);              /* paused */
+    hw_cart_cpu_write(0xd800, 0x10);
+    cpu_cycles(3); CHECK(hw_cart.m.irq_counter16 == 0 && !hw_cart_irq());
+    cpu_cycles(1); CHECK(hw_cart.m.irq_counter16 == 0xffff && hw_cart_irq() && !hw_cart.m.irq_enable);
+    cpu_cycles(4); CHECK(hw_cart.m.irq_counter16 == 0xffff);
+    hw_cart_cpu_write(0xd800, 0x10); CHECK(hw_cart_irq());          /* only $8000 acknowledges */
+    hw_cart_cpu_write(0x8000, 0); CHECK(!hw_cart_irq());
+    /* $D800 resets the byte toggle. */
+    hw_cart_cpu_write(0xd800, 0); hw_cart_cpu_write(0xc800, 0x12); hw_cart_cpu_write(0xd800, 0);
+    hw_cart_cpu_write(0xc800, 0x34); hw_cart_cpu_write(0xc800, 0x56); CHECK(hw_cart.m.irq_counter16 == 0x3456);
+}
+
 /* nesdev wiki, INES Mapper 065: Irem H3001. */
 static void test_mapper65(void)
 {
@@ -907,6 +936,7 @@ int main(void)
     test_mapper64();
     test_mapper158();
     test_mapper65();
+    test_mapper67();
     test_mapper_namco118();
     test_mapper140();
     test_mapper113();

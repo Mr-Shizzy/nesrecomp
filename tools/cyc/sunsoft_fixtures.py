@@ -129,6 +129,88 @@ def sunsoft4_contract():
     return ppu_contract(68, 128, 256, ops, '_sunsoft4')
 
 
+def sunsoft3_irq_phase():
+    """Sunsoft-3: the counter is loaded directly ($C800 high then low) and runs
+    while $D800 bit 4 is set; wrapping $0000 -> $FFFF disables it and asserts.
+    Each of 64 IRQs stores the low byte of a 13-cycle main-loop counter, burns
+    X+1 five-cycle passes, reloads $0100 and restarts the counter, then
+    acknowledges with a $8000 write (the final IRQ only acknowledges)."""
+    code = bytearray([0x78, 0xd8, 0xa2, 0xff, 0x9a])
+
+    def store(a, v):
+        code.extend([0xa9, v, 0x8d, a & 255, a >> 8])
+
+    store(0x10, 0)
+    store(0x11, 0)
+    store(0x4017, 0x40)
+    store(0xd800, 0)
+    store(0xc800, 0x01)
+    store(0xc800, 0x00)
+    store(0xd800, 0x10)
+    code.extend([0x58, 0xe6, 0x10, 0xa5, 0x11, 0xc9, 64, 0x90, 0xf8, 0xa9, 0x42])
+    done = 0x8000 + len(code)
+    code.extend([0x4c, done & 255, done >> 8])
+    assert len(code) < 0x100
+    # PHA; TXA; PHA; LDX $11; LDA $10; STA $0300,X; INC $11; INX; loop: DEX; BNE loop;
+    # LDA $11; CMP #64; BCS ack; LDA #0; STA $D800; LDA #1; STA $C800; LDA #0; STA $C800;
+    # LDA #$10; STA $D800; ack: STA $8000; PLA; TAX; PLA; RTI
+    restart = bytes([0xa9, 0, 0x8d, 0x00, 0xd8, 0xa9, 1, 0x8d, 0x00, 0xc8, 0xa9, 0, 0x8d, 0x00, 0xc8,
+                     0xa9, 0x10, 0x8d, 0x00, 0xd8])
+    handler = bytes([0x48, 0x8a, 0x48, 0xa6, 0x11, 0xa5, 0x10, 0x9d, 0x00, 0x03, 0xe6, 0x11,
+                     0xe8, 0xca, 0xd0, 0xfd, 0xa5, 0x11, 0xc9, 64, 0xb0, len(restart)]) + restart +         bytes([0x8d, 0x00, 0x80, 0x68, 0xaa, 0x68, 0x40])
+    prg = bytearray([0xff]) * 131072
+    for bank in range(8):
+        start = bank * 16384
+        prg[start:start + len(code)] = code
+        prg[start + 0x100:start + 0x100 + len(handler)] = handler
+        prg[start + 16384 - 6:start + 16384] = bytes([0, 0x81, 0, 0x80, 0, 0x81])
+    chr_rom = b''.join(bytes([page & 255]) * 1024 for page in range(8))
+    header = b'NES\x1a' + bytes([8, 1, 0x30, 0x40]) + bytes(8)
+    return 'sunsoft3_irq_phase', header + prg + chr_rom, '00:8000\n00:8100\n', 'final:A=42'
+
+
+def sunsoft3_ack_program():
+    """Only $8000 acknowledges, and $D800 resets the byte toggle. A dangling
+    $C800 write ($77, high) is followed by $D800, so $00/$40 load $0040. The
+    main loop counts passes until the IRQ into $13. The handler's first entry
+    writes only $D800 (pause): /IRQ must stay asserted, so RTI re-enters at
+    once; the second entry acknowledges with $8000. A=$42 when $12 = 2."""
+    code = bytearray([0x78, 0xd8, 0xa2, 0xff, 0x9a])
+
+    def store(a, v):
+        code.extend([0xa9, v, 0x8d, a & 255, a >> 8])
+
+    store(0x12, 0)
+    store(0x13, 0)
+    store(0x4017, 0x40)
+    store(0xc800, 0x77)
+    store(0xd800, 0)
+    store(0xc800, 0x00)
+    store(0xc800, 0x40)
+    store(0xd800, 0x10)
+    # CLI; loop: INC $13; LDA $12; BEQ loop; wait: LDA $12; CMP #2; BCC wait; BNE fail;
+    # LDA #$42; done: JMP done; fail: LDA #$EE; JMP fail
+    code.extend([0x58, 0xe6, 0x13, 0xa5, 0x12, 0xf0, 0xfa, 0xa5, 0x12, 0xc9, 2, 0x90, 0xfa, 0xd0, 5,
+                 0xa9, 0x42])
+    done = 0x8000 + len(code)
+    code.extend([0x4c, done & 255, done >> 8])
+    fail = 0x8000 + len(code)
+    code.extend([0xa9, 0xee, 0x4c, fail & 255, fail >> 8])
+    assert len(code) < 0x100
+    # PHA; INC $12; LDA $12; CMP #1; BNE ack; LDA #0; STA $D800; PLA; RTI; ack: STA $8000; PLA; RTI
+    handler = bytes([0x48, 0xe6, 0x12, 0xa5, 0x12, 0xc9, 1, 0xd0, 7, 0xa9, 0, 0x8d, 0x00, 0xd8, 0x68, 0x40,
+                     0x8d, 0x00, 0x80, 0x68, 0x40])
+    prg = bytearray([0xff]) * 131072
+    for bank in range(8):
+        start = bank * 16384
+        prg[start:start + len(code)] = code
+        prg[start + 0x100:start + 0x100 + len(handler)] = handler
+        prg[start + 16384 - 6:start + 16384] = bytes([0, 0x81, 0, 0x80, 0, 0x81])
+    chr_rom = b''.join(bytes([page & 255]) * 1024 for page in range(8))
+    header = b'NES\x1a' + bytes([8, 1, 0x30, 0x40]) + bytes(8)
+    return 'sunsoft3_ack', header + prg + chr_rom, '00:8000\n00:8100\n', 'final:A=42'
+
+
 def sunsoft_fixtures():
     yield handoff('sunsoft4_prg', 68, [(0xf000, 3)], 6)
     yield handoff('sunsoft4_prg_d', 68, [(0xfabc, 0x1e)], 12, chr_kb=256)
@@ -139,3 +221,13 @@ def sunsoft_fixtures():
     yield fme7_irq_program()
     yield fme7_irq_program(dma=True)
     yield from s5b_fixtures()
+    yield handoff('sunsoft3_prg', 67, [(0xf800, 3)], 6)
+    yield handoff('sunsoft3_prg_mirror', 67, [(0xff00, 3)], 6)               # A10-A0 ignored
+    yield ppu_contract(67, 128, 128, [
+        ('cpu', 0x8800, 5), ('read', 0, 10), ('read', 0x0400, 11),
+        ('cpu', 0xb800, 0x21), ('read', 0x1c00, 0x43), ('cpu', 0x9000, 7), ('read', 0x0800, 2),
+        ('cpu', 0xe800, 0), ('write', 0x2000, 0x31), ('write', 0x2400, 0x32), ('read', 0x2800, 0x31),
+        ('cpu', 0xe800, 1), ('read', 0x2800, 0x32), ('cpu', 0xe800, 2), ('read', 0x2c00, 0x31),
+        ('cpu', 0xe800, 3), ('read', 0x2000, 0x32)])
+    yield sunsoft3_irq_phase()
+    yield sunsoft3_ack_program()
