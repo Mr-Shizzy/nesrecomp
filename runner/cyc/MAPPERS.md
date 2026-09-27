@@ -65,6 +65,18 @@ models; it does not independently establish the mapper specification.
 | 13 | [CPROM](https://www.nesdev.org/wiki/CPROM) | Fixed PRG; 16 KiB CHR RAM, upper 4 KiB switchable; vertical mirroring; AND conflicts. |
 | 11 | [Color Dreams](https://www.nesdev.org/wiki/Color_Dreams) | 32 KiB PRG / 8 KiB CHR; AND bus conflicts. Conflict-free prototypes excluded. |
 
+Where references disagree, observation of real games decides. The TC0690 IRQ
+delay was observable: nesdev's "about 4 CPU cycles" put Flintstones' status-bar
+split mid-scanline, and a sweep rendered it cleanly and identically only for
+20-24 cycles, so 22 (also Mesen2's value) is used. The other differences from
+Mesen2 were A/B-tested by switching each to Mesen2's behavior and replaying the
+owner titles that use the board for 3000 frames: Namco 340 mirroring order
+(Famista '92), N163 write-protect nibble and auto-increment wrap (Megami Tensei
+II, Final Lap), SS88006 IRQ one count early (Goal!!) and the X1-005 2 KiB CHR
+bit 0 and $7EF7 mirror (Fudou Myouou Den). Every frame's bus trace and memory
+hash were identical, so none is exercised by those games; the nesdev register
+descriptions are kept, and fixtures pin them.
+
 [NES 2.0](https://www.nesdev.org/wiki/NES_2.0) decoding now preserves the 12-bit
 mapper, submapper, extended/exponent ROM lengths, RAM/NVRAM sizes, trainer offset,
 timing, and console type. Unknown submappers, unsupported console/timing models,
