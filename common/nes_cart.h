@@ -101,9 +101,9 @@ static inline uint32_t nes_crc32(uint32_t crc, const uint8_t *data, size_t len)
 }
 
 /* Known dumps whose iNES header omits or misnames the board. Many Namco
- * 175/340 games were dumped as mapper 19 before mapper 210 existed, and
- * iNES cannot carry mapper 185's CHR-enable submapper (nesdev wiki, INES
- * Mapper 210 and 185). Keyed by CRC-32 of PRG+CHR; board facts from
+ * 175/340 games were dumped as mapper 19 before mapper 210 existed, Taito
+ * TC0690 (IRQ) games as TC0190 mapper 33, and iNES cannot carry mapper
+ * 185's CHR-enable submapper (nesdev wiki, INES Mapper 210, 048 and 185). Keyed by CRC-32 of PRG+CHR; board facts from
  * NewRisingSun's NES 2.0 header database (via Mesen2 b9fa69d MesenNesDB.txt).
  * mirror: 0 keeps the header, 1 horizontal, 2 vertical. A NES 2.0 header
  * that names a submapper is trusted as written. */
@@ -134,6 +134,14 @@ static const NesKnownDump nes_known_dumps[] = {
     { 0xC247CC80u, 210, 1, 2, 2048 },
     { 0xD0C50F17u, 210, 2, 2, 0 },
     { 0xD323B806u, 210, 2, 2, 0 },
+    { 0x043268BBu, 48, 0, 0, 0 },
+    { 0x1500E835u, 48, 0, 0, 0 },
+    { 0x40C0AD47u, 48, 0, 0, 0 },
+    { 0x6CDC0CD9u, 48, 0, 0, 0 },
+    { 0x99C395F9u, 48, 0, 0, 0 },
+    { 0xA7B0536Cu, 48, 0, 0, 0 },
+    { 0xAEBD6549u, 48, 0, 0, 0 },
+    { 0xE2C94BC2u, 48, 0, 0, 0 },
     { 0x0F05FF0Au, 185, 4, 0, 0 },
     { 0x5C2E138Eu, 185, 6, 0, 0 },
     { 0x74F0A89Fu, 185, 7, 0, 0 },
@@ -153,12 +161,15 @@ static const NesKnownDump nes_known_dumps[] = {
 
 static inline void nes_cart_known_dump(NesCartInfo *c, const uint8_t *data, size_t len)
 {
-    bool ambiguous = (c->mapper == 19 && !c->nes2) || ((c->mapper == 210 || c->mapper == 185) && !c->submapper);
+    bool ambiguous = ((c->mapper == 19 || c->mapper == 33) && !c->nes2) ||
+                     ((c->mapper == 210 || c->mapper == 185) && !c->submapper);
     if (ambiguous) {
         uint32_t crc = nes_crc32(0, data, len);
         for (size_t i = 0; i < sizeof(nes_known_dumps)/sizeof(nes_known_dumps[0]); ++i) {
             const NesKnownDump *k = &nes_known_dumps[i];
-            if (k->crc != crc || (k->mapper == 185) != (c->mapper == 185)) continue;
+            /* Only the header mix-ups each entry documents: 19 -> 210, 33 -> 48, 185 -> 185. */
+            unsigned from = k->mapper == 210 ? 19 : k->mapper == 48 ? 33 : k->mapper;
+            if (k->crc != crc || (c->mapper != from && c->mapper != k->mapper)) continue;
             c->mapper = k->mapper; c->submapper = k->submapper;
             if (k->mirror) c->vertical = k->mirror == 2;
             if (k->mapper == 210) { c->prg_ram = 0; c->prg_nvram = k->prg_nvram; c->battery = k->prg_nvram != 0; }

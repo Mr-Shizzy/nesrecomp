@@ -30,7 +30,6 @@ static uint32_t frame_argb[256 * 240];
 static void clock_cpu_devices(void)
 {
     apu_cycle();
-    if (hw_cart.watch_cpu && hw_cart.mapper!=5) hw_cart_cpu_clock();
 }
 
 /* ------------------------------------------------------------------------- */
@@ -45,9 +44,11 @@ static inline void sample_nmi(void)
 
 static inline void run_tick(unsigned k)
 {
-    /* MMC5 samples the PPU /RD pin at the CPU edge, before a coincident PPU
-     * transition. Keep the same CPU -> cartridge -> PPU order as the oracle. */
-    if (k==0 && hw_cart.mapper==5) hw_cart_cpu_clock();
+    /* The cartridge's M2 clock comes at the CPU edge, before a coincident PPU
+     * transition, in the oracle's CPU -> cartridge -> PPU order. MMC5 samples
+     * the PPU /RD pin there, and a counter started by a PPU event on this tick
+     * (the TC0690's delayed IRQ) first counts on the next CPU cycle. */
+    if (k==0 && hw_cart.watch_cpu) hw_cart_cpu_clock();
     if (k == 4) sample_nmi();
     else if (k == 7) apu_sample_irq();
     unsigned q = (hw.align + k) & 3;
@@ -110,7 +111,7 @@ static void run_ticks_1_to_11(void)
 /* run_tick(0) without the CPU's access. */
 static inline void run_tick_0(void)
 {
-    if (hw_cart.mapper==5) hw_cart_cpu_clock();
+    if (hw_cart.watch_cpu) hw_cart_cpu_clock();
     if (hw.align == 0) ppu_dot();
     else if (hw.align == 2) ppu_half_dot();
     clock_cpu_devices();
