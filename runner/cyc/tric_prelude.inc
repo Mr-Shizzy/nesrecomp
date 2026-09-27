@@ -135,6 +135,9 @@ struct TricMapper {
     void Sunsoft4Store(ushort Address, byte Input);
     void Action52Store(ushort Address, byte Input);
     bool Action52Open;             // mapper 228: the absent third chip is selected
+    byte DataReads;                // mapper 185: $2007 reads since power-on
+    bool Cnrom185Chr();
+    void DataPortRead();
     void MMC1Apply();
     void MMC1Write(ushort Address, byte Input);
     void MMC3Apply();
@@ -401,6 +404,13 @@ inline void TricMapper::Action52Store(ushort Address, byte Input) {
     Mirroring = (Address & 0x2000) ? TRIC_MIRROR_HORIZONTAL : TRIC_MIRROR_VERTICAL;
 }
 
+// ---- CNROM + copy protection (nesdev wiki, INES Mapper 185) ----
+inline void TricMapper::DataPortRead() { if (Cart.Mapper == 185 && DataReads != 255) DataReads++; }
+inline bool TricMapper::Cnrom185Chr() {
+    if (Cart.Info.submapper >= 4) return Latch % 4 == Cart.Info.submapper - 4;
+    return DataReads >= 3;   // submapper 0: the first two $2007 fetches see no CHR
+}
+
 // ---- reset ----
 
 inline void TricMapper::Reset() {
@@ -425,6 +435,7 @@ inline void TricMapper::Reset() {
     IrqDivider = 341; IrqMode = 0;
     Fme7Cmd = Fme7IrqCtrl = 0; memset(Fme7Reg, 0, sizeof(Fme7Reg)); Fme7Counter = 0;
     Action52Open = false;
+    DataReads = 0;
     memset(NamcoChr, 0, sizeof(NamcoChr)); memset(NamcoNt, 0, sizeof(NamcoNt)); memset(NamcoPrg, 0, sizeof(NamcoPrg));
     memset(NamcoCiramChr, 0, sizeof(NamcoCiramChr));
     NamcoProtect = NamcoRamEnable = NamcoSndAddr = NamcoSndStep = 0; NamcoSndCh = 7; NamcoSndInc = false; NamcoIrq = 0;
@@ -722,6 +733,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     case 4: case 118: case 119: MMC3Write(Address, Input); break;
     case 68: Sunsoft4Store(Address, Input); break;
     case 228: Action52Store(Address, Input); break;
+    case 185: Latch = (byte)(Input & SnoopCPU(Address)); break;
     case 7:
         Latch = Input;
         MapPRG32(Input & 7);
@@ -765,6 +777,7 @@ inline void TricMapper::PatternReadEnd(bool Reading) {
 
 inline byte TricMapper::SnoopPPU(ushort Address) {
     if (Cart.Mapper==5 && Address>=8192) return MMC5NT(Address,false);
+    if (Address < 0x2000 && Cart.Mapper == 185 && !Cnrom185Chr()) return (byte)(Address | 1);
     if (Address < 0x2000 && ChrRamSelected(Address)) return Cart.CHRRAM[ChrLow[Address >> 10] * 1024 + (Address & 1023)];
     if (Address < 0x2000) return Cart.CHRROM[FetchPatternAddress(Address)];
     if (VRC6Board()) {
@@ -806,6 +819,12 @@ inline void TricMapper::AccessPPU() {
     if (Cart.Mapper == 68 && SeventyTwoPinConnector[64] && (Ctrl & 16)) {
         PPU_DataIn = PPU_NonTiltData;   // ROM: writes are dropped
         if (!SeventyTwoPinConnector[20]) PPU_NonTiltData = PPU_DataOut = Cart.CHRROM[Sunsoft4Page(Address)];
+        return;
+    }
+    // Mapper 185 with the protection engaged leaves the CHR ROM undriven:
+    // the address byte stays on the pins, D0 pulled up (nesdev INES Mapper 185).
+    if (!SeventyTwoPinConnector[64] && Cart.Mapper == 185 && !Cnrom185Chr()) {
+        if (!SeventyTwoPinConnector[20]) PPU_NonTiltData = PPU_DataOut = (byte)(Address | 1);
         return;
     }
     if (!SeventyTwoPinConnector[64] && ChrRamSelected(Address)) {

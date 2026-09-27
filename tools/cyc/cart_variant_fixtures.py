@@ -20,6 +20,12 @@ def nes2(case, sub=0, ram=0, chr_ram=0, four=False, exponent=False):
 
 
 def variant_fixtures():
+    # Mapper 185 submapper 5: chip-select value 1 enables CHR ROM; writes AND
+    # with the ROM ($B000 holds $FF, $8000 holds SEI = $78).
+    yield nes2(ppu_contract(185, 32, 8, [
+        ('read', 0x0123, 0x23), ('cpu', 0xb000, 1), ('read', 0x0400, 1),
+        ('cpu', 0xb000, 0x11), ('read', 0x0800, 2), ('cpu', 0xb000, 2), ('read', 0x0456, 0x57),
+        ('cpu', 0x8000, 1), ('read', 0x0100, 0x01), ('cpu', 0xb000, 0x01)], '_sub5'), sub=5)
     name,image,seeds,expected=ppu_contract(206,128,64,[('cpu',0x6000,0x57),('cpu_read',0x6000,0x57)],'_popils_ines')
     image=bytearray(image);image[6]|=2
     yield 'namco_'+name,bytes(image),seeds,expected

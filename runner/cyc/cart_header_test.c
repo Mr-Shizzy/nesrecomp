@@ -96,6 +96,15 @@ int main(void)
     h[6]=0x20; h[7]=0xd8; h[8]=0x20; h[10]=0x07; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==210 && !nes_cart_variant_supported(&c));
     h[10]=0; CHECK(nes_cart_header(h,16,&c)); CHECK(nes_cart_variant_supported(&c));
     h[8]=0x30; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
+    /* Mapper 185: submappers 0 and 4-7, one 8 KiB CHR ROM, no RAM. */
+    memset(h,0,sizeof(h)); memcpy(h,"NES",3); h[3]=26; h[4]=2; h[5]=1; h[6]=0x90; h[7]=0xb8;
+    for (unsigned sub=0; sub<16; ++sub) {
+        h[8]=(uint8_t)(sub<<4); CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==185);
+        CHECK(nes_cart_variant_supported(&c)==(sub==0 || (sub>=4 && sub<=7)));
+    }
+    h[8]=0x40; h[5]=2; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
+    { uint8_t data[4]={9,9,9,9}; h[5]=1; h[8]=0; CHECK(nes_cart_header(h,16,&c));
+      nes_cart_known_dump(&c,data,4); CHECK(c.mapper==185 && c.submapper==0); }
     puts("cartridge header contracts passed");
     return 0;
 }

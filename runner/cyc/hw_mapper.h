@@ -75,6 +75,8 @@ void hw_cart_ppu_addr_watched(uint16_t vbus);
 /* A real pattern read, including read-triggered bank latches. Debugger peeks
  * use hw_cart_chr_index directly and must not change cartridge state. */
 uint8_t hw_cart_chr_read(uint16_t addr);
+/* A CPU read of $2007 (mapper 185's submapper-0 heuristic counts them). */
+void hw_cart_ppu_data_read(void);
 /* Finish any read-triggered latch when the PPU releases /RD. */
 void hw_cart_ppu_rd(bool reading);
 /* Once per completed CPU cycle, including cycles stolen by DMA. */

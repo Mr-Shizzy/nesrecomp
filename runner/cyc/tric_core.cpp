@@ -8401,6 +8401,7 @@ static byte FetchBus(ushort Address)
                         PPUBus = dataBus;
                         for (int i = 0; i < 8; i++) { PPUBusDecay[i] = PPUBusDecayConstant; }
 
+                        Cart.MapperChip.DataPortRead();   // NESRecomp: mapper 185's heuristic
                         EmulateUntilEndOfRead();
                         PPU_2007_Read_SR = true; // set the SR latch at the end of the CPU read. Here's where the clock alignment differences begin. :)
                         PPU_2007_Read = true; // Start the $2007 Read state machine.
@@ -9630,6 +9631,7 @@ bool cyc_load_ines(const uint8_t *image, size_t size) {
     case 118: case 119: break;
     case 69: case 68: case 41: case 228: break;
     case 19: case 210: break;
+    case 185: break;
     case 40: case 155: case 0: case 1: case 2: case 3: case 4: case 7: case 66: break;
     default: return false;
     }
