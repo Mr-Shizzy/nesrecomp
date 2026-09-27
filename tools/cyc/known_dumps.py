@@ -69,6 +69,11 @@ def bandai152(sub, wram, sram, battery, mirror):
     return 0, 0, 0, 0, 0
 
 
+def namco154(sub, wram, sram, battery, mirror):
+    # NAMCOT-3453 (Devil Man): mapper 88 plus one-screen control, dumped as 88.
+    return 0, 0, 0, 0, 0
+
+
 def konami_vrc(sub, wram, sram, battery, mirror):
     # VRC2 vs VRC4 address wiring (submappers) and PRG RAM: VRC2 boards have none, only
     # the $6000 microwire latch, which iNES cannot distinguish from 8 KiB of WRAM.
@@ -78,7 +83,7 @@ def konami_vrc(sub, wram, sram, battery, mirror):
 
 RULES = {
     210: (19, namco210), 48: (33, tc0690), 207: (80, x1005_207), 185: (185, cnrom185),
-    152: (70, bandai152),
+    152: (70, bandai152), 154: (88, namco154),
     16: (16, bandai16), 159: (16, bandai159), 157: (16, datach157),
     21: (21, konami_vrc), 23: (23, konami_vrc), 25: (25, konami_vrc),
 }

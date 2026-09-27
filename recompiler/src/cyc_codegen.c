@@ -508,7 +508,7 @@ static int fixed_bank_for(int mapper, uint32_t banks, uint32_t slot) {
     unsigned slots;
     switch (mapper) {
     case 0: case 3: case 13: case 87: case 184: case 185: slots = 255; break; /* all PRG fixed */
-    case 157: case 159: case 16: case 2: case 68: case 33: case 48: case 10: case 22: case 73: case 71: case 76: case 94: case 206: case 70: case 152: slots = 240; break; /* last 16 KiB */
+    case 157: case 159: case 16: case 2: case 68: case 33: case 48: case 10: case 22: case 73: case 71: case 76: case 94: case 206: case 88: case 95: case 154: case 70: case 152: slots = 240; break; /* last 16 KiB */
     case 9: slots = 252; break;                                  /* last 24 KiB */
     case 85: case 24: case 26: case 4: case 118: case 119: case 69: case 19: case 210: case 18: case 64: case 158: case 65: case 32: case 80: case 207: case 82: case 552: case 21: case 23: case 25: case 75: slots = 192; break;         /* last 8 KiB */
     case 180: slots = 15; break;                                 /* first 16 KiB */
@@ -533,7 +533,7 @@ static int power_on_bank8_for(int mapper, uint32_t banks, uint32_t slot) {
     case 10: return slot >= 2 ? (int)(banks - 4 + slot) : (int)slot;
     case 71: return slot >= 2 ? (int)(banks - 2 + slot - 2) : (int)slot;
     case 75: return slot == 3 ? (int)(banks - 1) : (int)slot;
-    case 206: return slot >= 2 ? (int)(banks - 2 + slot - 2) : (int)slot;
+    case 206: case 88: case 95: case 154: return slot >= 2 ? (int)(banks - 2 + slot - 2) : (int)slot;
     case 76: return slot >= 2 ? (int)(banks - 2 + slot - 2) : (int)slot;
     case 94: return slot >= 2 ? (int)(banks - 2 + slot - 2) : (int)slot;
     case 70: case 152: return slot >= 2 ? (int)(banks - 2 + slot - 2) : (int)slot;
@@ -1388,6 +1388,9 @@ static const char *mapper_name(int mapper) {
     case 71: return "Camerica";
     case 75: return "VRC1";
     case 206: return "DxROM";
+    case 88: return "Namco 118 (NAMCOT-3433)";
+    case 95: return "Namco 118 (NAMCOT-3425)";
+    case 154: return "Namco 118 (NAMCOT-3453)";
     case 76: return "Namco 109";
     case 79: return "NINA-003/006";
     case 87: return "J87";

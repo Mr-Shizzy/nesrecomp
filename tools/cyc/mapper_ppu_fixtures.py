@@ -135,6 +135,21 @@ def ppu_fixtures():
         ('cpu', 0x6024, 0), ('write', 0x2000, 0x31), ('read', 0x2400, 0x31),
         ('cpu', 0x6004, 0), ('read', 0x2800, 0x31),
         ('cpu_read', 0x6000, 0x60)])
+    # Namco 118: 88/154 put the right pattern table in the second 64 KiB;
+    # 154's bit 6 selects one screen; 95's CHR A15 (bank bit 5) is CIRAM A10.
+    yield ppu_contract(88, 128, 128, [
+        ('cpu', 0x8000, 0), ('cpu', 0x8001, 0x45), ('cpu', 0x8000, 2), ('cpu', 0x8001, 0x03),
+        ('read', 0, 4), ('read', 0x0400, 5), ('read', 0x1000, 0x43),
+        ('write', 0x2000, 0x31), ('read', 0x2400, 0x31)])
+    yield ppu_contract(154, 128, 128, [
+        ('cpu', 0x8000, 2), ('cpu', 0x8001, 0x03), ('read', 0x1000, 0x43),
+        ('write', 0x2000, 0x31), ('read', 0x2c00, 0x31),
+        ('cpu', 0xc000, 0x40), ('write', 0x2400, 0x32), ('read', 0x2800, 0x32),
+        ('cpu', 0x8000, 0x00), ('read', 0x2000, 0x31)])
+    yield ppu_contract(95, 128, 32, [
+        ('cpu', 0x8000, 0), ('cpu', 0x8001, 0x20), ('cpu', 0x8000, 1), ('cpu', 0x8001, 0x02),
+        ('write', 0x2000, 0x31), ('read', 0x2400, 0x31), ('write', 0x2800, 0x32), ('read', 0x2c00, 0x32),
+        ('cpu', 0x8000, 0), ('cpu', 0x8001, 0x00), ('read', 0x2000, 0x32)])
     yield ppu_contract(206, 128, 64, [
         ('cpu', 0x8000, 0), ('cpu', 0x8001, 0xff),
         ('cpu', 0x8000, 2), ('cpu', 0x8001, 0xc5),

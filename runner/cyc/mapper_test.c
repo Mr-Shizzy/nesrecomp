@@ -190,6 +190,35 @@ static void test_taito(void)
     cpu_cycles(2); hw_cart_cpu_write(0xc003, 0); cpu_cycles(10); CHECK(!hw_cart_irq());
 }
 
+/* Namco 118 boards (nesdev wiki, INES Mapper 088, 095, 154): Namco 108
+ * banking; 88/154 wire PPU A12 to CHR A16, 154 adds one-screen control in bit
+ * 6 of any $8000-$FFFF write, 95 wires CHR A15 to CIRAM A10. */
+static void test_mapper_namco118(void)
+{
+    cart(88, 128, 128);
+    hw_cart_cpu_write(0x8000, 0); hw_cart_cpu_write(0x8001, 0x45);    /* R0 -> $04, left half */
+    hw_cart_cpu_write(0x8000, 2); hw_cart_cpu_write(0x8001, 0x03);    /* R2 -> $43, right half */
+    hw_cart_cpu_write(0x8000, 6); hw_cart_cpu_write(0x8001, 5);
+    chr_bank(0, 0x04, 2); chr_bank(4, 0x43, 1); prg_banks(5, 1, 14, 15);
+    CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);                 /* soldered */
+    hw_cart_cpu_write(0xc000, 0x40); CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    no_wram();
+    cart(154, 128, 128);
+    CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_A);
+    hw_cart_cpu_write(0xe000, 0x40); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_B);
+    prg_banks(0, 1, 14, 15);                                           /* $E000 writes no bank */
+    hw_cart_cpu_write(0x8000, 0x02); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_A);
+    hw_cart_cpu_write(0x8001, 0x47); chr_bank(4, 0x47, 1); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_B);
+    cart(95, 128, 32);
+    hw_cart_cpu_write(0x8000, 0); hw_cart_cpu_write(0x8001, 0x20);
+    hw_cart_cpu_write(0x8000, 1); hw_cart_cpu_write(0x8001, 0x02);
+    CHECK(hw_cart_nt_a10(0x2000) == 0x400 && hw_cart_nt_a10(0x2400) == 0x400);
+    CHECK(hw_cart_nt_a10(0x2800) == 0 && hw_cart_nt_a10(0x2c00) == 0);
+    hw_cart_cpu_write(0x8000, 1); hw_cart_cpu_write(0x8001, 0x22);
+    CHECK(hw_cart_nt_a10(0x2800) == 0x400);
+    no_wram();
+}
+
 /* nesdev wiki, INES Mapper 065: Irem H3001. */
 static void test_mapper65(void)
 {
@@ -878,6 +907,7 @@ int main(void)
     test_mapper64();
     test_mapper158();
     test_mapper65();
+    test_mapper_namco118();
     test_mapper140();
     test_mapper113();
     test_mapper94();

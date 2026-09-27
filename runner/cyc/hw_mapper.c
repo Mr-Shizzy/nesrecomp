@@ -271,6 +271,15 @@ static void mmc3_chr1(unsigned page, unsigned bank)
     else map_chr1(page, (int)bank);
 }
 
+/* Namco 118 boards NAMCOT-3433/3453 (mappers 88, 154) wire PPU A12 to CHR
+ * A16: the left pattern table reads the first 64 KiB, the right the second
+ * (nesdev wiki, INES Mapper 088). */
+static unsigned namco108_chr_a16(unsigned page, unsigned bank)
+{
+    if (hw_cart.mapper != 88 && hw_cart.mapper != 154) return bank;
+    return (bank & 0x3f) | (page >= 4 ? 0x40 : 0);
+}
+
 static void mmc3_apply(void)
 {
     const uint8_t *r = hw_cart.m.reg;
@@ -290,8 +299,8 @@ static void mmc3_apply(void)
     unsigned big = (hw_cart.m.bank_select & 0x80) ? 4 : 0;   /* page of the 2KB pair */
     unsigned small = big ^ 4;
     for (unsigned i = 0; i < 4; ++i) {
-        mmc3_chr1(big + i, (r[i >> 1] & 0xfe) | (i & 1));
-        mmc3_chr1(small + i, r[2 + i]);
+        mmc3_chr1(big + i, namco108_chr_a16(big + i, (r[i >> 1] & 0xfe) | (i & 1)));
+        mmc3_chr1(small + i, namco108_chr_a16(small + i, r[2 + i]));
     }
 }
 
@@ -702,6 +711,9 @@ static const struct {
     { 79, "NINA-003/006", 0, 0 },
     { 76, "Namco 109", 0, 0 },
     { 206, "DxROM", 0, 0 },
+    { 88, "Namco 118 (CHR A16 = PPU A12)", 0, 0 },
+    { 95, "Namco 118 (CHR A15 = CIRAM A10)", 0, 0 },
+    { 154, "Namco 118 (CHR A16 = PPU A12, one-screen)", 0, 0 },
     { 75, "VRC1", 0, 0 },
     { 71, "Camerica", 0, 0 },
     { 34, "BNROM / NINA-001", 0, 0 },
@@ -817,7 +829,8 @@ void hw_cart_power_on(void)
     case 13: nrom_reset(); map_chr4(1, 0); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
     case 71: uxrom_reset(); break;
     case 75: nrom_reset(); map_prg8(3, -1); map_chr4(1, 0); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
-    case 206: hw_cart.m.reg[7] = 1; mmc3_apply(); break;
+    case 206: case 88: case 95: hw_cart.m.reg[7] = 1; mmc3_apply(); break;
+    case 154: hw_cart.m.reg[7] = 1; mmc3_apply(); hw_cart.mirroring = HW_MIRROR_SCREEN_A; break;
     case 76: uxrom_reset(); hw_cart.m.reg[7] = 1; for (unsigned j = 0; j < 4; ++j) map_chr2(j, 0); break;
     case 94: uxrom_reset(); break;
     case 180: map_prg16(0, 0); map_prg16(1, 0); map_chr8(0); break;
@@ -982,7 +995,9 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
         map_chr4(0, hw_cart.m.chr0 | ((hw_cart.m.ctrl & 2) << 3));
         map_chr4(1, hw_cart.m.chr1 | ((hw_cart.m.ctrl & 4) << 2));
         break;
-    case 206: /* DxROM; see MAPPERS.md. */
+    case 206: case 88: case 95: case 154: /* Namco 108 family; see MAPPERS.md. */
+        /* 154's one-screen select answers at all of $8000-$FFFF (nesdev INES Mapper 154). */
+        if (hw_cart.mapper == 154) hw_cart.mirroring = (value & 0x40) ? HW_MIRROR_SCREEN_B : HW_MIRROR_SCREEN_A;
         if (addr < 0xa000) {
             if (!(addr & 1)) hw_cart.m.bank_select = value & 7;
             else {
@@ -1119,6 +1134,8 @@ uint16_t hw_cart_nt_a10(uint16_t addr)
 {
     if (hw_cart.mapper == 118) return txsrom_ciram_a10(addr);
     if (hw_cart.mapper == 158) return rambo158_ciram_a10(addr);
+    /* NAMCOT-3425 (mapper 95): CHR A15 of R0 (upper nametables) or R1 (lower) is CIRAM A10. */
+    if (hw_cart.mapper == 95) return (hw_cart.m.reg[(addr >> 11) & 1] & 0x20) ? 0x400 : 0;
     if (hw_cart.mapper == 19) return namco_nt_a10(addr);
     if (hw_cart.mapper == 207) return x1005_207_ciram_a10(addr);
     return (vrc6_nt_bank((addr >> 10) & 3) & 1) << 10;

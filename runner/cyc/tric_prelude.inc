@@ -340,12 +340,16 @@ inline void TricMapper::MMC3Apply() {
     if (Cart.Mapper == 206 && Cart.Info.submapper == 1) MapPRG32(0);
     uint big = (BankSelect & 0x80) ? 4u : 0u;
     uint small_ = big ^ 4u;
-    MapCHR2(big / 2 + 0, Reg[0] >> 1);
-    MapCHR2(big / 2 + 1, Reg[1] >> 1);
-    MapCHR1(small_ + 0, Reg[2]);
-    MapCHR1(small_ + 1, Reg[3]);
-    MapCHR1(small_ + 2, Reg[4]);
-    MapCHR1(small_ + 3, Reg[5]);
+    // NAMCOT-3433/3453 (88, 154): PPU A12 drives CHR A16 (nesdev wiki, INES Mapper 088).
+    bool a16 = Cart.Mapper == 88 || Cart.Mapper == 154;
+    uint big_hi = a16 ? (big ? 64u : 0u) : 0u, small_hi = a16 ? (small_ ? 64u : 0u) : 0u;
+    uint big_mask = a16 ? 63u : 255u;
+    MapCHR2(big / 2 + 0, (int)(((Reg[0] & big_mask) | big_hi) >> 1));
+    MapCHR2(big / 2 + 1, (int)(((Reg[1] & big_mask) | big_hi) >> 1));
+    MapCHR1(small_ + 0, (int)((Reg[2] & big_mask) | small_hi));
+    MapCHR1(small_ + 1, (int)((Reg[3] & big_mask) | small_hi));
+    MapCHR1(small_ + 2, (int)((Reg[4] & big_mask) | small_hi));
+    MapCHR1(small_ + 3, (int)((Reg[5] & big_mask) | small_hi));
     // The chip's CHR A17 pin for each pattern page, before any ROM-size wrap
     // (nesdev wiki, TxSROM: the pin drives CIRAM A10 on that board).
     for (uint i = 0; i < 4; ++i) {
@@ -573,7 +577,8 @@ inline void TricMapper::Reset() {
     case 13: MapPRG32(0); MapCHR4(0, 0); MapCHR4(1, 0); Mirroring = TRIC_MIRROR_VERTICAL; break;
     case 71: MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0); break;
     case 75: MapPRG32(0); MapPRG8(3, -1); MapCHR4(0, 0); MapCHR4(1, 0); Mirroring = TRIC_MIRROR_VERTICAL; break;
-    case 206: Reg[7] = 1; MMC3Apply(); break;
+    case 206: case 88: case 95: Reg[7] = 1; MMC3Apply(); break;
+    case 154: Reg[7] = 1; MMC3Apply(); Mirroring = TRIC_MIRROR_SCREEN_A; break;
     case 76: MapPRG16(0, 0); MapPRG16(1, -1); Reg[7] = 1; for (uint j = 0; j < 4; ++j) MapCHR2(j, 0); break;
     case 94: MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0); break;
     case 180: MapPRG16(0, 0); MapPRG16(1, 0); MapCHR8(0); break;
@@ -814,7 +819,8 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
         MapCHR4(0, Chr0 + ((Ctrl & 2) ? 16 : 0));
         MapCHR4(1, Chr1 + ((Ctrl & 4) ? 16 : 0));
         break;
-    case 206:
+    case 206: case 88: case 95: case 154:
+        if (Cart.Mapper == 154) Mirroring = (Input & 64) ? TRIC_MIRROR_SCREEN_B : TRIC_MIRROR_SCREEN_A;  // [.N.. ....] at $8000-$FFFF
         if ((Address & 0xe000) == 0x8000) {
             if (Address % 2 == 0) BankSelect = Input % 8;
             else Reg[BankSelect] = Input % (BankSelect < 6 ? 64 : 16);
@@ -929,6 +935,7 @@ inline byte TricMapper::SnoopPPU(ushort Address) {
     }
     if (Cart.AlternativeNametableArrangement) return VRAM[Address & 0xfff];
     if (Cart.Mapper == 118 || Cart.Mapper == 158) return VRAM[(ChrA17[(Address >> 10) & 7] ? 0x400 : 0) | (Address & 0x3ff)];
+    if (Cart.Mapper == 95) return VRAM[((Reg[(Address >> 11) & 1] & 32) ? 0x400 : 0) | (Address & 0x3ff)];   // NAMCOT-3425: CHR A15
     if (Cart.Mapper == 207) return VRAM[((Reg[(Address >> 11) & 1] & 0x80) ? 0x400 : 0) | (Address & 0x3ff)];
     ushort Addr = (ushort)(Address & 0x3FF);
     if (Mirroring == TRIC_MIRROR_HORIZONTAL) Addr |= (ushort)((Address & 0x800) ? 0x400 : 0);
@@ -993,6 +1000,7 @@ inline void TricMapper::Connector_CheckCIRAM() {
         return;
     }
     if (Cart.Mapper == 118 || Cart.Mapper == 158) { SeventyTwoPinConnector[21] = ChrA17[(PPU_AddressBus >> 10) & 7]; return; }
+    if (Cart.Mapper == 95) { SeventyTwoPinConnector[21] = (Reg[(PPU_AddressBus >> 11) & 1] & 32) != 0; return; }
     // Mapper 207: the upper nametable pair follows $7EF0 bit 7, the lower $7EF1 bit 7.
     if (Cart.Mapper == 207) { SeventyTwoPinConnector[21] = (Reg[(PPU_AddressBus >> 11) & 1] & 0x80) != 0; return; }
     if (Cart.Mapper == 19) {
