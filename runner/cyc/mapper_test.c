@@ -525,6 +525,7 @@ static void test_variants(void)
 #include "mmc1_board_test.inc"
 #include "mapper40_test.inc"
 #include "sunsoft_test.inc"
+#include "namco_test.inc"
 
 int main(void)
 {
@@ -564,6 +565,7 @@ int main(void)
     test_mmc1a();
     test_mapper40();
     test_sunsoft();
+    test_namco();
     printf("mapper contracts: %u checks passed\n", checks);
     return 0;
 }

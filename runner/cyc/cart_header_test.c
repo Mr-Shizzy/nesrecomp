@@ -78,6 +78,24 @@ int main(void)
     /* FME-7: iNES 8 KiB WRAM. */
     memset(h,0,sizeof(h)); memcpy(h,"NES",3); h[3]=26; h[4]=8; h[5]=16; h[6]=0x50; h[7]=0x40;
     CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==69 && c.prg_ram==8192 && nes_cart_variant_supported(&c));
+    /* CRC-32 check value, and the Namco board rules (nesdev INES Mapper 210). */
+    CHECK(nes_crc32(0, (const uint8_t *)"123456789", 9) == 0xCBF43926u);
+    memset(h,0,sizeof(h)); memcpy(h,"NES",3); h[3]=26; h[4]=8; h[5]=16; h[6]=0x32; h[7]=0x10;
+    CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==19 && c.prg_nvram==8192 && nes_cart_variant_supported(&c));
+    h[6]=0x30; CHECK(nes_cart_header(h,16,&c)); CHECK(c.prg_ram==0 && c.prg_nvram==0 && nes_cart_variant_supported(&c));
+    { uint8_t data[4]={1,2,3,4};
+      h[6]=0x22; h[7]=0xd0; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==210 && c.submapper==0);
+      nes_cart_known_dump(&c,data,4); CHECK(c.submapper==1 && c.prg_nvram==8192 && nes_cart_variant_supported(&c));
+      h[6]=0x20; CHECK(nes_cart_header(h,16,&c)); nes_cart_known_dump(&c,data,4);
+      CHECK(c.submapper==2 && !c.prg_ram && !c.prg_nvram && nes_cart_variant_supported(&c));
+      h[6]=0x30; h[7]=0x10; CHECK(nes_cart_header(h,16,&c)); nes_cart_known_dump(&c,data,4);
+      CHECK(c.mapper==19); }                     /* unknown mapper-19 dump stays a 163 */
+    h[6]=0x30; h[7]=0x18; h[8]=0x60; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
+    h[8]=0x10; h[10]=0x70; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c)); /* sub 1: no ext RAM */
+    h[10]=0; CHECK(nes_cart_header(h,16,&c)); CHECK(nes_cart_variant_supported(&c));
+    h[6]=0x20; h[7]=0xd8; h[8]=0x20; h[10]=0x07; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==210 && !nes_cart_variant_supported(&c));
+    h[10]=0; CHECK(nes_cart_header(h,16,&c)); CHECK(nes_cart_variant_supported(&c));
+    h[8]=0x30; CHECK(nes_cart_header(h,16,&c)); CHECK(!nes_cart_variant_supported(&c));
     puts("cartridge header contracts passed");
     return 0;
 }

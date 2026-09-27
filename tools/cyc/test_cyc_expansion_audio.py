@@ -13,6 +13,7 @@ def main():
     ap.add_argument('--fm-fixtures',type=Path,help='VRC7 fixture directory')
     ap.add_argument('--mmc5-fixtures',type=Path,help='MMC5 fixture directory')
     ap.add_argument('--s5b-fixtures',type=Path,help='Sunsoft 5B fixture directory (s5b_ prefix)')
+    ap.add_argument('--n163-fixtures',type=Path,help='Namco 163 fixture directory (n163_ prefix)')
     args=ap.parse_args();measurements=[];cases=[]
     if args.fixtures:
         for mapper in (24,26):
@@ -27,7 +28,10 @@ def main():
     if args.s5b_fixtures:
         from sunsoft_fixtures import S5B_TONES
         cases += [(args.s5b_fixtures.resolve(),name,'noise' if hz is None else hz) for name,hz in S5B_TONES.items()]
-    if not cases: ap.error('pass --fixtures, --fm-fixtures, --mmc5-fixtures or --s5b-fixtures')
+    if args.n163_fixtures:
+        from namco_fixtures import N163_TONES
+        cases += [(args.n163_fixtures.resolve(),name,hz) for name,hz in N163_TONES.items()]
+    if not cases: ap.error('pass --fixtures, --fm-fixtures, --mmc5-fixtures, --s5b-fixtures or --n163-fixtures')
     for root,name,expected in cases:
             case=root/name
             suffix='.exe' if hasattr(subprocess,'CREATE_NO_WINDOW') else ''

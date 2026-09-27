@@ -86,6 +86,12 @@ struct TricMapper {
     ushort VrcChr[8], VrcLatch16, VrcCounter16;
     int16_t IrqDivider;
     byte IrqMode;
+    // ---- Namco 163 / 175 / 340 (the 163's internal RAM is ExRAM[0-127]) ----
+    byte NamcoChr[8], NamcoNt[4], NamcoPrg[3], NamcoProtect, NamcoRamEnable;
+    byte NamcoCiramChr[8];         // 0: CHR ROM; 1/2: CIRAM page 0/1 as CHR RAM
+    byte NamcoSndAddr, NamcoSndStep, NamcoSndCh;
+    bool NamcoSndInc;
+    ushort NamcoIrq;
     // ---- Sunsoft FME-7 ----
     byte Fme7Cmd, Fme7Reg[16], Fme7IrqCtrl;
     ushort Fme7Counter;
@@ -112,6 +118,14 @@ struct TricMapper {
     void MapCHR4(uint Page, int Bank) { for (uint i = 0; i < 4; i++) MapCHR1(Page * 4 + i, Bank * 4 + (int)i); }
     void MapCHR8(int Bank) { for (uint i = 0; i < 8; i++) MapCHR1(i, Bank * 8 + (int)i); }
 
+    bool N163();
+    void NamcoApply();
+    byte NamcoSound(byte value, bool write);
+    bool NamcoLow(ushort Address, byte *Out, const byte *In);
+    void NamcoStore(ushort Address, byte Input);
+    bool NamcoRamReadable();
+    void NamcoClock();
+    int  NamcoNtRom(ushort Address);
     void FME7Apply();
     bool FME7Low(ushort Address, byte *Out, const byte *In);
     void FME7Store(ushort Address, byte Input);
@@ -225,6 +239,7 @@ inline bool TricMapper::CartMapperIRQ() { return Cart.Mapper==5 ? (M5.irq_enable
 #include "tric_vrc7.inc"
 #include "tric_bandai.inc"
 #include "tric_sunsoft.inc"
+#include "tric_namco.inc"
 
 // ---- MMC1 (nesdev wiki, MMC1) ----
 
@@ -410,6 +425,9 @@ inline void TricMapper::Reset() {
     IrqDivider = 341; IrqMode = 0;
     Fme7Cmd = Fme7IrqCtrl = 0; memset(Fme7Reg, 0, sizeof(Fme7Reg)); Fme7Counter = 0;
     Action52Open = false;
+    memset(NamcoChr, 0, sizeof(NamcoChr)); memset(NamcoNt, 0, sizeof(NamcoNt)); memset(NamcoPrg, 0, sizeof(NamcoPrg));
+    memset(NamcoCiramChr, 0, sizeof(NamcoCiramChr));
+    NamcoProtect = NamcoRamEnable = NamcoSndAddr = NamcoSndStep = 0; NamcoSndCh = 7; NamcoSndInc = false; NamcoIrq = 0;
     CPU_Drove = false;
     if (!Cart.Info.battery && !Cart.Info.prg_nvram) memset(ExRAM,0,sizeof(ExRAM));
     WRAM_Length = Cart.Info.prg_ram + Cart.Info.prg_nvram;
@@ -425,6 +443,7 @@ inline void TricMapper::Reset() {
     switch (Cart.Mapper) {
     case 5: MMC5Reset(); break;
     case 69: FME7Apply(); break;
+    case 19: case 210: NamcoApply(); break;
     case 68: Sunsoft4Apply(); break;
     case 41: MapPRG32(0); MapCHR8(0); Mirroring = TRIC_MIRROR_VERTICAL; break;
     case 228: Action52Store(0x8000, 0); break;
@@ -488,6 +507,12 @@ inline void TricMapper::FetchCPU() {
     }
     if (Cart.Mapper==5) { CPU_Drove=MMC5Read(CPU_AddressIn,CPU_NonTiltData,true); return; }
     if (Cart.Mapper==69 && CPU_AddressIn>=0x6000 && CPU_AddressIn<0x8000) { CPU_Drove=FME7Low(CPU_AddressIn,&CPU_NonTiltData,nullptr); return; }
+    if ((Cart.Mapper==19 || Cart.Mapper==210) && CPU_AddressIn < 0x8000) {
+        if (CPU_AddressIn >= 0x6000) {
+            if (NamcoRamReadable()) { CPU_NonTiltData = WRAM[(CPU_AddressIn % 8192) % WRAM_Length]; CPU_Drove = true; }
+        } else CPU_Drove = NamcoLow(CPU_AddressIn, &CPU_NonTiltData, nullptr);
+        return;
+    }
     if (BandaiBoard() && CPU_AddressIn<0x8000) { CPU_Drove=BandaiRead(CPU_AddressIn,CPU_NonTiltData); return; }
     if (VRC24Board() && CPU_AddressIn >= 0x6000 && CPU_AddressIn < 0x8000) {
         if (VRC2Board() && !HasWRAM) {
@@ -514,6 +539,12 @@ inline byte TricMapper::SnoopCPU(ushort Address) {
         return Cart.PRGROM[(6%(Cart.PRGSlots/2))*8192+Address%8192];
     if (Cart.Mapper==5) { byte v=dataBus; MMC5Read(Address,v,false); return v; }
     if (Cart.Mapper==69 && Address>=0x6000 && Address<0x8000) { byte v=dataBus; FME7Low(Address,&v,nullptr); return v; }
+    if ((Cart.Mapper==19 || Cart.Mapper==210) && Address >= 0x6000 && Address < 0x8000)
+        return NamcoRamReadable() ? WRAM[(Address % 8192) % WRAM_Length] : dataBus;
+    if (Cart.Mapper==19 && Address >= 0x4800 && Address < 0x6000) {
+        if (Address < 0x5000) return ExRAM[NamcoSndAddr % 128];   // peek: no increment
+        return Address < 0x5800 ? (byte)(NamcoIrq & 0xff) : (byte)(NamcoIrq >> 8);
+    }
     if (BandaiBoard() && Address<0x8000) { byte v=dataBus; BandaiRead(Address,v); return v; }
     if (VRC24Board() && Address >= 0x6000 && Address < 0x8000) {
         if (VRC2Board() && !HasWRAM) return Address < 0x7000 ? (dataBus & 0xfe) | Latch : dataBus;
@@ -538,6 +569,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     }
     if (Cart.Mapper==5) { MMC5Write(Address,Input); return; }
     if (Cart.Mapper==69) { FME7Store(Address,Input); return; }
+    if (Cart.Mapper==19 || Cart.Mapper==210) { NamcoStore(Address,Input); return; }
     if (BandaiBoard()) { BandaiWrite(Address,Input); return; }
     if (VRC24Board() && Address >= 0x6000 && Address < 0x8000) {
         if (VRC2Board() && !HasWRAM) {
@@ -741,6 +773,12 @@ inline byte TricMapper::SnoopPPU(ushort Address) {
         return VRAM[(bank%2)*1024+(Address&1023)];
     }
     if (Cart.Mapper == 68 && (Ctrl & 16)) return Cart.CHRROM[Sunsoft4Page(Address)];
+    if (Cart.Mapper == 19 && Address < 0x2000 && NamcoCiramChr[Address >> 10])
+        return VRAM[(NamcoCiramChr[Address >> 10] - 1) * 1024 + Address % 1024];
+    if (Cart.Mapper == 19 && Address >= 0x2000) {
+        int rom = NamcoNtRom(Address);
+        return rom >= 0 ? Cart.CHRROM[rom] : VRAM[(NamcoNt[(Address >> 10) % 4] % 2) * 1024 + Address % 1024];
+    }
     if (Cart.AlternativeNametableArrangement) return VRAM[Address & 0xfff];
     if (Cart.Mapper == 118) return VRAM[(ChrA17[(Address >> 10) & 7] ? 0x400 : 0) | (Address & 0x3ff)];
     ushort Addr = (ushort)(Address & 0x3FF);
@@ -759,6 +797,12 @@ inline void TricMapper::AccessPPU() {
         if (!SeventyTwoPinConnector[20]) PPU_NonTiltData=PPU_DataOut=Cart.CHRROM[index];
         if (!SeventyTwoPinConnector[55] && Cart.UsingCHRRAM) Cart.CHRROM[index]=PPU_DataIn;
     }
+    if (Cart.Mapper == 19 && SeventyTwoPinConnector[64] && NamcoNtRom(Address) >= 0) {
+        PPU_DataIn = PPU_NonTiltData;   // CHR ROM nametable: writes are dropped
+        if (!SeventyTwoPinConnector[20]) PPU_NonTiltData = PPU_DataOut = Cart.CHRROM[NamcoNtRom(Address)];
+        return;
+    }
+    if (Cart.Mapper == 19 && !SeventyTwoPinConnector[64] && NamcoCiramChr[(Address >> 10) & 7]) return;   // CIRAM answers
     if (Cart.Mapper == 68 && SeventyTwoPinConnector[64] && (Ctrl & 16)) {
         PPU_DataIn = PPU_NonTiltData;   // ROM: writes are dropped
         if (!SeventyTwoPinConnector[20]) PPU_NonTiltData = PPU_DataOut = Cart.CHRROM[Sunsoft4Page(Address)];
@@ -794,6 +838,20 @@ inline void TricMapper::Connector_CheckCIRAM() {
         return;
     }
     if (Cart.Mapper == 118) { SeventyTwoPinConnector[21] = ChrA17[(PPU_AddressBus >> 10) & 7]; return; }
+    if (Cart.Mapper == 19) {
+        // The 163 enables CIRAM for CIRAM-select nametables and for pattern
+        // pages it maps to CIRAM, and drives A10 from the select's bit 0.
+        if (PPU_AddressBus & 0x2000) {
+            byte sel = NamcoNt[(PPU_AddressBus >> 10) % 4];
+            SeventyTwoPinConnector[56] = sel < 0xe0;
+            SeventyTwoPinConnector[21] = sel % 2;
+        } else {
+            byte page = NamcoCiramChr[(PPU_AddressBus >> 10) % 8];
+            SeventyTwoPinConnector[56] = page == 0;
+            SeventyTwoPinConnector[21] = page == 2;
+        }
+        return;
+    }
     if (Cart.Mapper == 68 && (Ctrl & 16)) SeventyTwoPinConnector[56] = true;   // CIRAM /CE high
     bool a10;
     if (Mirroring == TRIC_MIRROR_HORIZONTAL)    a10 = (PPU_AddressBus & 0x800) != 0;

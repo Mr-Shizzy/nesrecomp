@@ -9629,6 +9629,7 @@ bool cyc_load_ines(const uint8_t *image, size_t size) {
     case 11: break;
     case 118: case 119: break;
     case 69: case 68: case 41: case 228: break;
+    case 19: case 210: break;
     case 40: case 155: case 0: case 1: case 2: case 3: case 4: case 7: case 66: break;
     default: return false;
     }
@@ -9780,6 +9781,7 @@ uint64_t cyc_mem_state_hash(void)
     for (unsigned chip=0;chip<2;++chip)
         for (unsigned i=0;i<Cart.MapperChip.Eeprom[chip].size;++i) h=cyc_trace_mix(h,Cart.MapperChip.Eeprom[chip].data[i]);
     if (Cart.Mapper==5) for (unsigned i=0;i<1024;++i) h=cyc_trace_mix(h,Cart.MapperChip.ExRAM[i]);
+    if (Cart.Mapper==19) for (unsigned i=0;i<128;++i) h=cyc_trace_mix(h,Cart.MapperChip.ExRAM[i]);
     return h;
 }
 
@@ -9790,6 +9792,9 @@ void cyc_mem_state_dump(void *file)
                  Cart.Mapper == 119 ? sizeof(Cart.CHRRAM) : (size_t)Cart.CHRROM_Length,
                  Cart.MapperChip.HasWRAM ? Cart.MapperChip.WRAM : NULL, Cart.MapperChip.WRAM_Length,
                  cyc_frame_index_buffer);
+    unsigned n = Cart.Mapper==5 ? 1024 : Cart.Mapper==19 ? 128 : 0;
+    for (unsigned i = 0; i < n; ++i)
+        fprintf((FILE *)file, "%s%02X%s", i % 32 ? " " : i ? "\nexram " : "exram ", Cart.MapperChip.ExRAM[i], i + 1 == n ? "\n" : "");
 }
 
 const char *cyc_hw_name(void) { return "tricnes"; }

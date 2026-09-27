@@ -25,6 +25,8 @@ models; it does not independently establish the mapper specification.
 | 68 | [Sunsoft-4](https://www.nesdev.org/wiki/INES_Mapper_068) | Four 2 KiB CHR banks; $E000 bit 4 replaces CIRAM with two 1 KiB CHR ROM pages ($C000/$D000, D7 forced: the last 128 KiB), chosen per quadrant by the mirroring mode, and nametable writes are dropped. 16 KiB PRG switch plus the fixed last bank; $F000 bit 4 enables up to 8 KiB WRAM. CHR RAM boards and submapper 1 (Nantettatte!! Baseball's licensing timer and option ROM) are rejected. |
 | 41 | [Caltron 6-in-1](https://www.nesdev.org/wiki/INES_Mapper_041) | Outer register latches address bits at $6000-$67FF (data ignored): 32 KiB PRG bank, outer 32 KiB CHR bank, mirroring. Its A2 (PRG banks 4-7) enables the inner 8 KiB CHR select at $8000-$FFFF, modeled with AND bus conflicts (the wiki lists conflicts as "partly"; only this register decodes ROM space). Both clear at power-on. $6000 writes end compiled blocks. |
 | 228 | [Active Enterprises](https://www.nesdev.org/wiki/INES_Mapper_228) | A write to $8000-$FFFF latches its address (1.MHHPPP PPS.CCCC) and D0-D1: mirroring, 512 KiB chip, 16 KiB page, 16/32 KiB mode, 8 KiB CHR bank. The 1.5 MiB Action 52 stores chips 0, 1 and 3; chip 2 reads open bus and runs on the interpreter. Power-on state is the $00-to-$8000 write the games expect. The documented $4020-$5FFF nibble RAM is absent on both cartridges and not modeled; no bus conflicts are documented. |
+| 19 | [Namco 163](https://www.nesdev.org/wiki/Namco_163) | Eight 1 KiB CHR banks ($E0-$FF select CIRAM as CHR RAM unless $E800 bit 6/7 disables it per half), CHR ROM or CIRAM nametables, three 8 KiB PRG banks plus the fixed last bank, a 15-bit CPU-cycle IRQ up-counter that stops at $7FFF, 8 KiB work RAM whose writes need $F800 = $4x with a clear window bit, and 128 bytes of internal RAM (battery-saved with the work RAM) driving the [N163 sound generator](https://www.nesdev.org/wiki/Namco_163_audio). Submappers 0-5 accepted; 2 is silent, 3-5 set the mixing level. |
+| 210 | [Namco 175 / 340](https://www.nesdev.org/wiki/INES_Mapper_210) | The 163's CHR/PRG banking without CIRAM CHR, nametable, IRQ or sound. 175 (submapper 1): $C000 bit 0 enables up to 8 KiB RAM, mirroring hardwired. 340 (submapper 2): $E000 bits 6-7 select one-screen A, vertical, one-screen B, horizontal; no RAM. Submapper 0 is 175 with a battery, else 340. Known 175/340 dumps with mapper-19 headers are identified by PRG+CHR CRC-32 (`common/nes_cart.h`). |
 | 40 | [NTDEC 2722](https://www.nesdev.org/wiki/INES_Mapper_040) | Fixed PRG banks at $6000/$8000/$A000/$E000, switchable 8 KiB at $C000, 4096-M2 IRQ. Code at $6000 uses the interpreter. |
 | 155 | [MMC1A](https://www.nesdev.org/wiki/MMC1) | RAM stays enabled by the PRG register; bit 4 instead bypasses fixed-bank A17 selection. Uses the same SxROM board wiring as mapper 1. |
 | 85 | [VRC7](https://www.nesdev.org/wiki/VRC7) | Three 8 KiB PRG windows, eight CHR windows, WRAM gate, VRC IRQ, and six FM channels. Submapper 1 selects A3 and omits the oscillator; submapper 2 selects A4. |
@@ -160,6 +162,21 @@ measures a 220.2 Hz tone and a 249.7 Hz envelope sawtooth within 0.01 Hz and
 requires identical native/interpreter WAVs. One full-scale channel is mixed at
 the nominal level of an APU pulse; the cartridge amplifier, which is louder,
 nonlinear and filtered, is not modeled. Gimmick! is the only 5B-audio game.
+
+The N163 generator spends 15 CPU cycles per channel on channels 8 down to
+8-C ($7F bits 4-6) and holds only that channel on the output, so more channels
+mean each is heard less often, as on the chip (including the audible
+multiplexing whine). Each update adds the 18-bit frequency to the 24-bit phase
+modulo the (64-L)*4-sample length and outputs (sample - 8) * volume.
+Auto-increment of the $F800 address stops at $7F. $E000 bit 6 freezes the
+generator and mutes it (the wiki does not say which; both are modeled). Gain
+follows the NES 2.0 submapper: 11-13, 16-17 and 18-19.5 dB above the loudest
+APU square for submappers 3-5 (midpoints used), submapper 3's level for 0,
+silence for 2. The oracle updates channel phases, which live in CPU-readable
+RAM, but does not synthesize the output. `test_cyc_expansion_audio.py
+--n163-fixtures` measures a 440.03 Hz tone. Mesen2 wraps the auto-increment,
+checks only bit 6 of the write-protect nibble, and swaps the 340's one-screen B
+and horizontal modes; this implementation follows the nesdev register pages.
 
 VRC7 uses the pinned MIT-licensed emu2413 core in `vendor/emu2413`, with the
 instrument bytes checked against the chip's dumped patch ROM. A rational clock

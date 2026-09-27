@@ -84,6 +84,14 @@ static uint8_t vram_fetch(void)
         if (!hw_cart_nt_read(addr, ppu.rd != 0, &value)) value = ppu.ciram[ciram_index()];
     } else {
         uint16_t addr = (uint16_t)(((ppu.vbus & 0x3F00) | ppu.octal_latch) & 0x1FFF);
+        if (hw_cart.chr_ciram >> (addr >> 10) & 1) {
+            /* Namco 163: CIRAM answers pattern accesses as CHR RAM. */
+            uint16_t c = (uint16_t)(hw_cart.chr_off[addr >> 10] | (addr & 0x3ff));
+            value = ppu.rd ? ppu.ciram[c] : (uint8_t)ppu.vbus;
+            if (ppu.wr) ppu.ciram[c] = (uint8_t)ppu.vbus;
+            ppu.vbus = (uint16_t)((ppu.vbus & 0xFF00) | value);
+            return value;
+        }
         uint32_t a = hw_cart_chr_index(addr);
         value = ppu.rd ? hw_cart_chr_read(addr) : (uint8_t)ppu.vbus;
         if (ppu.wr && hw_cart.chr_write[(addr >> 10) & 7]) hw_cart.chr[a] = (uint8_t)ppu.vbus;
@@ -101,7 +109,9 @@ static void vram_store(uint8_t value)
         if (!hw_cart_nt_write(addr, value)) ppu.ciram[ciram_index()] = value;
     } else if (ppu.wr) {
         uint16_t addr = (uint16_t)(((ppu.vbus & 0x3F00) | ppu.octal_latch) & 0x1FFF);
-        if (hw_cart.chr_write[(addr >> 10) & 7]) hw_cart.chr[hw_cart_chr_index(addr)] = value;
+        if (hw_cart.chr_ciram >> (addr >> 10) & 1)
+            ppu.ciram[hw_cart.chr_off[addr >> 10] | (addr & 0x3ff)] = value;
+        else if (hw_cart.chr_write[(addr >> 10) & 7]) hw_cart.chr[hw_cart_chr_index(addr)] = value;
     }
 }
 
