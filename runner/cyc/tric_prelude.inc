@@ -92,6 +92,8 @@ struct TricMapper {
     byte NamcoSndAddr, NamcoSndStep, NamcoSndCh;
     bool NamcoSndInc;
     ushort NamcoIrq;
+    // ---- Taito TC0690: IRQ output delay ----
+    byte TaitoDelay;
     // ---- Jaleco SS88006 ----
     byte JPrg[3], JChr[8], JRam, JReload[4], JCtrl, JMirror;
     ushort JCounter;
@@ -129,6 +131,8 @@ struct TricMapper {
     bool NamcoRamReadable();
     void NamcoClock();
     int  NamcoNtRom(ushort Address);
+    void TaitoApply();
+    void TaitoStore(ushort Address, byte Input);
     void JalecoApply();
     void JalecoStore(ushort Address, byte Input);
     void JalecoClock();
@@ -250,6 +254,7 @@ inline bool TricMapper::CartMapperIRQ() { return Cart.Mapper==5 ? (M5.irq_enable
 #include "tric_sunsoft.inc"
 #include "tric_namco.inc"
 #include "tric_jaleco.inc"
+#include "tric_taito.inc"
 
 // ---- MMC1 (nesdev wiki, MMC1) ----
 
@@ -368,7 +373,10 @@ void TricMmc3TraceClock(byte counter, bool out, ushort vbus);
 inline void TricMapper::MMC3ClockIRQ() {
     if (IrqCounter == 0 || IrqReload) IrqCounter = IrqLatch;
     else IrqCounter--;
-    if (IrqCounter == 0 && IrqEnable) IrqOut = true;
+    if (IrqCounter == 0 && IrqEnable) {
+        if (Cart.Mapper != 48) IrqOut = true;
+        else if (!TaitoDelay && !IrqOut) TaitoDelay = 4;   // nesdev: ~4 CPU cycles after the MMC3
+    }
     IrqReload = false;
     TricMmc3TraceClock(IrqCounter, IrqOut, PPU_AddressBus);
 }
@@ -385,7 +393,7 @@ inline void TricMapper::PPUClock() {
         unsigned select=(PPU_AddressBus/1024)%4;
         if (BankSelect!=select) { BankSelect=select; if (Cart.Mapper==157) DatachLines(); else BandaiApply(); }
     }
-    if (Cart.Mapper != 4 && Cart.Mapper != 118 && Cart.Mapper != 119) return;
+    if (Cart.Mapper != 4 && Cart.Mapper != 118 && Cart.Mapper != 119 && Cart.Mapper != 48) return;
     if (!(PPU_AddressBus & 0x1000)) {
         if (A12) { A12 = false; A12LowCycle = totalCycles; }
         return;
@@ -445,6 +453,7 @@ inline void TricMapper::Reset() {
     DataReads = 0;
     memset(JPrg, 0, sizeof(JPrg)); memset(JChr, 0, sizeof(JChr)); memset(JReload, 0, sizeof(JReload));
     JRam = JCtrl = JMirror = 0; JCounter = 0;
+    TaitoDelay = 0;
     memset(NamcoChr, 0, sizeof(NamcoChr)); memset(NamcoNt, 0, sizeof(NamcoNt)); memset(NamcoPrg, 0, sizeof(NamcoPrg));
     memset(NamcoCiramChr, 0, sizeof(NamcoCiramChr));
     NamcoProtect = NamcoRamEnable = NamcoSndAddr = NamcoSndStep = 0; NamcoSndCh = 7; NamcoSndInc = false; NamcoIrq = 0;
@@ -465,6 +474,7 @@ inline void TricMapper::Reset() {
     case 69: FME7Apply(); break;
     case 19: case 210: NamcoApply(); break;
     case 18: JalecoApply(); break;
+    case 33: case 48: TaitoApply(); break;
     case 68: Sunsoft4Apply(); break;
     case 41: MapPRG32(0); MapCHR8(0); Mirroring = TRIC_MIRROR_VERTICAL; break;
     case 228: Action52Store(0x8000, 0); break;
@@ -592,6 +602,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     if (Cart.Mapper==69) { FME7Store(Address,Input); return; }
     if (Cart.Mapper==19 || Cart.Mapper==210) { NamcoStore(Address,Input); return; }
     if (Cart.Mapper==18) { JalecoStore(Address,Input); return; }
+    if (Cart.Mapper==33 || Cart.Mapper==48) { TaitoStore(Address,Input); return; }
     if (BandaiBoard()) { BandaiWrite(Address,Input); return; }
     if (VRC24Board() && Address >= 0x6000 && Address < 0x8000) {
         if (VRC2Board() && !HasWRAM) {

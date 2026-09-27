@@ -74,6 +74,43 @@ static void mmc3_reg(unsigned index, uint8_t value, uint8_t mode)
 
 static unsigned txsrom_nt(uint16_t addr) { return hw_cart_ciram_a10(addr) ? 1 : 0; }
 
+/* nesdev wiki, INES Mapper 033 / 048: Taito TC0190 / TC0690. */
+static void test_taito(void)
+{
+    cart(33, 256, 256);
+    prg_banks(0, 0, 30, 31);
+    hw_cart_cpu_write(0x8000, 0x45); CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    hw_cart_cpu_write(0xc001, 0xc7);                    /* A14 ignored: $8001 */
+    prg_banks(5, 7, 30, 31);
+    hw_cart_cpu_write(0x8002, 0x13); chr_bank(0, 0x26, 2);
+    hw_cart_cpu_write(0x8003, 0x7f); chr_bank(2, 0xfe, 2);
+    for (unsigned i = 0; i < 4; ++i) hw_cart_cpu_write((uint16_t)(0xa000 + i), (uint8_t)(0x30 + i));
+    for (unsigned i = 0; i < 4; ++i) chr_bank(4 + i, 0x30 + i, 1);
+    hw_cart_cpu_write(0xe002, 0x77); chr_bank(6, 0x77, 1); /* $E002 = $A002 */
+    hw_cart_cpu_write(0x8000, 0x05); CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    no_wram();
+    /* TC0690: mirroring at $E000, inverted latch, IRQ ~4 CPU cycles late. */
+    cart(48, 256, 256);
+    CHECK(hw_cart.watch_ppu_addr && hw_cart.watch_cpu);
+    hw_cart_cpu_write(0x8000, 0x45); prg_banks(5, 0, 30, 31);
+    CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    hw_cart_cpu_write(0xe000, 0x40); CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    hw_cart_cpu_write(0xc000, 0xfe); CHECK(hw_cart.m.irq_latch == 1);
+    hw_cart_cpu_write(0xc001, 0); hw_cart_cpu_write(0xc002, 0);
+    hw.cycles = 100;
+    hw_cart_ppu_addr(0x0000); hw.cycles += 4; hw_cart_ppu_addr(0x1000);   /* reload to 1 */
+    hw_cart_ppu_addr(0x0000); hw.cycles += 4; hw_cart_ppu_addr(0x1000);   /* 0: delay starts */
+    CHECK(!hw_cart_irq());
+    cpu_cycles(3); CHECK(!hw_cart_irq());
+    cpu_cycles(1); CHECK(hw_cart_irq());
+    hw_cart_cpu_write(0xc003, 0); CHECK(!hw_cart_irq());
+    /* $C003 also cancels a pending delayed IRQ. */
+    hw_cart_cpu_write(0xc002, 0);
+    hw_cart_ppu_addr(0x0000); hw.cycles += 4; hw_cart_ppu_addr(0x1000);   /* reload 1 */
+    hw_cart_ppu_addr(0x0000); hw.cycles += 4; hw_cart_ppu_addr(0x1000);   /* 0 */
+    cpu_cycles(2); hw_cart_cpu_write(0xc003, 0); cpu_cycles(10); CHECK(!hw_cart_irq());
+}
+
 /* nesdev wiki, INES Mapper 018: Jaleco SS88006. */
 static void test_mapper18(void)
 {
@@ -620,6 +657,7 @@ int main(void)
     test_mapper228();
     test_mapper185();
     test_mapper18();
+    test_taito();
     test_mapper118();
     test_mapper119();
     test_mapper232();

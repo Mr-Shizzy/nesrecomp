@@ -508,7 +508,7 @@ static int fixed_bank_for(int mapper, uint32_t banks, uint32_t slot) {
     unsigned slots;
     switch (mapper) {
     case 0: case 3: case 13: case 87: case 184: case 185: slots = 255; break; /* all PRG fixed */
-    case 157: case 159: case 16: case 2: case 68: case 10: case 22: case 73: case 71: case 76: case 94: case 206: slots = 240; break; /* last 16 KiB */
+    case 157: case 159: case 16: case 2: case 68: case 33: case 48: case 10: case 22: case 73: case 71: case 76: case 94: case 206: slots = 240; break; /* last 16 KiB */
     case 9: slots = 252; break;                                  /* last 24 KiB */
     case 85: case 24: case 26: case 4: case 118: case 119: case 69: case 19: case 210: case 18: case 21: case 23: case 25: case 75: slots = 192; break;         /* last 8 KiB */
     case 180: slots = 15; break;                                 /* first 16 KiB */
@@ -541,6 +541,7 @@ static int power_on_bank8_for(int mapper, uint32_t banks, uint32_t slot) {
     case 1: case 155: return (int)((slot>=2 ? slot+28 : slot)&(banks-1)); /* first 256K outer bank */
     case 2: case 68: return slot >= 2 ? (int)(banks - 2 + (slot - 2)) : (int)slot;
     case 69: case 19: case 210: case 18: return slot == 3 ? (int)(banks - 1) : 0;
+    case 33: case 48: return slot >= 2 ? (int)(banks - 4 + slot) : 0;
     case 4: case 118: case 119: return slot == 2 ? (int)(banks - 2) : slot == 3 ? (int)(banks - 1) : (int)slot;
     default: return (int)(slot & (banks - 1));
     }
@@ -1405,6 +1406,8 @@ static const char *mapper_name(int mapper) {
     case 19: return "Namco 163";
     case 185: return "CNROM + copy protection";
     case 18: return "Jaleco SS88006";
+    case 33: return "Taito TC0190";
+    case 48: return "Taito TC0690";
     case 210: return "Namco 175 / 340";
     case 68: return "Sunsoft-4";
     case 41: return "Caltron 6-in-1";
