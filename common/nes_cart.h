@@ -63,7 +63,7 @@ static inline bool nes_cart_header(const uint8_t *h, size_t size, NesCartInfo *c
         /* iNES leaves RAM ambiguous. Retain established per-board defaults. */
         bool wram = c->mapper == 1 || c->mapper == 155 || c->mapper == 4 || c->mapper == 118 || c->mapper == 5 ||
                     c->mapper == 69 || c->mapper == 68 ||
-                    ((c->mapper == 19 || c->mapper == 210) && c->battery) ||
+                    ((c->mapper == 19 || c->mapper == 210 || c->mapper == 18) && c->battery) ||
                     c->mapper == 10 || c->mapper == 21 || c->mapper == 23 || c->mapper == 25 || c->mapper == 73 ||
                     c->mapper == 24 || c->mapper == 26 || c->mapper == 85 ||
                     (c->mapper == 34 && c->chr_size > 8192) || (c->mapper==206 && c->battery);
@@ -235,6 +235,8 @@ static inline bool nes_cart_variant_supported(const NesCartInfo *c)
     case 118: return !c->submapper && !c->four_screen;
     /* CNROM with copy protection: submappers 4-7 name the CHR-enabling chip
      * select; 0 uses the nesdev power-on heuristic. One 8 KiB CHR ROM. */
+    /* Jaleco SS88006: up to 8 KiB work RAM. */
+    case 18: return !c->submapper && !c->four_screen && c->prg_ram + c->prg_nvram <= 8192;
     case 185: return (c->submapper == 0 || (c->submapper >= 4 && c->submapper <= 7)) &&
         c->chr_size == 8192 && c->prg_size <= 32768 && !c->prg_ram && !c->prg_nvram;
     /* Namco 163: submappers 0-5 (1 is the deprecated battery-backed internal

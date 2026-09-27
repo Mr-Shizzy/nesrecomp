@@ -552,6 +552,7 @@ void hw_cart_ppu_rd(bool reading)
 #include "hw_bandai.inc"
 #include "hw_sunsoft.inc"
 #include "hw_namco.inc"
+#include "hw_jaleco.inc"
 
 static const struct {
     int         mapper;
@@ -562,6 +563,7 @@ static const struct {
     { 5, "MMC5", 0, 1 },
     { 69, "Sunsoft FME-7 / 5B", 0, 1 },
     { 19, "Namco 163", 0, 0 },
+    { 18, "Jaleco SS88006", 0, 0 },
     { 210, "Namco 175 / 340", 0, 0 },
     { 68, "Sunsoft-4", 0, 1 },
     { 41, "Caltron 6-in-1", 0, 0 },
@@ -653,7 +655,7 @@ void hw_cart_power_on(void)
     hw_cart.chr_ciram = 0;
     int i = mapper_index(hw_cart.mapper);
     hw_cart.watch_ppu_addr = i >= 0 ? MAPPERS[i].watch_ppu_addr : 0;
-    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==19 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
+    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==19 || hw_cart.mapper==18 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
     hw_cart.mirroring = hw_cart.info.vertical ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
     hw_cart.wram_bank = 0;
     hw_cart.has_wram = hw_cart.info.prg_size ? hw_cart.wram_len != 0 : i >= 0 ? MAPPERS[i].wram : 0;
@@ -676,6 +678,7 @@ void hw_cart_power_on(void)
     case 5: mmc5_reset(); break;
     case 69: fme7_apply(); break;
     case 19: case 210: hw_cart.m.namco.channel = 7; namco_apply(); break;
+    case 18: jaleco_apply(); break;
     case 68: sunsoft4_apply(); break;
     case 41: nrom_reset(); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
     case 185: nrom_reset(); break;
@@ -899,6 +902,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 4: case 118: case 119: mmc3_write(addr, value); break;
     case 68: sunsoft4_write(addr, value); break;
     case 185: hw_cart.m.latch = value & hw_cart_prg_read(addr); break;
+    case 18: jaleco_write(addr, value); break;
     case 228: action52_write(addr, value); break;
     case 7:  axrom_write(value); break;
     case 66: gxrom_write(value); break;
@@ -957,6 +961,7 @@ void hw_cart_cpu_clock(void)
     if (hw_cart.mapper==5) { mmc5_clock(); return; }
     if (hw_cart.mapper==69) { fme7_clock(); return; }
     if (hw_cart.mapper==19) { namco_clock(); return; }
+    if (hw_cart.mapper==18) { jaleco_clock(); return; }
     if (bandai_board()) { bandai_clock(); return; }
     if (hw_cart.mapper==85) vrc7_audio_clock();
     if (vrc6_board()) vrc6_audio_clock();
@@ -1072,6 +1077,10 @@ uint64_t hw_cart_state_hash(uint64_t h)
         const uint8_t *b=(const uint8_t *)&hw_cart.m.namco;
         for (unsigned i=0;i<sizeof(HwNamco);++i) acc=acc*131+b[i];
         acc=acc*131+hw_cart.chr_ciram;
+    }
+    if (hw_cart.mapper==18) {
+        const uint8_t *b=(const uint8_t *)&hw_cart.m.jaleco;
+        for (unsigned i=0;i<sizeof(HwJaleco);++i) acc=acc*131+b[i];
     }
     if (hw_cart.mapper==69) {
         const uint8_t *b=(const uint8_t *)&hw_cart.m.fme7;

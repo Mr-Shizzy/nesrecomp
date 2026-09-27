@@ -92,6 +92,9 @@ struct TricMapper {
     byte NamcoSndAddr, NamcoSndStep, NamcoSndCh;
     bool NamcoSndInc;
     ushort NamcoIrq;
+    // ---- Jaleco SS88006 ----
+    byte JPrg[3], JChr[8], JRam, JReload[4], JCtrl, JMirror;
+    ushort JCounter;
     // ---- Sunsoft FME-7 ----
     byte Fme7Cmd, Fme7Reg[16], Fme7IrqCtrl;
     ushort Fme7Counter;
@@ -126,6 +129,9 @@ struct TricMapper {
     bool NamcoRamReadable();
     void NamcoClock();
     int  NamcoNtRom(ushort Address);
+    void JalecoApply();
+    void JalecoStore(ushort Address, byte Input);
+    void JalecoClock();
     void FME7Apply();
     bool FME7Low(ushort Address, byte *Out, const byte *In);
     void FME7Store(ushort Address, byte Input);
@@ -243,6 +249,7 @@ inline bool TricMapper::CartMapperIRQ() { return Cart.Mapper==5 ? (M5.irq_enable
 #include "tric_bandai.inc"
 #include "tric_sunsoft.inc"
 #include "tric_namco.inc"
+#include "tric_jaleco.inc"
 
 // ---- MMC1 (nesdev wiki, MMC1) ----
 
@@ -436,6 +443,8 @@ inline void TricMapper::Reset() {
     Fme7Cmd = Fme7IrqCtrl = 0; memset(Fme7Reg, 0, sizeof(Fme7Reg)); Fme7Counter = 0;
     Action52Open = false;
     DataReads = 0;
+    memset(JPrg, 0, sizeof(JPrg)); memset(JChr, 0, sizeof(JChr)); memset(JReload, 0, sizeof(JReload));
+    JRam = JCtrl = JMirror = 0; JCounter = 0;
     memset(NamcoChr, 0, sizeof(NamcoChr)); memset(NamcoNt, 0, sizeof(NamcoNt)); memset(NamcoPrg, 0, sizeof(NamcoPrg));
     memset(NamcoCiramChr, 0, sizeof(NamcoCiramChr));
     NamcoProtect = NamcoRamEnable = NamcoSndAddr = NamcoSndStep = 0; NamcoSndCh = 7; NamcoSndInc = false; NamcoIrq = 0;
@@ -455,6 +464,7 @@ inline void TricMapper::Reset() {
     case 5: MMC5Reset(); break;
     case 69: FME7Apply(); break;
     case 19: case 210: NamcoApply(); break;
+    case 18: JalecoApply(); break;
     case 68: Sunsoft4Apply(); break;
     case 41: MapPRG32(0); MapCHR8(0); Mirroring = TRIC_MIRROR_VERTICAL; break;
     case 228: Action52Store(0x8000, 0); break;
@@ -581,6 +591,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     if (Cart.Mapper==5) { MMC5Write(Address,Input); return; }
     if (Cart.Mapper==69) { FME7Store(Address,Input); return; }
     if (Cart.Mapper==19 || Cart.Mapper==210) { NamcoStore(Address,Input); return; }
+    if (Cart.Mapper==18) { JalecoStore(Address,Input); return; }
     if (BandaiBoard()) { BandaiWrite(Address,Input); return; }
     if (VRC24Board() && Address >= 0x6000 && Address < 0x8000) {
         if (VRC2Board() && !HasWRAM) {
