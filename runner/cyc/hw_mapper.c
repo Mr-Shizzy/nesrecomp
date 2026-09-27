@@ -517,6 +517,43 @@ static void irem_h3001_clock(void)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Mapper 77: Irem LROG017 (Napoleon Senki)                                 */
+/* ------------------------------------------------------------------------- */
+/* nesdev wiki, INES Mapper 077. [CCCC PPPP] at $8000-$FFFF with AND bus
+ * conflicts: a 32 KiB PRG bank and a 2 KiB CHR ROM bank at $0000. CHR RAM is
+ * fixed at $0800-$1FFF (the RAM chip after the ROM), and the four nametables
+ * are RAM too (four_screen). */
+static void irem77_chr(unsigned bank)
+{
+    for (unsigned page = 0; page < 8; ++page) {
+        if (page < 2) { map_chr1(page, (int)(bank * 2 + page)); hw_cart.chr_write[page] = 0; }
+        else { hw_cart.chr_off[page] = hw_cart.chr_ram_base + (page - 2) * 0x400u; hw_cart.chr_write[page] = 1; }
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Mapper 96: Bandai Oeka Kids                                              */
+/* ------------------------------------------------------------------------- */
+/* nesdev wiki, INES Mapper 096. [.... .CPP] at $8000-$FFFF with AND bus
+ * conflicts: a 32 KiB PRG bank and the 16 KiB outer CHR RAM bank. The inner
+ * 4 KiB bank at $0000 is PPU A9-A8, latched when the PPU address moves into
+ * $2xxx from anywhere else (whoever drives it); $1000 holds inner bank 3. */
+static void oeka_apply(void)
+{
+    map_chr4(0, (hw_cart.m.ctrl & 4) | hw_cart.m.chr0);
+    map_chr4(1, (hw_cart.m.ctrl & 4) | 3);
+}
+
+static void oeka_ppu_addr(uint16_t vbus)
+{
+    if ((hw_cart.m.pattern_addr & 0x3000) != 0x2000 && (vbus & 0x3000) == 0x2000) {
+        hw_cart.m.chr0 = (vbus >> 8) & 3;
+        oeka_apply();
+    }
+    hw_cart.m.pattern_addr = vbus;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Mapper 228: Active Enterprises (Action 52, Cheetahmen II)                */
 /* ------------------------------------------------------------------------- */
 /* nesdev wiki, INES Mapper 228. A write to $8000-$FFFF latches the address
@@ -713,6 +750,8 @@ static const struct {
     { 92, "Jaleco JF-19", 0, 0 },
     { 86, "Jaleco JF-13", 0, 0 },
     { 101, "Jaleco JF-10 (mapper 101)", 0, 0 },
+    { 77, "Irem LROG017", 0, 0 },
+    { 96, "Bandai Oeka Kids", 1, 0 },
     { 152, "Bandai 74161/7432 (one-screen)", 0, 0 },
     { 140, "Jaleco JF-11/14", 0, 0 },
     { 113, "HES", 0, 0 },
@@ -850,6 +889,8 @@ void hw_cart_power_on(void)
     case 93: uxrom_reset(); hw_cart.m.ctrl = 1; break;   /* CHR RAM enabled at power-on */
     case 97: map_prg16(0, -1); map_prg16(1, 0); map_chr8(0); break;
     case 86: case 101: nrom_reset(); break;
+    case 77: map_prg32(0); irem77_chr(0); break;
+    case 96: map_prg32(0); hw_cart.m.pattern_addr = 0; oeka_apply(); break;
     case 152: uxrom_reset(); hw_cart.mirroring = HW_MIRROR_SCREEN_A; break;
     case 184: nrom_reset(); map_chr4(1, 4); break;
     case 232: map_prg16(0, 0); map_prg16(1, 3); map_chr8(0); break;
@@ -1080,6 +1121,19 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
             hw_cart.mirroring = (value & 0x80) ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
         }
         break;
+    case 77: /* Irem LROG017; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg32(value & 15);
+        irem77_chr(value >> 4);
+        break;
+    case 96: /* Oeka Kids; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg32(value & 3);
+        hw_cart.m.ctrl = value & 4;
+        oeka_apply();
+        break;
     case 72: case 92: /* Jaleco JF-17 / JF-19; see MAPPERS.md. */
         value &= hw_cart_prg_read(addr);
         if ((value & 0x80) && !(hw_cart.m.latch & 0x80)) map_prg16(hw_cart.mapper == 92 ? 1 : 0, value & 15);
@@ -1157,6 +1211,7 @@ void hw_cart_ppu_addr_watched(uint16_t vbus)
         if (hw_cart.m.a12!=a12) { hw_cart.m.a12=(uint8_t)a12; mmc1_apply(); }
     } else if (hw_cart.mapper == 4 || hw_cart.mapper == 118 || hw_cart.mapper == 119 || hw_cart.mapper == 48) mmc3_ppu_addr(vbus);
     else if (hw_cart.mapper==64 || hw_cart.mapper==158) rambo_ppu_addr(vbus);
+    else if (hw_cart.mapper==96) oeka_ppu_addr(vbus);
     else if (hw_cart.mapper==153 || hw_cart.mapper==157) bandai_ppu_addr(vbus);
 }
 
@@ -1273,7 +1328,7 @@ uint64_t hw_cart_state_hash(uint64_t h)
     acc = acc * 131 + hw_cart.m.irq_out;
     acc = acc * 131 + hw_cart.m.a12;
     acc = acc * 131 + hw_cart.m.latch;
-    if (hw_cart.mapper == 9 || hw_cart.mapper == 10) {
+    if (hw_cart.mapper == 9 || hw_cart.mapper == 10 || hw_cart.mapper == 96) {
         acc = acc * 131 + hw_cart.m.pattern_pending;
         acc = acc * 131 + hw_cart.m.pattern_addr;
     }

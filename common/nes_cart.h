@@ -85,12 +85,15 @@ static inline bool nes_cart_header(const uint8_t *h, size_t size, NesCartInfo *c
             uint32_t chip = c->mapper == 82 ? 5120 : 128;
             c->prg_ram = c->battery ? 0 : chip; c->prg_nvram = c->battery ? chip : 0;
         }
-        if (!c->chr_size) c->chr_ram = c->mapper == 13 ? 16384 : 8192;
+        if (!c->chr_size) c->chr_ram = c->mapper == 13 ? 16384 : c->mapper == 96 ? 32768 : 8192;
         /* Namco 340 has no RAM; its iNES battery bit is how nesdev tells the
          * submapper-0 boards apart (see nes_cart_image). */
         if (c->mapper == 210 && !c->battery) c->prg_ram = c->prg_nvram = 0;
         /* TQROM always pairs its CHR ROM with an 8 KiB CHR RAM chip. */
         if (c->mapper == 119) c->chr_ram = 8192;
+        /* Napoleon Senki (mapper 77): CHR ROM at $0000-$07FF, and RAM behind
+         * $0800-$2FFF, which gives it four distinct nametables. */
+        if (c->mapper == 77) { c->chr_ram = 8192; c->four_screen = 1; }
     }
     return c->prg_size >= 4096;
 }
@@ -176,6 +179,11 @@ static inline bool nes_cart_variant_supported(const NesCartInfo *c)
     if (c->mapper == 119)
         return !c->submapper && !c->four_screen && c->chr_size && c->chr_size <= 65536 &&
                c->chr_ram == 8192 && !c->chr_nvram;
+    /* Irem LROG017 (77): 2 KiB CHR ROM banks (4 bits) beside 6 KiB of CHR RAM
+     * and four nametables of RAM (nesdev wiki, INES Mapper 077). */
+    if (c->mapper == 77)
+        return !c->submapper && c->four_screen && c->chr_size && c->chr_size <= 32768 &&
+               c->chr_ram == 8192 && !c->chr_nvram && c->prg_size <= 524288;
     if (c->chr_size && (c->chr_ram || c->chr_nvram)) return false;
     if (!c->chr_size && !c->chr_ram && !c->chr_nvram) return false;
     switch (c->mapper) {
@@ -225,6 +233,8 @@ static inline bool nes_cart_variant_supported(const NesCartInfo *c)
     case 32: return c->submapper <= 1 && !c->four_screen;
     /* Mapper 78: 0 and 1 one-screen (Cosmo Carrier), 3 H/V (Holy Diver). */
     case 78: return (c->submapper == 0 || c->submapper == 1 || c->submapper == 3) && !c->four_screen;
+    /* Oeka Kids (96): 32 KiB CHR RAM, 32 KiB PRG banks (2 bits). */
+    case 96: return !c->submapper && !c->chr_size && c->chr_ram == 32768 && c->prg_size <= 131072;
     case 80: case 207: case 82: case 552:
         return !c->submapper && !c->four_screen && c->prg_ram + c->prg_nvram <= 8192;
     case 18: return !c->submapper && !c->four_screen && c->prg_ram + c->prg_nvram <= 8192;

@@ -106,6 +106,8 @@ struct TricMapper {
     ushort S3Counter;
     bool S3LowNext;
     bool Chr93Off;                 // mapper 93: CHR RAM disabled
+    byte OekaInner, OekaOuter;     // mapper 96: CHR banks
+    ushort OekaLastBus;            // mapper 96: the PPU address the latch last saw
     bool RamboCycle;
     ushort JCounter;
     // ---- Sunsoft FME-7 ----
@@ -373,6 +375,7 @@ inline void TricMapper::MMC3Apply() {
 }
 // TQROM: A16 high enables the 6264 SRAM instead of the ROM (nesdev wiki).
 inline bool TricMapper::ChrRamSelected(ushort Address) {
+    if (Cart.Mapper == 77) return ((Address >> 10) & 7) >= 2;   // LROG017: RAM at $0800-$1FFF
     return Cart.Mapper == 119 && ChrA16[(Address >> 10) & 7];
 }
 
@@ -418,6 +421,15 @@ inline void TricMapper::PPUClock() {
     if (Cart.Mapper==1 || Cart.Mapper==155) {
         bool high=(PPU_AddressBus&4096)!=0;
         if (A12!=high) { A12=high; MMC1Apply(); }
+    }
+    // Oeka Kids (nesdev INES Mapper 096): moving the PPU address into $2xxx from
+    // outside it latches A9-A8 as the inner 4 KiB CHR bank at $0000.
+    if (Cart.Mapper == 96) {
+        if ((OekaLastBus & 0x3000) != 0x2000 && (PPU_AddressBus & 0x3000) == 0x2000) {
+            OekaInner = (byte)((PPU_AddressBus >> 8) & 3);
+            MapCHR4(0, OekaOuter + OekaInner);
+        }
+        OekaLastBus = PPU_AddressBus;
     }
     if (Cart.Mapper==153 || Cart.Mapper==157) {
         unsigned select=(PPU_AddressBus/1024)%4;
@@ -535,6 +547,7 @@ inline void TricMapper::Reset() {
     memset(RamboReg, 0, sizeof(RamboReg)); RamboPrescale = RamboDelay = 0; RamboCycle = false;
     H3Counter = H3Reload = 0;
     S3Counter = 0; S3LowNext = false; Chr93Off = false;
+    OekaInner = OekaOuter = 0; OekaLastBus = 0;
     TaitoDelay = 0;
     memset(X1Prg, 0, sizeof(X1Prg)); memset(X1Key, 0, sizeof(X1Key)); X1Mode = 0;
     memset(NamcoChr, 0, sizeof(NamcoChr)); memset(NamcoNt, 0, sizeof(NamcoNt)); memset(NamcoPrg, 0, sizeof(NamcoPrg));
@@ -593,6 +606,8 @@ inline void TricMapper::Reset() {
     case 78: case 89: case 93: case 72: case 92: MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0); break;
     case 97: MapPRG16(0, -1); MapPRG16(1, 0); MapCHR8(0); break;
     case 86: case 101: MapPRG32(0); MapCHR8(0); break;
+    case 77: MapPRG32(0); MapCHR1(0, 0); MapCHR1(1, 1); for (uint i = 2; i < 8; ++i) ChrLow[i] = (byte)(i - 2); break;
+    case 96: MapPRG32(0); MapCHR4(0, 0); MapCHR4(1, 3); break;
     case 70: case 152:
         MapPRG16(0, 0); MapPRG16(1, -1); MapCHR8(0);
         if (Cart.Mapper == 152) Mirroring = TRIC_MIRROR_SCREEN_A;
@@ -883,6 +898,15 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
             MapPRG16(1, Input % 32);
             Mirroring = Input >= 128 ? TRIC_MIRROR_VERTICAL : TRIC_MIRROR_HORIZONTAL;
         }
+        break;
+    case 77:   // nesdev INES Mapper 077: [CCCC PPPP]; 2 KiB CHR ROM at $0000, RAM above; bus conflicts
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG32(Latch % 16); MapCHR1(0, (Latch / 16) * 2); MapCHR1(1, (Latch / 16) * 2 + 1);
+        break;
+    case 96:   // nesdev INES Mapper 096: [.... .CPP]; bus conflicts
+        Latch = (byte)(Input & SnoopCPU(Address));
+        MapPRG32(Latch % 4); OekaOuter = Latch & 4;
+        MapCHR4(0, OekaOuter + OekaInner); MapCHR4(1, OekaOuter + 3);
         break;
     case 72: case 92: {  // nesdev INES Mapper 072/092: load on a 0 -> 1 of bit 7 (PRG) / bit 6 (CHR)
         byte v = (byte)(Input & SnoopCPU(Address));

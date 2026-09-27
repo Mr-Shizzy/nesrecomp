@@ -1429,6 +1429,8 @@ static const char *mapper_name(int mapper) {
     case 92: return "Jaleco JF-19";
     case 86: return "Jaleco JF-13";
     case 101: return "Jaleco JF-10 (mapper 101)";
+    case 77: return "Irem LROG017";
+    case 96: return "Bandai Oeka Kids";
     case 158: return "Tengen 800037";
     case 33: return "Taito TC0190";
     case 32: return "Irem G-101";

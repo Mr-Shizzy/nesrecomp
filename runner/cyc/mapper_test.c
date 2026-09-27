@@ -273,6 +273,28 @@ static void test_discrete_batch3(void)
     no_wram();
 }
 
+/* nesdev wiki, INES Mapper 077 (Irem LROG017) and 096 (Oeka Kids). */
+static void test_chr_tricks_batch3(void)
+{
+    cart(77, 128, 16);
+    hw_cart_cpu_write(0x8000, 0x32); prg_banks(8, 9, 10, 11);
+    CHECK(hw_cart.chr_off[0] == 6 * 1024 && hw_cart.chr_off[1] == 7 * 1024);
+    CHECK(!hw_cart.chr_write[0] && !hw_cart.chr_write[1] && hw_cart.chr_write[2] && hw_cart.chr_write[7]);
+    CHECK(hw_cart.chr_off[2] == hw_cart.chr_ram_base && hw_cart.chr_off[7] == hw_cart.chr_ram_base + 5 * 1024);
+    prg[hw_cart.prg_off[0]] = 0x10; hw_cart_cpu_write(0x8000, 0xf3);   /* AND bus conflict */
+    prg_banks(0, 1, 2, 3); CHECK(hw_cart.chr_off[0] == 2 * 1024);
+    no_wram();
+    cart(96, 128, 32);
+    CHECK(hw_cart.watch_ppu_addr);
+    hw_cart_cpu_write(0x8000, 0x07); prg_banks(12, 13, 14, 15);
+    CHECK(hw_cart.chr_off[0] == 16 * 1024 && hw_cart.chr_off[4] == 28 * 1024);
+    hw_cart_ppu_addr(0x2300); CHECK(hw_cart.chr_off[0] == 28 * 1024);   /* inner = A9-A8 */
+    hw_cart_ppu_addr(0x2100); CHECK(hw_cart.chr_off[0] == 28 * 1024);   /* no move into $2xxx */
+    hw_cart_ppu_addr(0x3f00); hw_cart_ppu_addr(0x2100); CHECK(hw_cart.chr_off[0] == 20 * 1024);
+    hw_cart_ppu_addr(0x0000); hw_cart_ppu_addr(0x2e00); CHECK(hw_cart.chr_off[0] == 24 * 1024);
+    no_wram();
+}
+
 /* nesdev wiki, INES Mapper 067: Sunsoft-3. */
 static void test_mapper67(void)
 {
@@ -992,6 +1014,7 @@ int main(void)
     test_mapper65();
     test_mapper67();
     test_discrete_batch3();
+    test_chr_tricks_batch3();
     test_mapper_namco118();
     test_mapper140();
     test_mapper113();

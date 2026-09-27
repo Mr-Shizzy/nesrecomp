@@ -128,6 +128,24 @@ def ppu_fixtures():
         ('cpu', 0xb000, 0x06), ('cpu', 0xb000, 0x46), ('read', 0, 48)])
     yield ppu_contract(86, 128, 64, [('cpu', 0x6000, 0x45), ('read', 0, 40), ('read', 0x1fff, 47)])
     yield ppu_contract(101, 32, 64, [('cpu', 0x6000, 0x07), ('read', 0, 56), ('cpu', 0x7fff, 0x02), ('read', 0x1c00, 23)])
+    # Irem LROG017 (77): 2 KiB CHR ROM at $0000, CHR RAM above, four RAM nametables.
+    yield ppu_contract(77, 128, 16, [
+        ('cpu', 0xb000, 0x30), ('read', 0, 6), ('read', 0x0400, 7),
+        ('write', 0x0000, 0x77), ('read', 0x0000, 6),
+        ('write', 0x0800, 0x5a), ('write', 0x1fff, 0xa5), ('read', 0x0800, 0x5a), ('read', 0x1fff, 0xa5),
+        ('write', 0x2000, 0x31), ('write', 0x2400, 0x32), ('write', 0x2800, 0x33), ('write', 0x2c00, 0x34),
+        ('read', 0x2000, 0x31), ('read', 0x2400, 0x32), ('read', 0x2800, 0x33), ('read', 0x2c00, 0x34)])
+    # Oeka Kids (96): moving the PPU address into $2xxx latches A9-A8 as the
+    # inner 4 KiB CHR RAM bank at $0000; $1000 is inner bank 3; bit 2 the outer bank.
+    yield ppu_contract(96, 128, 0, [
+        ('write', 0x2100, 0), ('write', 0x0010, 0x5a),
+        ('write', 0x2200, 0), ('read', 0x0010, 0),
+        ('write', 0x2100, 0), ('read', 0x0010, 0x5a),
+        ('cpu', 0xb000, 0x04), ('read', 0x0010, 0), ('cpu', 0xb000, 0x00), ('read', 0x0010, 0x5a),
+        ('write', 0x1010, 0x77), ('write', 0x2300, 0), ('read', 0x0010, 0x77),
+        # Staying inside $2xxx does not latch: $2101 -> $2300 keeps inner bank 1.
+        ('write', 0x2100, 0), ('write', 0x2300, 0), ('write', 0x0020, 0x66),
+        ('write', 0x2100, 0), ('read', 0x0020, 0x66)])
     yield ppu_contract(140, 128, 128, [('cpu', 0x6000, 0x2a), ('read', 0, 80), ('read', 0x1fff, 87)])
     yield ppu_contract(184, 32, 32, [
         ('cpu', 0x6000, 0x12), ('read', 0, 8), ('read', 0x1000, 20),
