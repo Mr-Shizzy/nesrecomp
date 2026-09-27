@@ -190,6 +190,35 @@ static void test_taito(void)
     cpu_cycles(2); hw_cart_cpu_write(0xc003, 0); cpu_cycles(10); CHECK(!hw_cart_irq());
 }
 
+/* nesdev wiki, INES Mapper 065: Irem H3001. */
+static void test_mapper65(void)
+{
+    cart(65, 256, 256);
+    CHECK(hw_cart.watch_cpu);
+    prg_banks(0, 1, 30, 31);                                        /* power-on $00/$01 */
+    hw_cart_cpu_write(0x8000, 5); hw_cart_cpu_write(0xa007, 7); prg_banks(5, 7, 30, 31);
+    hw_cart_cpu_write(0x9000, 0x80); prg_banks(30, 7, 5, 31);       /* no $C000 register */
+    hw_cart_cpu_write(0xc000, 9); prg_banks(30, 7, 5, 31);
+    hw_cart_cpu_write(0xb003, 0x44); chr_bank(3, 0x44, 1);
+    hw_cart_cpu_write(0x9001, 0x00); CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    hw_cart_cpu_write(0x9001, 0x80); CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    hw_cart_cpu_write(0x9001, 0x40); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_A);
+    hw_cart_cpu_write(0x9001, 0xc0); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_A);
+    no_wram();
+    /* 16-bit counter: $9004 loads, $9003 bit 7 enables, IRQ on reaching 0, stops there. */
+    hw_cart_cpu_write(0x9005, 0x00); hw_cart_cpu_write(0x9006, 0x05); hw_cart_cpu_write(0x9004, 0);
+    cpu_cycles(10); CHECK(hw_cart.m.irq_counter16 == 5);            /* disabled: holds */
+    hw_cart_cpu_write(0x9003, 0x80);
+    cpu_cycles(4); CHECK(hw_cart.m.irq_counter16 == 1 && !hw_cart_irq());
+    cpu_cycles(1); CHECK(hw_cart.m.irq_counter16 == 0 && hw_cart_irq());
+    cpu_cycles(5); CHECK(hw_cart.m.irq_counter16 == 0 && hw_cart_irq());
+    hw_cart_cpu_write(0x9003, 0x80); CHECK(!hw_cart_irq());         /* acknowledge */
+    cpu_cycles(20); CHECK(!hw_cart_irq());                          /* stopped at 0 */
+    hw_cart_cpu_write(0x9004, 0); CHECK(!hw_cart_irq());            /* reload also acknowledges */
+    cpu_cycles(5); CHECK(hw_cart_irq());                            /* still enabled */
+    hw_cart_cpu_write(0x9003, 0); hw_cart_cpu_write(0x9004, 0); cpu_cycles(10); CHECK(!hw_cart_irq());
+}
+
 /* nesdev wiki, RAMBO-1 (mapper 64) and INES Mapper 158. */
 static void rambo_rise(void) { hw_cart_ppu_addr(0x0000); hw.cycles += 4; hw_cart_ppu_addr(0x1000); }
 
@@ -848,6 +877,7 @@ int main(void)
     test_mapper152();
     test_mapper64();
     test_mapper158();
+    test_mapper65();
     test_mapper140();
     test_mapper113();
     test_mapper94();

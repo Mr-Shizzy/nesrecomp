@@ -458,6 +458,56 @@ static void irem_g101_write(uint16_t addr, uint8_t value)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Mapper 65: Irem H3001                                                    */
+/* ------------------------------------------------------------------------- */
+/* nesdev wiki, INES Mapper 065. $8000 and $A000 select 8 KiB PRG banks;
+ * $9000 bit 7 moves the $8000 bank to $C000 and bank $3E to $8000 ($C000 is
+ * otherwise $3E; $E000 is always $3F). $9001 bits 7-6: 00 vertical, 10
+ * horizontal, x1 one-screen A. $B000-$B007 select the eight 1 KiB CHR banks.
+ * IRQ: $9005/$9006 set the 16-bit reload value, a $9004 write copies it into
+ * the counter, $9003 bit 7 enables; either write acknowledges. The enabled
+ * counter decrements every CPU cycle and asserts on reaching 0, where it
+ * stops. Power-on PRG registers are $00/$01 ("games do rely on this"). The
+ * $C000 bank register some documents (and Mesen2) describe does not exist. */
+static void irem_h3001_apply(void)
+{
+    bool swap = (hw_cart.m.ctrl & 0x80) != 0;
+    map_prg8(swap ? 2 : 0, hw_cart.m.reg[0]);
+    map_prg8(swap ? 0 : 2, 0x3e);
+    map_prg8(1, hw_cart.m.reg[1]);
+    map_prg8(3, 0x3f);
+    unsigned m = hw_cart.m.mirror_reg >> 6;
+    hw_cart.mirroring = m == 0 ? HW_MIRROR_VERTICAL : m == 2 ? HW_MIRROR_HORIZONTAL : HW_MIRROR_SCREEN_A;
+}
+
+static void irem_h3001_write(uint16_t addr, uint8_t value)
+{
+    switch (addr & 0xf000) {
+    case 0x8000: hw_cart.m.reg[0] = value; break;
+    case 0xa000: hw_cart.m.reg[1] = value; break;
+    case 0xb000: map_chr1(addr & 7, value); return;
+    case 0x9000:
+        switch (addr & 7) {
+        case 0: hw_cart.m.ctrl = value; break;
+        case 1: hw_cart.m.mirror_reg = value; break;
+        case 3: hw_cart.m.irq_enable = value >> 7; hw_cart.m.irq_out = 0; return;
+        case 4: hw_cart.m.irq_counter16 = hw_cart.m.irq_latch16; hw_cart.m.irq_out = 0; return;
+        case 5: hw_cart.m.irq_latch16 = (uint16_t)((hw_cart.m.irq_latch16 & 0x00ff) | (value << 8)); return;
+        case 6: hw_cart.m.irq_latch16 = (uint16_t)((hw_cart.m.irq_latch16 & 0xff00) | value); return;
+        default: return;
+        }
+        break;
+    default: return;
+    }
+    irem_h3001_apply();
+}
+
+static void irem_h3001_clock(void)
+{
+    if (hw_cart.m.irq_enable && hw_cart.m.irq_counter16 && --hw_cart.m.irq_counter16 == 0) hw_cart.m.irq_out = 1;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Mapper 228: Active Enterprises (Action 52, Cheetahmen II)                */
 /* ------------------------------------------------------------------------- */
 /* nesdev wiki, INES Mapper 228. A write to $8000-$FFFF latches the address
@@ -613,6 +663,7 @@ static const struct {
     { 158, "Tengen 800037 (RAMBO-1, CHR A17 mirroring)", 1, 0 },
     { 33, "Taito TC0190", 0, 0 },
     { 32, "Irem G-101", 0, 0 },
+    { 65, "Irem H3001", 0, 0 },
     { 80, "Taito X1-005", 0, 0 },
     { 207, "Taito X1-005 (CHR mirroring)", 0, 0 },
     { 82, "Taito X1-017", 0, 0 },
@@ -711,7 +762,7 @@ void hw_cart_power_on(void)
     hw_cart.chr_ciram = 0;
     int i = mapper_index(hw_cart.mapper);
     hw_cart.watch_ppu_addr = i >= 0 ? MAPPERS[i].watch_ppu_addr : 0;
-    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==19 || hw_cart.mapper==18 || hw_cart.mapper==48 || hw_cart.mapper==64 || hw_cart.mapper==158 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
+    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==19 || hw_cart.mapper==18 || hw_cart.mapper==48 || hw_cart.mapper==64 || hw_cart.mapper==158 || hw_cart.mapper==65 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
     hw_cart.mirroring = hw_cart.info.vertical ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
     hw_cart.wram_bank = 0;
     hw_cart.has_wram = hw_cart.info.prg_size ? hw_cart.wram_len != 0 : i >= 0 ? MAPPERS[i].wram : 0;
@@ -738,6 +789,7 @@ void hw_cart_power_on(void)
     case 64: case 158: rambo_apply(); break;
     case 33: case 48: taito_apply(); break;
     case 32: irem_g101_apply(); map_chr8(0); break;
+    case 65: hw_cart.m.reg[1] = 1; irem_h3001_apply(); map_chr8(0); break;
     case 80: case 207: case 82: case 552: taito_x1_apply(); break;
     case 68: sunsoft4_apply(); break;
     case 41: nrom_reset(); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
@@ -984,6 +1036,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 64: case 158: rambo_write(addr, value); break;
     case 33: case 48: taito_write(addr, value); break;
     case 32: irem_g101_write(addr, value); break;
+    case 65: irem_h3001_write(addr, value); break;
     case 228: action52_write(addr, value); break;
     case 7:  axrom_write(value); break;
     case 66: gxrom_write(value); break;
@@ -1052,6 +1105,7 @@ void hw_cart_cpu_clock(void)
     if (hw_cart.mapper==18) { jaleco_clock(); return; }
     if (hw_cart.mapper==48) { tc0690_cpu_clock(); return; }
     if (hw_cart.mapper==64 || hw_cart.mapper==158) { rambo_cpu_clock(); return; }
+    if (hw_cart.mapper==65) { irem_h3001_clock(); return; }
     if (bandai_board()) { bandai_clock(); return; }
     if (hw_cart.mapper==85) vrc7_audio_clock();
     if (vrc6_board()) vrc6_audio_clock();
@@ -1145,7 +1199,7 @@ uint64_t hw_cart_state_hash(uint64_t h)
         acc = acc * 131 + hw_cart.m.pattern_addr;
     }
     if (hw_cart.mapper==40 || bandai_board() || vrc24_board() || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85 ||
-        hw_cart.mapper==80 || hw_cart.mapper==207 || hw_cart.mapper==82 || hw_cart.mapper==552) {
+        hw_cart.mapper==80 || hw_cart.mapper==207 || hw_cart.mapper==82 || hw_cart.mapper==552 || hw_cart.mapper==65) {
         for (unsigned i=0; i<8; ++i) acc = acc*131 + hw_cart.m.vrc_chr[i];
         acc = acc*131 + hw_cart.m.irq_latch16;
         acc = acc*131 + hw_cart.m.irq_counter16;
@@ -1224,7 +1278,7 @@ void hw_cart_state_dump(void *file)
             fprintf(f,"cart.vrc6.ch%u %02X %02X %02X timer=%u step=%u\n",ch,
                     a->reg[ch][0],a->reg[ch][1],a->reg[ch][2],a->timer[ch],a->step[ch]);
     }
-    if (hw_cart.mapper==40 || bandai_board() || vrc24_board() || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85) {
+    if (hw_cart.mapper==40 || bandai_board() || vrc24_board() || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85 || hw_cart.mapper == 65) {
         for (unsigned i=0; i<8; ++i) fprintf(f, "cart.vrc_chr[%u] %03X\n", i, hw_cart.m.vrc_chr[i]);
         fprintf(f, "cart.irq_latch16 %04X\ncart.irq_counter16 %04X\ncart.irq_prescaler %d\ncart.irq_mode %u\n",
                 hw_cart.m.irq_latch16, hw_cart.m.irq_counter16, hw_cart.m.irq_prescaler, hw_cart.m.irq_mode);

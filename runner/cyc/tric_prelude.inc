@@ -100,6 +100,8 @@ struct TricMapper {
     byte JPrg[3], JChr[8], JRam, JReload[4], JCtrl, JMirror;
     // ---- Tengen RAMBO-1 ----
     byte RamboReg[16], RamboPrescale, RamboDelay;
+    // ---- Irem H3001 ----
+    ushort H3Counter, H3Reload;
     bool RamboCycle;
     ushort JCounter;
     // ---- Sunsoft FME-7 ----
@@ -142,6 +144,8 @@ struct TricMapper {
     void X1Store(ushort Address, byte Input);
     void TaitoApply();
     void IremG101Apply();
+    void IremH3001Apply();
+    void IremH3001Store(ushort Address, byte Input);
     void TaitoStore(ushort Address, byte Input);
     void JalecoApply();
     void JalecoStore(ushort Address, byte Input);
@@ -446,6 +450,41 @@ inline bool TricMapper::Cnrom185Chr() {
     return DataReads >= 3;   // submapper 0: the first two $2007 fetches see no CHR
 }
 
+// ---- Irem H3001 (nesdev wiki, INES Mapper 065) ----
+// $8000/$A000 PRG; $9000 [X...] puts the $8000 bank at $C000 and $3E at $8000;
+// $9001 [MM..] 00 V / 10 H / x1 1scA; $9003 [E...] enable; $9004 reload;
+// $9005/$9006 reload high/low; $B000-$B007 1 KiB CHR. 16-bit down counter,
+// one per CPU cycle while enabled, IRQ on reaching 0, stops at 0.
+inline void TricMapper::IremH3001Apply() {
+    bool alt = Ctrl >= 128;
+    MapPRG8(alt ? 2 : 0, Reg[0]);
+    MapPRG8(alt ? 0 : 2, 0x3e);
+    MapPRG8(1, Reg[1]);
+    MapPRG8(3, 0x3f);
+    switch (MirrorReg / 64) {
+    case 0: Mirroring = TRIC_MIRROR_VERTICAL; break;
+    case 2: Mirroring = TRIC_MIRROR_HORIZONTAL; break;
+    default: Mirroring = TRIC_MIRROR_SCREEN_A; break;
+    }
+}
+inline void TricMapper::IremH3001Store(ushort Address, byte Input) {
+    unsigned group = Address >> 12;
+    if (group == 8) Reg[0] = Input;
+    else if (group == 10) Reg[1] = Input;
+    else if (group == 11) { MapCHR1(Address % 8, Input); return; }
+    else if (group == 9) {
+        unsigned r = Address % 8;
+        if (r == 0) Ctrl = Input;
+        else if (r == 1) MirrorReg = Input;
+        else if (r == 3) { IrqEnable = Input >= 128; IrqOut = false; return; }
+        else if (r == 4) { H3Counter = H3Reload; IrqOut = false; return; }
+        else if (r == 5) { H3Reload = (ushort)((H3Reload % 256) + Input * 256); return; }
+        else if (r == 6) { H3Reload = (ushort)((H3Reload / 256) * 256 + Input); return; }
+        else return;
+    } else return;
+    IremH3001Apply();
+}
+
 // ---- Irem G-101 (nesdev wiki, INES Mapper 032) ----
 inline void TricMapper::IremG101Apply() {
     bool fixed = Cart.Info.submapper == 1;             // Major League
@@ -484,6 +523,7 @@ inline void TricMapper::Reset() {
     memset(JPrg, 0, sizeof(JPrg)); memset(JChr, 0, sizeof(JChr)); memset(JReload, 0, sizeof(JReload));
     JRam = JCtrl = JMirror = 0; JCounter = 0;
     memset(RamboReg, 0, sizeof(RamboReg)); RamboPrescale = RamboDelay = 0; RamboCycle = false;
+    H3Counter = H3Reload = 0;
     TaitoDelay = 0;
     memset(X1Prg, 0, sizeof(X1Prg)); memset(X1Key, 0, sizeof(X1Key)); X1Mode = 0;
     memset(NamcoChr, 0, sizeof(NamcoChr)); memset(NamcoNt, 0, sizeof(NamcoNt)); memset(NamcoPrg, 0, sizeof(NamcoPrg));
@@ -509,6 +549,7 @@ inline void TricMapper::Reset() {
     case 64: case 158: RamboApply(); break;
     case 33: case 48: TaitoApply(); break;
     case 32: IremG101Apply(); MapCHR8(0); break;
+    case 65: Reg[0] = 0; Reg[1] = 1; IremH3001Apply(); MapCHR8(0); break;
     case 80: case 207: case 82: case 552: X1Apply(); break;
     case 68: Sunsoft4Apply(); break;
     case 41: MapPRG32(0); MapCHR8(0); Mirroring = TRIC_MIRROR_VERTICAL; break;
@@ -651,6 +692,7 @@ inline void TricMapper::StoreCPU(ushort Address, byte Input) {
     if (Cart.Mapper==19 || Cart.Mapper==210) { NamcoStore(Address,Input); return; }
     if (Cart.Mapper==18) { JalecoStore(Address,Input); return; }
     if (Cart.Mapper==64 || Cart.Mapper==158) { RamboStore(Address,Input); return; }
+    if (Cart.Mapper==65) { IremH3001Store(Address,Input); return; }
     if (Cart.Mapper==80 || Cart.Mapper==207 || Cart.Mapper==82 || Cart.Mapper==552) {
         if (Address < 0x8000) X1Store(Address, Input);
         return;

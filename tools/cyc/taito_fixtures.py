@@ -136,6 +136,57 @@ def taito_x1_fixtures():
         ('cpu', 0x7ef6, 0)], '_x1017')
 
 
+def h3001_irq_phase():
+    """Irem H3001: reload $0100 and enable; each of 64 IRQs stores the low byte
+    of a main-loop counter (13 cycles per pass), burns X+1 five-cycle passes
+    and writes only $9004. That acknowledges and reloads; the counter stays
+    enabled (it only stopped at 0), so the next IRQ follows."""
+    code = bytearray([0x78, 0xd8, 0xa2, 0xff, 0x9a])
+
+    def store(a, v):
+        code.extend([0xa9, v, 0x8d, a & 255, a >> 8])
+
+    store(0x10, 0)
+    store(0x11, 0)
+    store(0x4017, 0x40)
+    store(0x9005, 0x01)
+    store(0x9006, 0x00)
+    store(0x9004, 0)
+    store(0x9003, 0x80)
+    code.extend([0x58, 0xe6, 0x10, 0xa5, 0x11, 0xc9, 64, 0x90, 0xf8, 0xa9, 0x42])
+    done = 0x8000 + len(code)
+    code.extend([0x4c, done & 255, done >> 8])
+    assert len(code) < 0x100
+    # PHA; TXA; PHA; LDX $11; LDA $10; STA $0300,X; INC $11; INX; loop: DEX; BNE loop;
+    # LDA $11; CMP #64; BCS last; STA $9004; BCC out; last: LDA #0; STA $9003 (disable
+    # and acknowledge the final IRQ); out: PLA; TAX; PLA; RTI
+    handler = bytes([0x48, 0x8a, 0x48, 0xa6, 0x11, 0xa5, 0x10, 0x9d, 0x00, 0x03, 0xe6, 0x11,
+                     0xe8, 0xca, 0xd0, 0xfd, 0xa5, 0x11, 0xc9, 64, 0xb0, 5, 0x8d, 0x04, 0x90,
+                     0x90, 5, 0xa9, 0, 0x8d, 0x03, 0x90, 0x68, 0xaa, 0x68, 0x40])
+    prg = bytearray([0xff]) * 131072
+    for bank in range(16):
+        start = bank * 8192
+        prg[start:start + len(code)] = code
+        prg[start + 0x100:start + 0x100 + len(handler)] = handler
+        prg[start + 8192 - 6:start + 8192] = bytes([0, 0x81, 0, 0x80, 0, 0x81])
+    chr_rom = b''.join(bytes([page & 255]) * 1024 for page in range(8))
+    header = b'NES\x1a' + bytes([8, 1, 0x10, 0x40]) + bytes(8)
+    return 'h3001_irq_phase', header + prg + chr_rom, '00:8000\n00:8100\n', 'final:A=42'
+
+
+def irem_h3001_fixtures():
+    yield handoff('h3001_prg', 65, [(0x8000, 5)], 5, chr_kb=8)
+    yield handoff('h3001_prg_swap', 65, [(0x8000, 5), (0x9000, 0x80)], 14, chr_kb=8)   # $3E at $8000
+    yield handoff('h3001_prg_a000', 65, [(0xa000, 3)], 3, chr_kb=8, start=0xa000)
+    yield ppu_contract(65, 128, 128, [
+        ('cpu', 0xb000, 5), ('read', 0, 5), ('cpu', 0xb007, 0x41), ('read', 0x1c00, 0x41),
+        ('cpu', 0x9001, 0), ('write', 0x2000, 0x31), ('write', 0x2400, 0x32),
+        ('read', 0x2800, 0x31), ('read', 0x2c00, 0x32),
+        ('cpu', 0x9001, 0x80), ('read', 0x2400, 0x31), ('read', 0x2800, 0x32),
+        ('cpu', 0x9001, 0x40), ('read', 0x2c00, 0x31)])
+    yield h3001_irq_phase()
+
+
 def taito_fixtures():
     yield handoff('tc0190_prg', 33, [(0x8000, 0x45)], 5, chr_kb=8)
     yield handoff('tc0190_prg_c000', 33, [(0xc000, 0x06)], 6, chr_kb=8)   # A14 not decoded
@@ -156,4 +207,5 @@ def taito_fixtures():
     yield scanline_irq_phase(48)
     yield scanline_irq_phase(4)
     yield from irem_g101_fixtures()
+    yield from irem_h3001_fixtures()
     yield from taito_x1_fixtures()
