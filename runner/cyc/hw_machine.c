@@ -403,6 +403,7 @@ uint64_t cyc_mem_state_hash(void)
     for (unsigned chip=0;chip<2;++chip)
         for (unsigned i=0;i<hw_cart.eeprom[chip].size;++i) h=cyc_trace_mix(h,hw_cart.eeprom[chip].data[i]);
     if (hw_cart.mapper==5) for (unsigned i=0;i<1024;++i) h=cyc_trace_mix(h,hw_cart.exram[i]);
+    if (hw_cart.mapper==19) for (unsigned i=0;i<128;++i) h=cyc_trace_mix(h,hw_cart.exram[i]);
     return h;
 }
 

@@ -85,6 +85,14 @@ typedef struct {
     uint16_t timer[3];
 } HwVrc6Audio;
 
+/* Namco 163/175/340 registers (hw_namco.inc); the 163's RAM is exram[0-127]. */
+typedef struct {
+    uint8_t chr[8], nt[4], prg[3], protect, ram_enable;
+    uint8_t sound_addr, sound_inc, sound_step, channel;
+    uint16_t irq;              /* bit 15: enable; bits 0-14: counter */
+    int16_t output;            /* the channel currently held on the DAC */
+} HwNamco;
+
 /* Sunsoft FME-7 registers, and the 5B's sound generator (hw_sunsoft.inc). */
 typedef struct {
     uint8_t command, chr[8], prg[4], mirror, irq_ctrl;
@@ -112,6 +120,8 @@ typedef struct {
      * so it is compared across implementations in cyc_mem_hash. */
     uint32_t chr_ram_base, chr_ram_len;
     uint8_t  chr_write[8];      /* the 1KB page is writable RAM */
+    uint8_t  chr_ciram;         /* bit per 1KB page backed by CIRAM (Namco 163); chr_off
+                                   then holds the CIRAM page offset, 0 or 0x400 */
 
     /* Where each window reads from, as a byte offset into prg/chr. Mappers
      * set these only through hw_cart_map_prg8()/hw_cart_map_chr1(). */
@@ -121,7 +131,7 @@ typedef struct {
     NesCartInfo info;
     NesEeprom eeprom[2];
     NesBarcode barcode;
-    uint8_t exram[1024]; /* MMC5 internal RAM, battery-powered separately. */
+    uint8_t exram[1024]; /* MMC5 ExRAM or Namco 163 internal RAM, battery-powered separately. */
     uint32_t wram_len, wram_bank;
     uint16_t mapper;            /* iNES mapper number */
     uint8_t  mirroring;         /* HwMirroring, as the cartridge drives CIRAM A10 */
@@ -152,6 +162,7 @@ typedef struct {
         uint8_t irq_mode;
         Mmc5State mmc5;
         HwVrc6Audio vrc6_audio;
+        HwNamco namco;
         HwFme7 fme7;
         Hw5B s5b;
         uint8_t vrc7_reg[64], vrc7_address;
@@ -183,7 +194,8 @@ HW_ALWAYS_INLINE uint32_t hw_cart_chr_index(uint16_t a)
 /* CIRAM A10 as the cartridge drives it, as a CIRAM index bit. */
 HW_ALWAYS_INLINE uint16_t hw_cart_ciram_a10(uint16_t vbus)
 {
-    if (hw_cart.mapper == 24 || hw_cart.mapper == 26 || hw_cart.mapper == 118) return hw_cart_nt_a10(vbus);
+    if (hw_cart.mapper == 24 || hw_cart.mapper == 26 || hw_cart.mapper == 118 || hw_cart.mapper == 19)
+        return hw_cart_nt_a10(vbus);
     if (hw_cart.info.four_screen) return vbus & 0xc00;
     switch (hw_cart.mirroring) {
     case HW_MIRROR_HORIZONTAL: return (vbus & 0x800) ? 0x400 : 0;

@@ -532,6 +532,7 @@ void hw_cart_ppu_rd(bool reading)
 #include "hw_vrc7.inc"
 #include "hw_bandai.inc"
 #include "hw_sunsoft.inc"
+#include "hw_namco.inc"
 
 static const struct {
     int         mapper;
@@ -541,6 +542,8 @@ static const struct {
 } MAPPERS[] = {
     { 5, "MMC5", 0, 1 },
     { 69, "Sunsoft FME-7 / 5B", 0, 1 },
+    { 19, "Namco 163", 0, 0 },
+    { 210, "Namco 175 / 340", 0, 0 },
     { 68, "Sunsoft-4", 0, 1 },
     { 41, "Caltron 6-in-1", 0, 0 },
     { 228, "Active Enterprises", 0, 0 },
@@ -627,9 +630,10 @@ void hw_cart_power_on(void)
     memset(hw_cart.prg_off, 0, sizeof(hw_cart.prg_off));
     memset(hw_cart.chr_off, 0, sizeof(hw_cart.chr_off));
     memset(hw_cart.chr_write, hw_cart.chr_ram, sizeof(hw_cart.chr_write));
+    hw_cart.chr_ciram = 0;
     int i = mapper_index(hw_cart.mapper);
     hw_cart.watch_ppu_addr = i >= 0 ? MAPPERS[i].watch_ppu_addr : 0;
-    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
+    hw_cart.watch_cpu = hw_cart.mapper==40 || hw_cart.mapper==69 || hw_cart.mapper==19 || hw_cart.mapper==5 || bandai_board() || (vrc24_board() && !vrc2_board()) || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85;
     hw_cart.mirroring = hw_cart.info.vertical ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
     hw_cart.wram_bank = 0;
     hw_cart.has_wram = hw_cart.info.prg_size ? hw_cart.wram_len != 0 : i >= 0 ? MAPPERS[i].wram : 0;
@@ -651,6 +655,7 @@ void hw_cart_power_on(void)
     switch (hw_cart.mapper) {
     case 5: mmc5_reset(); break;
     case 69: fme7_apply(); break;
+    case 19: case 210: hw_cart.m.namco.channel = 7; namco_apply(); break;
     case 68: sunsoft4_apply(); break;
     case 41: nrom_reset(); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
     /* The games expect $00 written to $8000 at power-on and reset. */
@@ -708,6 +713,14 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     }
     if (hw_cart.mapper==5) { mmc5_write(addr,value); return; }
     if (hw_cart.mapper==69 && addr>=0x8000) { fme7_write(addr,value); return; }
+    if (hw_cart.mapper==19 || hw_cart.mapper==210) {
+        if (addr >= 0x8000) namco_write(addr, value);
+        else if (addr >= 0x6000) {
+            bool ok = hw_cart.mapper==19 ? namco_write_ram(addr) : hw_cart.wram_writable;
+            if (hw_cart.has_wram && ok) hw_cart.wram[(hw_cart.wram_bank + (addr & 0x1FFF)) % hw_cart.wram_len] = value;
+        } else if (hw_cart.mapper==19 && addr >= 0x4800) namco_low_write(addr, value);
+        return;
+    }
     if (bandai_board()) { bandai_write(addr,value); return; }
     if (vrc24_board() && addr >= 0x6000 && addr < 0x8000) {
         if (vrc2_board() && !hw_cart.has_wram) {
@@ -878,6 +891,7 @@ bool hw_cart_cpu_read(uint16_t addr, uint8_t *value)
     }
     if (hw_cart.mapper==5) return mmc5_read(addr,value);
     if (hw_cart.mapper==69) return addr>=0x6000 && addr<0x8000 && fme7_read(addr,value);
+    if (hw_cart.mapper==19 && addr >= 0x4800 && addr < 0x6000) return namco_low_read(addr, value);
     if (bandai_board()) return bandai_read(addr,value);
     if (vrc24_board() && addr >= 0x6000 && addr < 0x8000) {
         if (vrc2_board() && !hw_cart.has_wram) {
@@ -920,6 +934,7 @@ void hw_cart_cpu_clock(void)
     }
     if (hw_cart.mapper==5) { mmc5_clock(); return; }
     if (hw_cart.mapper==69) { fme7_clock(); return; }
+    if (hw_cart.mapper==19) { namco_clock(); return; }
     if (bandai_board()) { bandai_clock(); return; }
     if (hw_cart.mapper==85) vrc7_audio_clock();
     if (vrc6_board()) vrc6_audio_clock();
@@ -932,6 +947,7 @@ void hw_cart_cpu_clock(void)
 uint16_t hw_cart_nt_a10(uint16_t addr)
 {
     if (hw_cart.mapper == 118) return txsrom_ciram_a10(addr);
+    if (hw_cart.mapper == 19) return namco_nt_a10(addr);
     return (vrc6_nt_bank((addr >> 10) & 3) & 1) << 10;
 }
 bool hw_cart_nt_read(uint16_t addr, bool read_bus, uint8_t *value)
@@ -940,6 +956,11 @@ bool hw_cart_nt_read(uint16_t addr, bool read_bus, uint8_t *value)
     if (hw_cart.mapper==68) {
         if (!(hw_cart.m.ctrl & 0x10)) return false;
         if (read_bus) *value = hw_cart.chr[sunsoft4_nt_index(addr)];
+        return true;
+    }
+    if (hw_cart.mapper==19) {
+        if (!namco_nt_is_rom(addr)) return false;
+        if (read_bus) *value = hw_cart.chr[namco_nt_index(addr)];
         return true;
     }
     if (!vrc6_board() || !(hw_cart.m.ctrl & 0x10)) return false;
@@ -953,6 +974,7 @@ bool hw_cart_nt_write(uint16_t addr, uint8_t value)
 {
     if (hw_cart.mapper==5) { mmc5_nt_write(addr,value); return true; }
     if (hw_cart.mapper==68) return (hw_cart.m.ctrl & 0x10) != 0; /* ROM: CIRAM deselected */
+    if (hw_cart.mapper==19) return namco_nt_is_rom(addr);
     if (!vrc6_board() || !(hw_cart.m.ctrl & 0x10)) return false;
     if (hw_cart.chr_ram) {
         unsigned index = vrc6_nt_bank((addr >> 10) & 3)*1024 + (addr & 1023);
@@ -967,6 +989,7 @@ double hw_cart_audio_level(void)
     if (hw_cart.mapper==5) return mmc5_audio();
     if (hw_cart.mapper==85) return -(double)hw_cart.m.vrc7_output / 32768.0;
     if (hw_cart.mapper==69) return s5b_output();
+    if (hw_cart.mapper==19) return namco_audio();
     return vrc6_board() ? -(double)vrc6_audio_dac() * (0.1488 / 15.0) : 0;
 }
 
@@ -1023,6 +1046,11 @@ uint64_t hw_cart_state_hash(uint64_t h)
         for (unsigned i=0;i<sizeof(Mmc5State);++i) acc=acc*131+bytes[i];
     }
     if (hw_cart.mapper==85) acc=vrc7_sound_hash(acc);
+    if (hw_cart.mapper==19 || hw_cart.mapper==210) {
+        const uint8_t *b=(const uint8_t *)&hw_cart.m.namco;
+        for (unsigned i=0;i<sizeof(HwNamco);++i) acc=acc*131+b[i];
+        acc=acc*131+hw_cart.chr_ciram;
+    }
     if (hw_cart.mapper==69) {
         const uint8_t *b=(const uint8_t *)&hw_cart.m.fme7;
         for (unsigned i=0;i<sizeof(HwFme7);++i) acc=acc*131+b[i];

@@ -40,8 +40,22 @@ bool rom_parse(const char *path, NESRom *out) {
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
     long file_size = ftell(f);
     uint64_t required = out->cart.data_offset + (uint64_t)out->cart.prg_size + out->cart.chr_size;
-    if (file_size < 0 || (uint64_t)file_size < required ||
-        fseek(f, (long)out->cart.data_offset, SEEK_SET) != 0) {
+    if (file_size < 0 || (uint64_t)file_size < required) {
+        fclose(f);
+        return false;
+    }
+    /* Board metadata can depend on the image (known misheadered dumps), so
+     * decode it exactly as the cycle runtime and oracle loaders do. */
+    uint8_t *image = (uint8_t *)malloc((size_t)file_size);
+    if (!image || fseek(f, 0, SEEK_SET) != 0 || fread(image, 1, (size_t)file_size, f) != (size_t)file_size ||
+        !nes_cart_image(image, (size_t)file_size, &out->cart)) {
+        free(image);
+        fclose(f);
+        return false;
+    }
+    free(image);
+    out->mapper = out->cart.mapper;
+    if (fseek(f, (long)out->cart.data_offset, SEEK_SET) != 0) {
         fclose(f);
         return false;
     }

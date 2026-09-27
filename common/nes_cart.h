@@ -63,6 +63,7 @@ static inline bool nes_cart_header(const uint8_t *h, size_t size, NesCartInfo *c
         /* iNES leaves RAM ambiguous. Retain established per-board defaults. */
         bool wram = c->mapper == 1 || c->mapper == 155 || c->mapper == 4 || c->mapper == 118 || c->mapper == 5 ||
                     c->mapper == 69 || c->mapper == 68 ||
+                    ((c->mapper == 19 || c->mapper == 210) && c->battery) ||
                     c->mapper == 10 || c->mapper == 21 || c->mapper == 23 || c->mapper == 25 || c->mapper == 73 ||
                     c->mapper == 24 || c->mapper == 26 || c->mapper == 85 ||
                     (c->mapper == 34 && c->chr_size > 8192) || (c->mapper==206 && c->battery);
@@ -80,10 +81,73 @@ static inline bool nes_cart_header(const uint8_t *h, size_t size, NesCartInfo *c
         if (c->mapper == 159) { c->prg_ram=0; c->prg_nvram=128; }
         if (c->mapper == 16) { c->prg_ram=0; c->prg_nvram=c->battery?256:0; }
         if (!c->chr_size) c->chr_ram = c->mapper == 13 ? 16384 : 8192;
+        /* Namco 340 has no RAM; its iNES battery bit is how nesdev tells the
+         * submapper-0 boards apart (see nes_cart_image). */
+        if (c->mapper == 210 && !c->battery) c->prg_ram = c->prg_nvram = 0;
         /* TQROM always pairs its CHR ROM with an 8 KiB CHR RAM chip. */
         if (c->mapper == 119) c->chr_ram = 8192;
     }
     return c->prg_size >= 4096;
+}
+
+static inline uint32_t nes_crc32(uint32_t crc, const uint8_t *data, size_t len)
+{
+    crc = ~crc;
+    while (len--) {
+        crc ^= *data++;
+        for (int k = 0; k < 8; ++k) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1)));
+    }
+    return ~crc;
+}
+
+/* Known dumps whose iNES header names the wrong board. Many Namco 175/340
+ * games were dumped as mapper 19 before mapper 210 existed (nesdev wiki,
+ * INES Mapper 210). Keyed by CRC-32 of PRG+CHR; board facts from
+ * NewRisingSun's NES 2.0 header database (via Mesen2 b9fa69d MesenNesDB.txt).
+ * A NES 2.0 header that names a submapper is trusted as written. */
+typedef struct { uint32_t crc; uint8_t submapper, vertical; uint16_t prg_nvram; } NesKnownDump;
+static const NesKnownDump nes_known_namco210[] = {
+    { 0x0C47946Du, 1, 1, 0 },
+    { 0x077A9F0Eu, 1, 1, 0 },
+    { 0x1595B7D5u, 2, 1, 0 },
+    { 0x162B85B6u, 2, 1, 0 },
+    { 0x164C86A3u, 2, 1, 0 },
+    { 0x1696354Cu, 1, 0, 0 },
+    { 0x1DC0F740u, 2, 1, 0 },
+    { 0x2447E03Bu, 2, 1, 0 },
+    { 0x370C849Bu, 2, 1, 0 },
+    { 0x429103C9u, 2, 1, 0 },
+    { 0x46FD7843u, 2, 1, 0 },
+    { 0x6EC51DE5u, 2, 1, 0 },
+    { 0x71C8243Bu, 1, 1, 0 },
+    { 0x7431D203u, 2, 1, 0 },
+    { 0x7D3BB7C3u, 2, 1, 0 },
+    { 0x808606F0u, 1, 1, 0 },
+    { 0x81B7F1A8u, 1, 1, 0 },
+    { 0x97267E45u, 2, 1, 0 },
+    { 0xADFFD64Fu, 2, 1, 0 },
+    { 0xB94C2CA8u, 2, 1, 0 },
+    { 0xB9B2E109u, 1, 1, 0 },
+    { 0xBD523011u, 1, 0, 0 },
+    { 0xC247CC80u, 1, 1, 2048 },
+    { 0xD0C50F17u, 2, 1, 0 },
+    { 0xD323B806u, 2, 1, 0 },
+};
+
+static inline void nes_cart_known_dump(NesCartInfo *c, const uint8_t *data, size_t len)
+{
+    if ((c->mapper == 19 && !c->nes2) || (c->mapper == 210 && !c->submapper)) {
+        uint32_t crc = nes_crc32(0, data, len);
+        for (size_t i = 0; i < sizeof(nes_known_namco210)/sizeof(nes_known_namco210[0]); ++i) {
+            const NesKnownDump *k = &nes_known_namco210[i];
+            if (k->crc != crc) continue;
+            c->mapper = 210; c->submapper = k->submapper; c->vertical = k->vertical;
+            c->prg_ram = 0; c->prg_nvram = k->prg_nvram; c->battery = k->prg_nvram != 0;
+            return;
+        }
+    }
+    /* Unknown submapper-0 mapper 210: 175 if battery-backed, else 340. */
+    if (c->mapper == 210 && !c->submapper) c->submapper = c->battery ? 1 : 2;
 }
 
 static inline bool nes_cart_image(const uint8_t *image, size_t size, NesCartInfo *c)
@@ -91,7 +155,9 @@ static inline bool nes_cart_image(const uint8_t *image, size_t size, NesCartInfo
     if (!nes_cart_header(image, size, c) || c->data_offset > size) return false;
     size -= c->data_offset;
     if (c->prg_size > size) return false;
-    return c->chr_size <= size - c->prg_size;
+    if (c->chr_size > size - c->prg_size) return false;
+    nes_cart_known_dump(c, image + c->data_offset, (size_t)c->prg_size + c->chr_size);
+    return true;
 }
 
 /* Metadata combinations implemented by the cycle runtime. Unknown variants
@@ -148,6 +214,13 @@ static inline bool nes_cart_variant_supported(const NesCartInfo *c)
     case 71: case 206: case 232: return c->submapper <= 1;
     /* CIRAM A10 comes from CHR A17; the board has no four-screen RAM. */
     case 118: return !c->submapper && !c->four_screen;
+    /* Namco 163: submappers 0-5 (1 is the deprecated battery-backed internal
+     * RAM without external RAM; 2 has no expansion sound; 3-5 are mixing
+     * levels). 175 has optional RAM; 340 has none. All use CHR ROM. */
+    case 19: return c->submapper <= 5 && c->chr_size && !c->four_screen &&
+        c->prg_ram + c->prg_nvram <= 8192 && (c->submapper != 1 || !(c->prg_ram + c->prg_nvram));
+    case 210: return (c->submapper == 1 || c->submapper == 2) && c->chr_size && !c->four_screen &&
+        c->prg_ram + c->prg_nvram <= (c->submapper == 1 ? 8192u : 0u);
     /* Sunsoft-4: CHR ROM nametables; submapper 1 (Nantettatte!! Baseball's
      * licensing timer and external ROM) is not modeled. At most 8 KiB WRAM. */
     case 68: return !c->submapper && !c->four_screen && c->chr_size &&
