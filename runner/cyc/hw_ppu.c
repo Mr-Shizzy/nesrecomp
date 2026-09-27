@@ -1143,6 +1143,7 @@ static uint8_t read_register(uint16_t addr)
         io_bus_refresh(0xFF);
         return value;
     case 7:
+        hw_cart_ppu_data_read();
         if ((ppu.vbus & 0x3FFF) >= 0x3F00) {
             uint16_t pal = ppu.v & 0x1F;
             if ((pal & 3) == 0) pal &= 0x0F;

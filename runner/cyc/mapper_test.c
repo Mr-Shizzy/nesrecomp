@@ -72,6 +72,36 @@ static void mmc3_reg(unsigned index, uint8_t value, uint8_t mode)
 
 static unsigned txsrom_nt(uint16_t addr) { return hw_cart_ciram_a10(addr) ? 1 : 0; }
 
+/* nesdev wiki, INES Mapper 185: chip-select values gate CHR ROM. */
+static void test_mapper185(void)
+{
+    for (unsigned sub = 4; sub <= 7; ++sub) {
+        cart(185, 32, 8);
+        for (unsigned i = 0; i < 8192; ++i) chr[i] = (uint8_t)(0x80 + (i >> 10));
+        hw_cart.info.submapper = (uint8_t)sub; hw_cart_power_on();
+        prg_banks(0, 1, 2, 3); chr_bank(0, 0, 8);
+        for (unsigned cs = 0; cs < 8; ++cs) {
+            hw_cart_cpu_write(0xb000, (uint8_t)(0x30 | cs));   /* ROM $FF: no conflict */
+            bool on = (cs & 3) == sub - 4;
+            CHECK(pattern_read(0x0456) == (on ? 0x81 : 0x57));
+            CHECK(pattern_read(0x1c02) == (on ? 0x87 : 0x03));
+        }
+        prg[0x1000] = 0xfc;                                   /* AND bus conflict */
+        hw_cart_cpu_write(0x9000, (uint8_t)(sub - 4 + 4));
+        CHECK(hw_cart.m.latch == ((sub - 4 + 4) & 0xfc));
+        prg_banks(0, 1, 2, 3); no_wram();
+    }
+    /* Submapper 0: disabled for the fetches of the first two $2007 reads. */
+    cart(185, 32, 8);
+    for (unsigned i = 0; i < 8192; ++i) chr[i] = 0x80;
+    hw_cart_cpu_write(0xb000, 0x13);
+    CHECK(pattern_read(0x0010) == 0x11); hw_cart_ppu_data_read();
+    CHECK(pattern_read(0x0010) == 0x11); hw_cart_ppu_data_read();
+    CHECK(pattern_read(0x0010) == 0x11); hw_cart_ppu_data_read();
+    CHECK(pattern_read(0x0010) == 0x80);
+    hw_cart_cpu_write(0xb000, 0x00); CHECK(pattern_read(0x0010) == 0x80);
+}
+
 /* nesdev wiki, INES Mapper 228: 1.MHHPPP PPS.CCCC plus D0-D1. */
 static void test_mapper228(void)
 {
@@ -536,6 +566,7 @@ int main(void)
     /* Run added board contracts. */
     test_mapper41();
     test_mapper228();
+    test_mapper185();
     test_mapper118();
     test_mapper119();
     test_mapper232();

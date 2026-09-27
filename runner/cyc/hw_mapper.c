@@ -497,8 +497,27 @@ static void mmc2_write(uint16_t addr, uint8_t value)
     }
 }
 
+/* Mapper 185: https://www.nesdev.org/wiki/INES_Mapper_185. CNROM whose
+ * data bits 0-1 drive CHR ROM chip selects through the copy-protection
+ * wiring: submappers 4-7 enable CHR only for chip-select value 0-3. Writes
+ * have AND bus conflicts. Submapper 0 follows the nesdev heuristic: CHR is
+ * disabled for the fetches of the first two $2007 reads after power-on. A
+ * disabled read leaves the address byte on the bus, with D0 pulled high as
+ * on the early Mighty Bomb Jack board (other boards vary). */
+static bool cnrom185_enabled(void)
+{
+    unsigned sub = hw_cart.info.submapper;
+    return sub ? (hw_cart.m.latch & 3) == sub - 4 : hw_cart.m.data_reads > 2;
+}
+
+void hw_cart_ppu_data_read(void)
+{
+    if (hw_cart.mapper == 185 && hw_cart.m.data_reads < 255) ++hw_cart.m.data_reads;
+}
+
 uint8_t hw_cart_chr_read(uint16_t addr)
 {
+    if (hw_cart.mapper == 185 && !cnrom185_enabled()) return (uint8_t)(addr | 1);
     if (hw_cart.mapper==5) mmc5_ppu_read(addr);
     uint8_t value = hw_cart.chr[hw_cart_chr_index(addr)];
     if ((hw_cart.mapper == 9 || hw_cart.mapper == 10) && !hw_cart.m.pattern_pending) {
@@ -546,6 +565,7 @@ static const struct {
     { 210, "Namco 175 / 340", 0, 0 },
     { 68, "Sunsoft-4", 0, 1 },
     { 41, "Caltron 6-in-1", 0, 0 },
+    { 185, "CNROM + copy protection", 0, 0 },
     { 228, "Active Enterprises", 0, 0 },
     { 157, "Bandai Datach", 1, 0 },
     { 153, "Bandai BA-JUMP2", 1, 1 },
@@ -658,6 +678,7 @@ void hw_cart_power_on(void)
     case 19: case 210: hw_cart.m.namco.channel = 7; namco_apply(); break;
     case 68: sunsoft4_apply(); break;
     case 41: nrom_reset(); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
+    case 185: nrom_reset(); break;
     /* The games expect $00 written to $8000 at power-on and reset. */
     case 228: action52_write(0x8000, 0); break;
     case 16: case 159: case 153: case 157: bandai_apply(); break;
@@ -877,6 +898,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     case 3:  cnrom_write(value); break;
     case 4: case 118: case 119: mmc3_write(addr, value); break;
     case 68: sunsoft4_write(addr, value); break;
+    case 185: hw_cart.m.latch = value & hw_cart_prg_read(addr); break;
     case 228: action52_write(addr, value); break;
     case 7:  axrom_write(value); break;
     case 66: gxrom_write(value); break;

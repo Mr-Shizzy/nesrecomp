@@ -108,6 +108,12 @@ def ppu_fixtures():
         ('cpu', 0xa000, 0), ('read', 0, 0), ('write', 0x2000, 0x31), ('read', 0x2400, 0x31),
         ('cpu', 0x8000, 0), ('read', 0x2800, 0x31),
         ('cpu', 0x4020, 5), ('cpu_read', 0x4020, 0x40)])
+    # CNROM + copy protection (mapper 185). Unprotected reads return the CHR
+    # page number; protected reads leave the address byte with D0 pulled up.
+    # Submapper 0 (iNES): the first two $2007 reads see no CHR.
+    yield ppu_contract(185, 32, 8, [
+        ('read', 0x0010, 0x11), ('read', 0x0010, 0), ('read', 0x0456, 1),
+        ('cpu', 0xb000, 0x13), ('read', 0x1c02, 7)], '_sub0')
     # Caltron 6-in-1: outer latch by address, inner CHR only with A2 set and
     # ANDed with the ROM byte ($8000 holds SEI, $78; $B000 holds $FF).
     yield ppu_contract(41, 256, 128, [
