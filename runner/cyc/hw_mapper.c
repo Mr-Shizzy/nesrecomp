@@ -596,6 +596,7 @@ void hw_cart_ppu_rd(bool reading)
 #include "hw_namco.inc"
 #include "hw_jaleco.inc"
 #include "hw_taito.inc"
+#include "hw_taito_x1.inc"
 
 static const struct {
     int         mapper;
@@ -609,6 +610,10 @@ static const struct {
     { 18, "Jaleco SS88006", 0, 0 },
     { 33, "Taito TC0190", 0, 0 },
     { 32, "Irem G-101", 0, 0 },
+    { 80, "Taito X1-005", 0, 0 },
+    { 207, "Taito X1-005 (CHR mirroring)", 0, 0 },
+    { 82, "Taito X1-017", 0, 0 },
+    { 552, "Taito X1-017 (NES 2.0)", 0, 0 },
     { 48, "Taito TC0690", 1, 0 },
     { 210, "Namco 175 / 340", 0, 0 },
     { 68, "Sunsoft-4", 0, 1 },
@@ -727,6 +732,7 @@ void hw_cart_power_on(void)
     case 18: jaleco_apply(); break;
     case 33: case 48: taito_apply(); break;
     case 32: irem_g101_apply(); map_chr8(0); break;
+    case 80: case 207: case 82: case 552: taito_x1_apply(); break;
     case 68: sunsoft4_apply(); break;
     case 41: nrom_reset(); hw_cart.mirroring = HW_MIRROR_VERTICAL; break;
     case 185: nrom_reset(); break;
@@ -785,6 +791,14 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
     }
     if (hw_cart.mapper==5) { mmc5_write(addr,value); return; }
     if (hw_cart.mapper==69 && addr>=0x8000) { fme7_write(addr,value); return; }
+    if (hw_cart.mapper==80 || hw_cart.mapper==207 || hw_cart.mapper==82 || hw_cart.mapper==552) {
+        if (addr >= 0x7ef0 && addr <= 0x7eff) taito_x1_write(addr, value);
+        else if (addr >= 0x6000 && addr < 0x8000) {
+            int i = taito_x1_ram(addr);
+            if (i >= 0 && hw_cart.has_wram) hw_cart.wram[(unsigned)i % hw_cart.wram_len] = value;
+        }
+        return;
+    }
     if (hw_cart.mapper==19 || hw_cart.mapper==210) {
         if (addr >= 0x8000) namco_write(addr, value);
         else if (addr >= 0x6000) {
@@ -967,6 +981,12 @@ bool hw_cart_cpu_read(uint16_t addr, uint8_t *value)
     }
     if (hw_cart.mapper==5) return mmc5_read(addr,value);
     if (hw_cart.mapper==69) return addr>=0x6000 && addr<0x8000 && fme7_read(addr,value);
+    if (hw_cart.mapper==80 || hw_cart.mapper==207 || hw_cart.mapper==82 || hw_cart.mapper==552) {
+        int i = addr >= 0x6000 && addr < 0x8000 ? taito_x1_ram(addr) : -1;
+        if (i < 0 || !hw_cart.has_wram) return false;
+        *value = hw_cart.wram[(unsigned)i % hw_cart.wram_len];
+        return true;
+    }
     if (hw_cart.mapper==19 && addr >= 0x4800 && addr < 0x6000) return namco_low_read(addr, value);
     if (bandai_board()) return bandai_read(addr,value);
     if (vrc24_board() && addr >= 0x6000 && addr < 0x8000) {
@@ -1026,6 +1046,7 @@ uint16_t hw_cart_nt_a10(uint16_t addr)
 {
     if (hw_cart.mapper == 118) return txsrom_ciram_a10(addr);
     if (hw_cart.mapper == 19) return namco_nt_a10(addr);
+    if (hw_cart.mapper == 207) return x1005_207_ciram_a10(addr);
     return (vrc6_nt_bank((addr >> 10) & 3) & 1) << 10;
 }
 bool hw_cart_nt_read(uint16_t addr, bool read_bus, uint8_t *value)
@@ -1103,7 +1124,8 @@ uint64_t hw_cart_state_hash(uint64_t h)
         acc = acc * 131 + hw_cart.m.pattern_pending;
         acc = acc * 131 + hw_cart.m.pattern_addr;
     }
-    if (hw_cart.mapper==40 || bandai_board() || vrc24_board() || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85) {
+    if (hw_cart.mapper==40 || bandai_board() || vrc24_board() || hw_cart.mapper == 73 || vrc6_board() || hw_cart.mapper == 85 ||
+        hw_cart.mapper==80 || hw_cart.mapper==207 || hw_cart.mapper==82 || hw_cart.mapper==552) {
         for (unsigned i=0; i<8; ++i) acc = acc*131 + hw_cart.m.vrc_chr[i];
         acc = acc*131 + hw_cart.m.irq_latch16;
         acc = acc*131 + hw_cart.m.irq_counter16;

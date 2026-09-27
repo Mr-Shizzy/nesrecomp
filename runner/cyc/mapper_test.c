@@ -30,7 +30,7 @@ static void cart(int mapper, unsigned prg_kb, unsigned chr_kb)
     memset(&hw_cart, 0, sizeof(hw_cart));
     memset(prg, 0xff, sizeof(prg)); /* writes to ROM avoid bus conflicts by default */
     memset(chr, 0, sizeof(chr));
-    hw_cart.mapper = (uint8_t)mapper;
+    hw_cart.mapper = (uint16_t)mapper;
     hw_cart.prg = prg;
     hw_cart.chr = chr;
     hw_cart.prg_slots = prg_kb / 4;
@@ -40,10 +40,15 @@ static void cart(int mapper, unsigned prg_kb, unsigned chr_kb)
     hw_cart_power_on();
 }
 
-static void prg_banks(unsigned a, unsigned b, unsigned c, unsigned d)
+/* Reports the calling line, since many board tests share this helper. */
+#define prg_banks(a, b, c, d) prg_banks_at(__LINE__, a, b, c, d)
+static void prg_banks_at(int line, unsigned a, unsigned b, unsigned c, unsigned d)
 {
     unsigned expected[4] = {a,b,c,d};
     for (unsigned i=0; i<4; ++i) {
+        if (hw_cart.prg_off[2*i] != expected[i]*8192 || hw_cart.prg_off[2*i+1] != expected[i]*8192 + 4096)
+            fprintf(stderr, "prg_banks from line %d: slot %u is %u, expected %u\n", line, i,
+                    hw_cart.prg_off[2*i] / 8192, expected[i]);
         CHECK(hw_cart.prg_off[2*i] == expected[i]*8192);
         CHECK(hw_cart.prg_off[2*i+1] == expected[i]*8192 + 4096);
     }
@@ -73,6 +78,59 @@ static void mmc3_reg(unsigned index, uint8_t value, uint8_t mode)
 }
 
 static unsigned txsrom_nt(uint16_t addr) { return hw_cart_ciram_a10(addr) ? 1 : 0; }
+
+/* nesdev wiki, INES Mapper 080 / 207 / 082 and NES 2.0 552: Taito X1. */
+static void test_taito_x1(void)
+{
+    uint8_t value;
+    cart(80, 256, 256); hw_cart.has_wram = 1; hw_cart.wram_len = 128;
+    prg_banks(0, 0, 0, 31);
+    hw_cart_cpu_write(0x7efa, 3); hw_cart_cpu_write(0x7efd, 0x45); hw_cart_cpu_write(0x7eff, 0x3e);
+    prg_banks(3, 5, 30, 31);
+    hw_cart_cpu_write(0x7ef0, 0x13); chr_bank(0, 0x12, 2);            /* 2 KiB: bit 0 ignored */
+    hw_cart_cpu_write(0x7ef1, 0x20); chr_bank(2, 0x20, 2);
+    for (unsigned i = 0; i < 4; ++i) hw_cart_cpu_write((uint16_t)(0x7ef2 + i), (uint8_t)(0x41 + i));
+    for (unsigned i = 0; i < 4; ++i) chr_bank(4 + i, 0x41 + i, 1);
+    hw_cart_cpu_write(0x7ef6, 1); CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    hw_cart_cpu_write(0x7ef7, 0); CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);   /* not mirrored */
+    hw_cart_cpu_write(0x7ef6, 0); CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    value = 0xa5; CHECK(!hw_cart_cpu_read(0x7f00, &value) && value == 0xa5);      /* locked */
+    hw_cart_cpu_write(0x7f00, 0x11);
+    hw_cart_cpu_write(0x7ef9, 0xa3);
+    CHECK(hw_cart_cpu_read(0x7f00, &value) && value == 0);
+    hw_cart_cpu_write(0x7f05, 0x5a); CHECK(hw_cart_cpu_read(0x7f85, &value) && value == 0x5a);
+    CHECK(!hw_cart_cpu_read(0x6000, &value) && !hw_cart_cpu_read(0x7eef, &value));
+    hw_cart_cpu_write(0x7ef8, 0xa2); CHECK(!hw_cart_cpu_read(0x7f05, &value));
+    /* 207: bit 7 of $7EF0/$7EF1 drives CIRAM A10 for the upper/lower nametables. */
+    cart(207, 256, 256); hw_cart.has_wram = 1; hw_cart.wram_len = 128;
+    hw_cart_cpu_write(0x7ef0, 0x80); hw_cart_cpu_write(0x7ef1, 0x00);
+    CHECK(hw_cart_ciram_a10(0x2000) && hw_cart_ciram_a10(0x2400) && !hw_cart_ciram_a10(0x2800) && !hw_cart_ciram_a10(0x2c00));
+    hw_cart_cpu_write(0x7ef6, 1);
+    hw_cart_cpu_write(0x7ef0, 0x00); hw_cart_cpu_write(0x7ef1, 0x81);
+    CHECK(!hw_cart_ciram_a10(0x2000) && hw_cart_ciram_a10(0x2800) && hw_cart_ciram_a10(0x3c00));
+    chr_bank(2, 0x80, 2);
+    /* 82: CHR halves swap with $7EF6 bit 1; three keyed RAM windows; PRG bits 2-5. */
+    cart(82, 128, 256); hw_cart.has_wram = 1; hw_cart.wram_len = 5120;
+    hw_cart_cpu_write(0x7efa, 0x0c); hw_cart_cpu_write(0x7efb, 0x3c); hw_cart_cpu_write(0x7efc, 0xff);
+    prg_banks(3, 15, 15, 15);
+    hw_cart_cpu_write(0x7ef0, 0x13); hw_cart_cpu_write(0x7ef1, 0x21); hw_cart_cpu_write(0x7ef2, 0x40);
+    chr_bank(0, 0x12, 2); chr_bank(2, 0x20, 2); chr_bank(4, 0x40, 1);
+    hw_cart_cpu_write(0x7ef6, 2); chr_bank(4, 0x12, 2); chr_bank(6, 0x20, 2); chr_bank(0, 0x40, 1);
+    CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    hw_cart_cpu_write(0x7ef7, 0xca); hw_cart_cpu_write(0x7ef8, 0x69);
+    hw_cart_cpu_write(0x6000, 1); hw_cart_cpu_write(0x6fff, 2); hw_cart_cpu_write(0x7000, 3);
+    CHECK(hw_cart_cpu_read(0x6000, &value) && value == 1);
+    CHECK(hw_cart_cpu_read(0x6fff, &value) && value == 2);
+    CHECK(!hw_cart_cpu_read(0x7000, &value));
+    hw_cart_cpu_write(0x7ef9, 0x84); hw_cart_cpu_write(0x7000, 3);
+    CHECK(hw_cart_cpu_read(0x73ff, &value) && hw_cart_cpu_read(0x7000, &value) && value == 3);
+    CHECK(!hw_cart_cpu_read(0x7400, &value));
+    hw_cart_cpu_write(0x7ef7, 0x00); CHECK(!hw_cart_cpu_read(0x6000, &value) && hw_cart_cpu_read(0x6800, &value));
+    /* 552: bits 0-5 are A18..A13. */
+    cart(552, 512, 256); hw_cart.has_wram = 1; hw_cart.wram_len = 5120;
+    hw_cart_cpu_write(0x7efa, 0x01); hw_cart_cpu_write(0x7efb, 0x20); hw_cart_cpu_write(0x7efc, 0x06);
+    prg_banks(32, 1, 24, 63);
+}
 
 /* nesdev wiki, INES Mapper 032: Irem G-101. */
 static void test_mapper32(void)
@@ -680,6 +738,7 @@ int main(void)
     test_mapper18();
     test_taito();
     test_mapper32();
+    test_taito_x1();
     test_mapper118();
     test_mapper119();
     test_mapper232();

@@ -80,6 +80,11 @@ static inline bool nes_cart_header(const uint8_t *h, size_t size, NesCartInfo *c
         if (c->mapper == 153) { c->prg_ram=0; c->prg_nvram=8192; }
         if (c->mapper == 159) { c->prg_ram=0; c->prg_nvram=128; }
         if (c->mapper == 16) { c->prg_ram=0; c->prg_nvram=c->battery?256:0; }
+        /* Taito X1-005 / X1-017 RAM is inside the chip: 128 bytes / 5 KiB. */
+        if (c->mapper == 80 || c->mapper == 207 || c->mapper == 82) {
+            uint32_t chip = c->mapper == 82 ? 5120 : 128;
+            c->prg_ram = c->battery ? 0 : chip; c->prg_nvram = c->battery ? chip : 0;
+        }
         if (!c->chr_size) c->chr_ram = c->mapper == 13 ? 16384 : 8192;
         /* Namco 340 has no RAM; its iNES battery bit is how nesdev tells the
          * submapper-0 boards apart (see nes_cart_image). */
@@ -102,8 +107,9 @@ static inline uint32_t nes_crc32(uint32_t crc, const uint8_t *data, size_t len)
 
 /* Known dumps whose iNES header omits or misnames the board. Many Namco
  * 175/340 games were dumped as mapper 19 before mapper 210 existed, Taito
- * TC0690 (IRQ) games as TC0190 mapper 33, and iNES cannot carry mapper
- * 185's CHR-enable submapper (nesdev wiki, INES Mapper 210, 048 and 185). Keyed by CRC-32 of PRG+CHR; board facts from
+ * TC0690 (IRQ) games as TC0190 mapper 33, Fudou Myouou Den (X1-005 with
+ * CHR-controlled mirroring) as mapper 80, and iNES cannot carry mapper
+ * 185's CHR-enable submapper (nesdev wiki, INES Mapper 210, 048, 207, 185). Keyed by CRC-32 of PRG+CHR; board facts from
  * NewRisingSun's NES 2.0 header database (via Mesen2 b9fa69d MesenNesDB.txt).
  * mirror: 0 keeps the header, 1 horizontal, 2 vertical. A NES 2.0 header
  * that names a submapper is trusted as written. */
@@ -142,6 +148,8 @@ static const NesKnownDump nes_known_dumps[] = {
     { 0xA7B0536Cu, 48, 0, 0, 0 },
     { 0xAEBD6549u, 48, 0, 0, 0 },
     { 0xE2C94BC2u, 48, 0, 0, 0 },
+    { 0x16904D3Bu, 207, 0, 0, 0 },
+    { 0x7678F1D5u, 207, 0, 0, 0 },
     { 0x0F05FF0Au, 185, 4, 0, 0 },
     { 0x5C2E138Eu, 185, 6, 0, 0 },
     { 0x74F0A89Fu, 185, 7, 0, 0 },
@@ -161,14 +169,14 @@ static const NesKnownDump nes_known_dumps[] = {
 
 static inline void nes_cart_known_dump(NesCartInfo *c, const uint8_t *data, size_t len)
 {
-    bool ambiguous = ((c->mapper == 19 || c->mapper == 33) && !c->nes2) ||
+    bool ambiguous = ((c->mapper == 19 || c->mapper == 33 || c->mapper == 80) && !c->nes2) ||
                      ((c->mapper == 210 || c->mapper == 185) && !c->submapper);
     if (ambiguous) {
         uint32_t crc = nes_crc32(0, data, len);
         for (size_t i = 0; i < sizeof(nes_known_dumps)/sizeof(nes_known_dumps[0]); ++i) {
             const NesKnownDump *k = &nes_known_dumps[i];
             /* Only the header mix-ups each entry documents: 19 -> 210, 33 -> 48, 185 -> 185. */
-            unsigned from = k->mapper == 210 ? 19 : k->mapper == 48 ? 33 : k->mapper;
+            unsigned from = k->mapper == 210 ? 19 : k->mapper == 48 ? 33 : k->mapper == 207 ? 80 : k->mapper;
             if (k->crc != crc || (c->mapper != from && c->mapper != k->mapper)) continue;
             c->mapper = k->mapper; c->submapper = k->submapper;
             if (k->mirror) c->vertical = k->mirror == 2;
@@ -176,6 +184,9 @@ static inline void nes_cart_known_dump(NesCartInfo *c, const uint8_t *data, size
             return;
         }
     }
+    /* Taito X1 RAM is on the chip even when a NES 2.0 header omits it. */
+    if ((c->mapper == 80 || c->mapper == 207 || c->mapper == 82 || c->mapper == 552) && !c->prg_ram && !c->prg_nvram)
+        c->prg_ram = (c->mapper == 82 || c->mapper == 552) ? 5120 : 128;
     /* Unknown submapper-0 mapper 210: 175 if battery-backed, else 340. */
     if (c->mapper == 210 && !c->submapper) c->submapper = c->battery ? 1 : 2;
 }
@@ -249,6 +260,8 @@ static inline bool nes_cart_variant_supported(const NesCartInfo *c)
     /* Jaleco SS88006: up to 8 KiB work RAM. */
     /* Irem G-101: submapper 1 is Major League (one-screen, fixed PRG mode). */
     case 32: return c->submapper <= 1 && !c->four_screen;
+    case 80: case 207: case 82: case 552:
+        return !c->submapper && !c->four_screen && c->prg_ram + c->prg_nvram <= 8192;
     case 18: return !c->submapper && !c->four_screen && c->prg_ram + c->prg_nvram <= 8192;
     case 185: return (c->submapper == 0 || (c->submapper >= 4 && c->submapper <= 7)) &&
         c->chr_size == 8192 && c->prg_size <= 32768 && !c->prg_ram && !c->prg_nvram;

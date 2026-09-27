@@ -32,6 +32,10 @@ models; it does not independently establish the mapper specification.
 | 33 | [Taito TC0190](https://www.nesdev.org/wiki/INES_Mapper_033) | Two 8 KiB PRG banks (6 bits) plus the fixed last 16 KiB, two 2 KiB CHR banks (numbered in 2 KiB units) and four 1 KiB banks; mirroring in $8000 bit 6; A14 is not decoded. |
 | 48 | [Taito TC0690](https://www.nesdev.org/wiki/INES_Mapper_048) | TC0190 banking plus an MMC3-style A12 scanline counter: $C000 latch written inverted, $C001 reload, $C002 enable, $C003 disable and acknowledge; the IRQ asserts 22 CPU cycles after the MMC3 would. nesdev says "about 4", which makes the Flintstones status-bar split flicker; 20-24 render it cleanly (Mesen2 also uses 22). Mirroring in $E000 bit 6. Known TC0690 dumps with mapper-33 headers are identified by CRC. |
 | 32 | [Irem G-101](https://www.nesdev.org/wiki/INES_Mapper_032) | Two 8 KiB PRG banks (5 bits); $9000 bit 1 swaps the $8000 bank with the second-to-last bank at $C000, bit 0 selects mirroring; eight 1 KiB CHR banks at $B000-$B007. Submapper 1 (Major League) ties CIRAM A10 high and fixes the PRG mode (Mesen2 uses one-screen A). |
+| 80 | [Taito X1-005](https://www.nesdev.org/wiki/INES_Mapper_080) | Registers at $7EF0-$7EFF: two 2 KiB CHR banks (bit 0 ignored), four 1 KiB banks, $7EF6 bit 0 mirroring (not mirrored at $7EF7), three 8 KiB PRG banks (pairs $7EFA/B, $7EFC/D, $7EFE/F) plus the fixed last bank, and 128 bytes of chip RAM at $7F00 (mirrored at $7F80) unlocked by writing $A3 to $7EF8/$7EF9. $7EF0-$7EFF writes end compiled blocks. Mesen2 keeps bit 0 of the 2 KiB banks and mirrors $7EF6 at $7EF7. |
+| 207 | [Taito X1-005 (alt. mirroring)](https://www.nesdev.org/wiki/INES_Mapper_207) | Mapper 80 with $7EF6 ignored: bit 7 of $7EF0 selects CIRAM A10 for the upper nametables and bit 7 of $7EF1 for the lower ones. Known Fudou Myouou Den dumps with mapper-80 headers are identified by CRC (their status bar needs this mirroring). |
+| 82 | [Taito X1-017](https://www.nesdev.org/wiki/INES_Mapper_082) | X1-005-style CHR registers with $7EF6 bit 1 swapping the 2 KiB and 1 KiB halves; 5 KiB of chip RAM unlocked in 2/2/1 KiB windows by $7EF7 = $CA, $7EF8 = $69, $7EF9 = $84; PRG at $7EFA-$7EFC from bits 2-5. The IRQ at $7EFD-$7EFF is not modeled: its clock and trigger are undocumented and no commercial game uses it. |
+| 552 | [Taito X1-017 (NES 2.0)](https://www.nesdev.org/wiki/INES_Mapper_082) | Mapper 82 with PRG bits 0-5 wired to A18-A13 in reverse order, as the chip actually connects them. |
 | 40 | [NTDEC 2722](https://www.nesdev.org/wiki/INES_Mapper_040) | Fixed PRG banks at $6000/$8000/$A000/$E000, switchable 8 KiB at $C000, 4096-M2 IRQ. Code at $6000 uses the interpreter. |
 | 155 | [MMC1A](https://www.nesdev.org/wiki/MMC1) | RAM stays enabled by the PRG register; bit 4 instead bypasses fixed-bank A17 selection. Uses the same SxROM board wiring as mapper 1. |
 | 85 | [VRC7](https://www.nesdev.org/wiki/VRC7) | Three 8 KiB PRG windows, eight CHR windows, WRAM gate, VRC IRQ, and six FM channels. Submapper 1 selects A3 and omits the oscillator; submapper 2 selects A4. |
@@ -60,6 +64,18 @@ models; it does not independently establish the mapper specification.
 | 34 | [BNROM / NINA-001](https://www.nesdev.org/wiki/INES_Mapper_034) | Submapper 1 selects NINA, 2 selects BNROM; submapper 0/iNES uses CHR size. NINA WRAM writes also reach bank registers. BNROM has AND conflicts. |
 | 13 | [CPROM](https://www.nesdev.org/wiki/CPROM) | Fixed PRG; 16 KiB CHR RAM, upper 4 KiB switchable; vertical mirroring; AND conflicts. |
 | 11 | [Color Dreams](https://www.nesdev.org/wiki/Color_Dreams) | 32 KiB PRG / 8 KiB CHR; AND bus conflicts. Conflict-free prototypes excluded. |
+
+Where references disagree, observation of real games decides. The TC0690 IRQ
+delay was observable: nesdev's "about 4 CPU cycles" put Flintstones' status-bar
+split mid-scanline, and a sweep rendered it cleanly and identically only for
+20-24 cycles, so 22 (also Mesen2's value) is used. The other differences from
+Mesen2 were A/B-tested by switching each to Mesen2's behavior and replaying the
+owner titles that use the board for 3000 frames: Namco 340 mirroring order
+(Famista '92), N163 write-protect nibble and auto-increment wrap (Megami Tensei
+II, Final Lap), SS88006 IRQ one count early (Goal!!) and the X1-005 2 KiB CHR
+bit 0 and $7EF7 mirror (Fudou Myouou Den). Every frame's bus trace and memory
+hash were identical, so none is exercised by those games; the nesdev register
+descriptions are kept, and fixtures pin them.
 
 [NES 2.0](https://www.nesdev.org/wiki/NES_2.0) decoding now preserves the 12-bit
 mapper, submapper, extended/exponent ROM lengths, RAM/NVRAM sizes, trainer offset,
