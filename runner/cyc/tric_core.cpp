@@ -9619,6 +9619,7 @@ bool cyc_load_ines(const uint8_t *image, size_t size) {
     case 70: case 152: break;
     case 64: case 158: case 65: break;
     case 88: case 95: case 154: case 67: break;
+    case 78: case 89: case 93: case 97: case 72: case 92: case 86: case 101: break;
     case 140: break;
     case 113: break;
     case 94: break;

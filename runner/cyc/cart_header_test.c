@@ -116,6 +116,7 @@ int main(void)
       static const uint8_t battle_rush[4]={0x4F,0x71,0xB3,0x0A}; /* 983D8175: Datach + 24C01 */
       static const uint8_t kitarou2[4]={0x20,0xDE,0xBC,0x12};   /* BDA8F8E4: 152 dumped as 70 */
       static const uint8_t devilman[4]={0x37,0x77,0x1D,0x6D};   /* D1691028: 154 dumped as 88 */
+      static const uint8_t holydiver[4]={0xAF,0x79,0xFA,0x20};  /* BA51AC6F: 78 submapper 3 */
       static const uint8_t data_unknown[4]={1,2,3,4};
       memset(h,0,sizeof(h)); memcpy(h,"NES",3); h[3]=26; h[4]=8; h[5]=16; h[6]=0x70; h[7]=0x10;
       CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==23 && c.prg_ram==8192);
@@ -143,6 +144,13 @@ int main(void)
       h[6]=0x89; h[7]=0x50; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==88 && c.four_screen);  /* the dump's own header */
       nes_cart_known_dump(&c,devilman,4); CHECK(c.mapper==154 && !c.four_screen && nes_cart_variant_supported(&c));
       h[6]=0x80;
+      h[6]=0xe8; h[7]=0x40; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==78 && c.four_screen);   /* the dump's header */
+      nes_cart_known_dump(&c,holydiver,4); CHECK(c.submapper==3 && !c.four_screen && nes_cart_variant_supported(&c));
+      CHECK(nes_cart_header(h,16,&c)); nes_cart_known_dump(&c,data_unknown,4);
+      CHECK(c.submapper==3 && !c.four_screen && nes_cart_variant_supported(&c));  /* iNES convention */
+      h[6]=0xe0; CHECK(nes_cart_header(h,16,&c)); nes_cart_known_dump(&c,data_unknown,4);
+      CHECK(c.submapper==0 && nes_cart_variant_supported(&c));                    /* one-screen */
+      h[6]=0x80; h[7]=0x50;
       h[6]=0x90; h[7]=0x10; CHECK(nes_cart_header(h,16,&c)); CHECK(c.mapper==25);
       nes_cart_known_dump(&c,vrc4b,4);
       CHECK(c.submapper==1 && c.prg_ram==2048 && !c.prg_nvram && nes_cart_variant_supported(&c)); }

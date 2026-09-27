@@ -219,6 +219,60 @@ static void test_mapper_namco118(void)
     no_wram();
 }
 
+/* Discrete latches (nesdev wiki, INES Mapper 078, 089, 093, 097, 072, 092,
+ * 086, 101). Most have AND bus conflicts; 97, 86 and 101 do not. */
+static void test_discrete_batch3(void)
+{
+    /* 78: [CCCC MPPP]; submapper 3 (Holy Diver) M = H/V, else one-screen. */
+    cart(78, 128, 128);
+    hw_cart_cpu_write(0x8000, 0x5b); prg_banks(6, 7, 14, 15); chr_bank(0, 40, 8);
+    CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_B);
+    prg[hw_cart.prg_off[0]] = 0x0f; hw_cart_cpu_write(0x8000, 0xf0);     /* AND bus conflict */
+    prg_banks(0, 1, 14, 15); chr_bank(0, 0, 8); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_A);
+    cart(78, 128, 128); hw_cart.info.submapper = 3;
+    hw_cart_cpu_write(0x8000, 0x08); CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    hw_cart_cpu_write(0x8000, 0x00); CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    no_wram();
+    /* 89: [CPPP MCCC]. */
+    cart(89, 128, 128);
+    hw_cart_cpu_write(0x8000, 0xd5); prg_banks(10, 11, 14, 15); chr_bank(0, 13 * 8, 8);
+    CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_A);
+    hw_cart_cpu_write(0x8000, 0x0b); chr_bank(0, 24, 8); CHECK(hw_cart.mirroring == HW_MIRROR_SCREEN_B);
+    no_wram();
+    /* 93: [.PPP ...E]; E = CHR RAM enable (disabled: open bus, writes ignored). */
+    cart(93, 128, 8); hw_cart.chr_ram = 1;
+    hw_cart_cpu_write(0x8000, 0x30); prg_banks(6, 7, 14, 15);
+    CHECK(hw_cart_chr_read(0x0123) == 0x23 && !hw_cart.chr_write[0]);
+    hw_cart_cpu_write(0x8000, 0x31); CHECK(hw_cart.chr_write[0] && hw_cart.chr_write[7]);
+    chr[0x0123] = 0x99; CHECK(hw_cart_chr_read(0x0123) == 0x99);
+    no_wram();
+    /* 97: $8000-$BFFF [M..P PPPP]; $8000 fixed last, $C000 switchable; M 0 H / 1 V. */
+    cart(97, 256, 8);
+    prg_banks(30, 31, 0, 1);
+    hw_cart_cpu_write(0x8000, 0x85); prg_banks(30, 31, 10, 11); CHECK(hw_cart.mirroring == HW_MIRROR_VERTICAL);
+    hw_cart_cpu_write(0xc000, 0x03); prg_banks(30, 31, 10, 11);         /* not decoded */
+    hw_cart_cpu_write(0xbfff, 0x03); prg_banks(30, 31, 6, 7); CHECK(hw_cart.mirroring == HW_MIRROR_HORIZONTAL);
+    /* 72 / 92: banks load on a 0 -> 1 edge of bit 7 (PRG) and bit 6 (CHR). */
+    cart(72, 128, 128);
+    hw_cart_cpu_write(0x8000, 0x83); prg_banks(6, 7, 14, 15);
+    hw_cart_cpu_write(0x8000, 0x85); prg_banks(6, 7, 14, 15);           /* no edge */
+    hw_cart_cpu_write(0x8000, 0x05); hw_cart_cpu_write(0x8000, 0x85); prg_banks(10, 11, 14, 15);
+    hw_cart_cpu_write(0x8000, 0x43); chr_bank(0, 24, 8);
+    hw_cart_cpu_write(0x8000, 0x44); chr_bank(0, 24, 8);
+    cart(92, 256, 128);
+    prg_banks(0, 1, 30, 31);
+    hw_cart_cpu_write(0x8000, 0x83); prg_banks(0, 1, 6, 7);
+    /* 86: $6000-$6FFF [.CPP ..CC]; $7000 (speech) and $8000+ change nothing. */
+    cart(86, 128, 64);
+    hw_cart_cpu_write(0x6000, 0x65); prg_banks(8, 9, 10, 11); chr_bank(0, 40, 8);
+    hw_cart_cpu_write(0x7000, 0x00); hw_cart_cpu_write(0x8000, 0x00); prg_banks(8, 9, 10, 11); chr_bank(0, 40, 8);
+    no_wram();
+    /* 101: $6000-$7FFF selects 8 KiB CHR, bits in order. */
+    cart(101, 32, 64);
+    hw_cart_cpu_write(0x7fff, 0x06); chr_bank(0, 48, 8);
+    no_wram();
+}
+
 /* nesdev wiki, INES Mapper 067: Sunsoft-3. */
 static void test_mapper67(void)
 {
@@ -937,6 +991,7 @@ int main(void)
     test_mapper158();
     test_mapper65();
     test_mapper67();
+    test_discrete_batch3();
     test_mapper_namco118();
     test_mapper140();
     test_mapper113();

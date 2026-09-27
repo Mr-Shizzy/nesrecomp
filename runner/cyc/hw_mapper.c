@@ -619,6 +619,7 @@ void hw_cart_ppu_data_read(void)
 uint8_t hw_cart_chr_read(uint16_t addr)
 {
     if (hw_cart.mapper == 185 && !cnrom185_enabled()) return (uint8_t)(addr | 1);
+    if (hw_cart.mapper == 93 && !hw_cart.m.ctrl) return (uint8_t)addr;   /* CHR RAM disabled: open bus */
     if (hw_cart.mapper==5) mmc5_ppu_read(addr);
     uint8_t value = hw_cart.chr[hw_cart_chr_index(addr)];
     if ((hw_cart.mapper == 9 || hw_cart.mapper == 10) && !hw_cart.m.pattern_pending) {
@@ -704,6 +705,14 @@ static const struct {
     { 184, "Sunsoft-1", 0, 0 },
     { 180, "Crazy Climber", 0, 0 },
     { 70, "Bandai 74161/7432", 0, 0 },
+    { 78, "Irem 74HC161 / Jaleco JF-16", 0, 0 },
+    { 89, "Sunsoft-2 (Sunsoft-3 board)", 0, 0 },
+    { 93, "Sunsoft-2 (Sunsoft-3R board)", 0, 0 },
+    { 97, "Irem TAM-S1", 0, 0 },
+    { 72, "Jaleco JF-17", 0, 0 },
+    { 92, "Jaleco JF-19", 0, 0 },
+    { 86, "Jaleco JF-13", 0, 0 },
+    { 101, "Jaleco JF-10 (mapper 101)", 0, 0 },
     { 152, "Bandai 74161/7432 (one-screen)", 0, 0 },
     { 140, "Jaleco JF-11/14", 0, 0 },
     { 113, "HES", 0, 0 },
@@ -837,6 +846,10 @@ void hw_cart_power_on(void)
     case 94: uxrom_reset(); break;
     case 180: map_prg16(0, 0); map_prg16(1, 0); map_chr8(0); break;
     case 70: uxrom_reset(); break;
+    case 78: case 89: case 72: case 92: uxrom_reset(); break;
+    case 93: uxrom_reset(); hw_cart.m.ctrl = 1; break;   /* CHR RAM enabled at power-on */
+    case 97: map_prg16(0, -1); map_prg16(1, 0); map_chr8(0); break;
+    case 86: case 101: nrom_reset(); break;
     case 152: uxrom_reset(); hw_cart.mirroring = HW_MIRROR_SCREEN_A; break;
     case 184: nrom_reset(); map_chr4(1, 4); break;
     case 232: map_prg16(0, 0); map_prg16(1, 3); map_chr8(0); break;
@@ -935,6 +948,15 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
         map_chr8(((value & 1) << 1) | ((value & 2) >> 1));
         return;
     }
+    /* Jaleco JF-13 (mapper 86): $6000-$6FFF [.CPP ..CC] 32 KiB PRG, 8 KiB CHR
+     * (bit 6 the high CHR bit); $7000-$7FFF drives the uPD7756 speech chip,
+     * which is not modeled; no PRG RAM, no bus conflicts. */
+    if (hw_cart.mapper == 86 && addr >= 0x6000 && addr < 0x8000) {
+        if (addr < 0x7000) { map_prg32((value >> 4) & 3); map_chr8((value & 3) | ((value >> 4) & 4)); }
+        return;
+    }
+    /* Mapper 101 (a JF-10 misdump): 8 KiB CHR at $6000-$7FFF, bits in order. */
+    if (hw_cart.mapper == 101 && addr >= 0x6000 && addr < 0x8000) { map_chr8(value); return; }
     if (hw_cart.mapper == 113 && (addr & 0xe100) == 0x4100) {
         hw_cart.m.latch = value;
         map_prg32((value >> 3) & 7);
@@ -1027,6 +1049,42 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
         value &= hw_cart_prg_read(addr);
         hw_cart.m.latch = value;
         map_prg16(1, value & 7);
+        break;
+    case 78: /* Irem 74HC161 / Jaleco JF-16; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg16(0, value & 7);
+        map_chr8(value >> 4);
+        if (hw_cart.info.submapper == 3)
+            hw_cart.mirroring = (value & 8) ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
+        else hw_cart.mirroring = (value & 8) ? HW_MIRROR_SCREEN_B : HW_MIRROR_SCREEN_A;
+        break;
+    case 89: /* Sunsoft-2 on the Sunsoft-3 board; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg16(0, (value >> 4) & 7);
+        map_chr8((value & 7) | ((value >> 4) & 8));
+        hw_cart.mirroring = (value & 8) ? HW_MIRROR_SCREEN_B : HW_MIRROR_SCREEN_A;
+        break;
+    case 93: /* Sunsoft-2 on the Sunsoft-3R board; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        hw_cart.m.latch = value;
+        map_prg16(0, (value >> 4) & 7);
+        hw_cart.m.ctrl = value & 1;               /* CHR RAM enable */
+        for (unsigned i = 0; i < 8; ++i) hw_cart.chr_write[i] = hw_cart.chr_ram && hw_cart.m.ctrl;
+        break;
+    case 97: /* Irem TAM-S1; see MAPPERS.md. */
+        if (addr < 0xc000) {
+            hw_cart.m.latch = value;
+            map_prg16(1, value & 31);
+            hw_cart.mirroring = (value & 0x80) ? HW_MIRROR_VERTICAL : HW_MIRROR_HORIZONTAL;
+        }
+        break;
+    case 72: case 92: /* Jaleco JF-17 / JF-19; see MAPPERS.md. */
+        value &= hw_cart_prg_read(addr);
+        if ((value & 0x80) && !(hw_cart.m.latch & 0x80)) map_prg16(hw_cart.mapper == 92 ? 1 : 0, value & 15);
+        if ((value & 0x40) && !(hw_cart.m.latch & 0x40)) map_chr8(value & 15);
+        hw_cart.m.latch = value;
         break;
     case 70: case 152: /* Bandai 74161/7432; see MAPPERS.md. */
         value &= hw_cart_prg_read(addr);

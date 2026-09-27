@@ -106,6 +106,28 @@ def ppu_fixtures():
         ('cpu', 0xb000, 0x06), ('read', 0, 48), ('write', 0x2000, 0x31), ('read', 0x2c00, 0x31),
         ('cpu', 0xb000, 0x86), ('write', 0x2400, 0x32), ('read', 0x2800, 0x32),
         ('cpu', 0xb000, 0x06), ('read', 0x2800, 0x31)])
+    # Batch-3 discrete latches: CHR, one-screen/H-V mirroring, 93's CHR RAM
+    # enable (disabled reads see the address byte), 72's rising-edge CHR load.
+    yield ppu_contract(78, 128, 128, [
+        ('cpu', 0xb000, 0x50), ('read', 0, 40), ('write', 0x2000, 0x31), ('read', 0x2c00, 0x31),
+        ('cpu', 0xb000, 0x58), ('write', 0x2400, 0x32), ('read', 0x2800, 0x32),
+        ('cpu', 0xb000, 0x50), ('read', 0x2000, 0x31)])
+    yield ppu_contract(89, 128, 128, [
+        ('cpu', 0xb000, 0x85), ('read', 0, 13 * 8 % 256), ('write', 0x2000, 0x31),
+        ('cpu', 0xb000, 0x8d), ('write', 0x2000, 0x32), ('read', 0x2400, 0x32),
+        ('cpu', 0xb000, 0x85), ('read', 0x2c00, 0x31)])
+    yield ppu_contract(93, 128, 0, [
+        ('write', 0x0010, 0x5a), ('read', 0x0010, 0x5a),
+        ('cpu', 0xb000, 0x00), ('write', 0x0010, 0x77), ('read', 0x0020, 0x20),
+        ('cpu', 0xb000, 0x01), ('read', 0x0010, 0x5a)])
+    yield ppu_contract(97, 128, 8, [
+        ('cpu', 0x8000, 0x80), ('write', 0x2000, 0x31), ('write', 0x2400, 0x32), ('read', 0x2800, 0x31),
+        ('cpu', 0x8000, 0x00), ('read', 0x2800, 0x32)])
+    yield ppu_contract(72, 128, 128, [
+        ('cpu', 0xb000, 0x45), ('read', 0, 40), ('cpu', 0xb000, 0x46), ('read', 0, 40),
+        ('cpu', 0xb000, 0x06), ('cpu', 0xb000, 0x46), ('read', 0, 48)])
+    yield ppu_contract(86, 128, 64, [('cpu', 0x6000, 0x45), ('read', 0, 40), ('read', 0x1fff, 47)])
+    yield ppu_contract(101, 32, 64, [('cpu', 0x6000, 0x07), ('read', 0, 56), ('cpu', 0x7fff, 0x02), ('read', 0x1c00, 23)])
     yield ppu_contract(140, 128, 128, [('cpu', 0x6000, 0x2a), ('read', 0, 80), ('read', 0x1fff, 87)])
     yield ppu_contract(184, 32, 32, [
         ('cpu', 0x6000, 0x12), ('read', 0, 8), ('read', 0x1000, 20),
