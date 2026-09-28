@@ -37,6 +37,7 @@ the few pixels that still differ.
 | CPU ↔ hardware interface | `hw.h` | NESRecomp's own |
 | Master clock, CPU bus, cartridge loading | `hw_machine.c` | NESRecomp's own |
 | Mappers ([coverage](MAPPERS.md)) | `hw_mapper.h`, `hw_mapper.c` | NESRecomp's own |
+| FDS RAM Adapter, drive, sound unit | `hw_fds.c`, `hw_fds_audio.c` | NESRecomp's own |
 | PPU (2C02) | `hw_ppu.c` | NESRecomp's own |
 | APU, DMAs, controller ports, audio | `hw_apu.c` | NESRecomp's own |
 | Palette | `hw_palette.c` (NTSC signal model) | NESRecomp's own |
@@ -401,7 +402,7 @@ had exactly that problem at first — it sat in TriCNES's half-dot handler — a
 SMB3 disagreed with it at those two alignments until it moved to the end of
 `_EmulatePPU()`.
 
-### Famicom Disk System (`hw_fds.c`, `cyc_ring.c`)
+### Famicom Disk System (`hw_fds.c`, `hw_fds_audio.c`, `cyc_ring.c`)
 
 The RAM Adapter is board 20 ([MAPPERS.md](MAPPERS.md#fds-ram-adapter-mapper-20)):
 the recompiler compiles the BIOS (`disksys.rom`) as the program's fixed ROM at
@@ -458,6 +459,65 @@ that same +2 offset from Mesen's counter. In the SMB2J boot the BIOS is 89.7% of
 the CPU cycles and disk-loaded code the other 10.3%, all native once compiled
 with one capture ([Code in RAM](#code-in-ram)); the gate counts above are the
 same with and without RAM views.
+
+#### The sound unit (`hw_fds_audio.c`)
+
+The RAM Adapter's wavetable channel: a 64-step, 6-bit wavetable ($4040-$407F,
+writable and held while $4089.7 is set), a 12-bit pitch ($4082/$4083), the
+volume envelope ($4080) and the modulator: a 64-step table of 3-bit steps
+($4088, two steps a write, only while $4087.7 stops the unit), a 7-bit
+signed counter ($4085) that wraps, its own envelope ($4084) and pitch
+($4086/$4087), and the pitch adjustment Mesen took from the nesdev wiki
+(the "strange" rounding, the -64..191 wrap and the round-to-nearest of the
+second product). $408A sets both envelopes' speed (8 x (speed + 1) x $408A
+cycles a tick, $E8 at power-on), $4089.0-1 the master volume (36/24/17/14 of
+36), $4090/$4092 read the gains back and $4040-$407F the sample at the wave
+position while writes are disabled. It runs on every CPU cycle, since the
+CPU can read all of that back, whether or not audio is being output.
+
+The reference is nesref's core, libretro/Mesen master 0102910: its
+`FdsAudio.h` differs from the 0.9.9 release in four places, each visible in
+nesref (wave read-back at the position, the mod output applying while the
+unit is stopped, $4084/$4085 recomputing it, $E8 at power-on). `--fds-profile
+mesen2` follows Mesen2 b9fa69d (pitch writes recompute the mod output, the
+wave runs on and the output holds while writes are enabled); `hardware` is
+Mesen2's synthesis with the nesdev output stage. `hw_fds_audio.c` has the
+table.
+
+Output: Mesen mixes the 6-bit output unfiltered at 20 per step against
+477600 / (8128 / n + 100) for the pulses; the runtime's mix is the same curve
+at 1/5000 of that scale, so the FDS is 20/5000 per step, in phase with the
+2A03 (full volume = 1.69 full pulses). The `hardware` profile uses the
+nesdev level (2.4 pulses) and its ~2 kHz one-pole low-pass instead; that
+column is a judgment call, not oracle-verified. Neither Mesen models the
+newer nesdev findings ($4083.7 speeding the envelopes up, $4087.6, 16-cycle
+wave/mod ticks, $4091), and no profile does.
+
+The ring records envelope gain changes (`fds.env`, folded per frame) and, per
+frame, the wave and mod table steps (`fds.audio`); a step per event would be
+thousands a frame and evict the drive's events. `--frame-log` records the
+sound unit's state (`cyc_fds_audio_state`, Mesen's field order) with each
+frame.
+
+Checks:
+
+- `cyc_fds_board_test`: envelope timing to the cycle, the gain limits, the
+  master speeds, $4083 bits 6 and 7, read-back, master volume, the mod table
+  and counter wrap, and the pitch adjustment for values nesref's savestates
+  held and for each branch of the formula; the wave in all three profiles.
+- `cyc_fds_audio_test` (`tools/cyc/test_cyc_fds_audio.py`): synthetic FDS
+  programs, compiled from their disks, run native, `--interp-only` and on
+  `cyc_interp` at all four alignments with identical `--hash-out`; every
+  sound register read and every frame's sound state must match
+  `tools/cyc/fds_audio_model.py`, a model of Mesen's FdsAudio written apart
+  from `hw_fds_audio.c`, and the ring summaries must count what the model
+  counts; the PCM must hold the pulse and FDS tones at their pitch with
+  Mesen's level ratio (and 2.4x through the low-pass in `hardware`).
+- `tools/cyc/fds_audio_gates.py` (owner files, not CI): a route on a cyc build
+  and on nesref, compared by model replay, by the FdsAudio snapshot in
+  Mesen's savestates frame by frame, and in PCM with the A/B analyzer
+  (`tools/nes_audio_ab.py`), also with the runtime's output stage applied to
+  nesref's PCM so synthesis and output stage separate.
 
 ### Timing model (`hw_internal.h`, `hw_machine.c`)
 
