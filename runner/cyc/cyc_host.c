@@ -1125,7 +1125,8 @@ int main(int argc, char **argv) {
 #if defined(CYC_WITH_SDL) && !defined(CYC_ORACLE)
     if (!headless) {
         cyc_sdl_present_out(present_out, present_every);
-        int result=cyc_sdl_main(cyc_native_program_name ? cyc_native_program_name : rom_path, scale);
+        int result=cyc_sdl_main(cyc_native_display_name ? cyc_native_display_name
+                                : cyc_native_program_name ? cyc_native_program_name : rom_path, scale);
         bool disk_ok=fds_save_flush(CYC_FDS_SAVE_EXIT);
         return save_write(save_file,0) && save_write(datach_save,1) && disk_ok?result:2;
     }

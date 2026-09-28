@@ -43,6 +43,7 @@ static unsigned checks;
 
 /* cyc_recomp.h's program metadata, as a compiled FDS program has it */
 const char *cyc_native_program_name = "TestGame";
+const char *cyc_native_display_name = NULL;
 const uint32_t cyc_native_fds_bios_crc32 = 0x5E607DCFu;
 
 /* ---- the scripted launcher ---- */

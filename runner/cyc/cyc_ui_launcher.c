@@ -167,7 +167,8 @@ int cyc_ui_launcher(CycSettings *settings, const char *settings_path, const CycH
 
     memset(&gi, 0, sizeof(gi));
     launcher_profile_apply("nes", &gi);
-    if (cyc_native_program_name) snprintf(name, sizeof(name), "%s", cyc_native_program_name);
+    if (cyc_native_display_name) snprintf(name, sizeof(name), "%s", cyc_native_display_name);
+    else if (cyc_native_program_name) snprintf(name, sizeof(name), "%s", cyc_native_program_name);
     else stem_of(*rom_path ? *rom_path : "NES", name, sizeof(name));
     gi.name = name;
     gi.region = NULL;                 /* the identity is the image's SHA-256, not a region */

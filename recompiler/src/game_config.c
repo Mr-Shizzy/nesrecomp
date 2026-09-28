@@ -76,6 +76,8 @@ static bool game_config_load_toml(GameConfig *cfg, const char *path) {
     if (game) {
         toml_datum_t d = toml_string_in(game, "output_prefix");
         if (d.ok) { strncpy(cfg->output_prefix, d.u.s, sizeof(cfg->output_prefix) - 1); free(d.u.s); }
+    d = toml_string_in(game, "name");
+    if (d.ok) { strncpy(cfg->display_name, d.u.s, sizeof(cfg->display_name) - 1); free(d.u.s); }
         toml_datum_t paj = toml_bool_in(game, "push_all_jsr");
         if (paj.ok) cfg->push_all_jsr = paj.u.b;
         toml_datum_t dps = toml_bool_in(game, "disable_ptr_scan");

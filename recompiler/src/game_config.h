@@ -379,6 +379,8 @@ typedef struct {
      * the cycle host uses by default (runner/cyc cyc_set_console); 0 = the
      * board's default, 1 = nes, 2 = famicom. */
     uint8_t          console;
+    /* [game] name: the title players see (window, launcher); empty = output_prefix */
+    char             display_name[128];
     /* [game] cycle_inline_jsr = ["E7BB:2", ...]: subroutines that take N
      * bytes of inline arguments after the JSR and return past them, so the
      * cycle-accurate discovery continues at JSR + 3 + N. */

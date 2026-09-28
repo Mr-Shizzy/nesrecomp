@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 
+const char    *cyc_native_display_name = NULL;
 const char    *cyc_native_program_name = NULL;  /* no PRG ROM check */
 const uint32_t cyc_native_prg_hash = 0;
 const uint32_t cyc_native_cart_hash = 0;
