@@ -42,6 +42,10 @@ typedef struct {
     char hdpack_dir[512];  /* pack folder; "" = default <exe>/hdpack */
     char player_gamepad_guid[4][40]; /* persisted device preference */
     int player_gamepad_instance[4]; /* launcher selection, session only; -1 auto */
+
+    /* Stretch the picture to fill the window/screen, ignoring the NES aspect
+     * (distorts pixels). Last so positional initializers leave it 0 = off. */
+    int stretch;
 } NesConfig;
 
 extern NesConfig g_nes_config;

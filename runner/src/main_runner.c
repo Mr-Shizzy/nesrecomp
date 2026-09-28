@@ -516,6 +516,18 @@ static void video_alloc_buffers(void) {
     }
 }
 
+/* Set the renderer's logical size (letterboxed, aspect-preserving). With the
+ * Stretch setting on, drop the logical size instead so RenderCopy(NULL, NULL)
+ * fills the whole output, and integer scaling (meaningless there) is off. */
+static void video_set_logical_size(int w, int h) {
+    if (g_nes_config.stretch) {
+        SDL_RenderSetLogicalSize(s_renderer, 0, 0);
+        SDL_RenderSetIntegerScale(s_renderer, SDL_FALSE);
+    } else {
+        SDL_RenderSetLogicalSize(s_renderer, w, h);
+    }
+}
+
 /* Apply a queued geometry change (nes_video.h). Called at exactly one point
  * per frame -- after SDL_RenderPresent, before the next frame renders -- so
  * g_render_width never changes while a frame is in flight. Pre-window
@@ -544,7 +556,7 @@ static void video_apply_pending(void) {
             SDL_DestroyTexture(s_hd_texture);
             s_hd_texture = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
                                              SDL_TEXTUREACCESS_STREAMING, hw, hh);
-            SDL_RenderSetLogicalSize(s_renderer, hw, hh);
+            video_set_logical_size(hw, hh);
         } else {
             /* Pack side channel could not follow: drop to native output. */
             if (nb) s_hd_buf = nb;
@@ -552,10 +564,10 @@ static void video_apply_pending(void) {
             SDL_DestroyTexture(s_hd_texture); s_hd_texture = NULL;
             hdpack_unload();
             s_hd_scale = 1;
-            SDL_RenderSetLogicalSize(s_renderer, g_render_width, 240);
+            video_set_logical_size(g_render_width, 240);
         }
     } else {
-        SDL_RenderSetLogicalSize(s_renderer, g_render_width, 240);
+        video_set_logical_size(g_render_width, 240);
     }
     printf("[Video] render width %d (%dL + 256 + %dR), aspect %s\n",
            g_render_width, g_widescreen_left, g_widescreen_right,
@@ -2367,8 +2379,8 @@ int nesrecomp_runner_run(int argc, char *argv[]) {
      * scaling to whole-pixel multiples so every NES pixel stays the same size.
      * Applies to both windowed-resize and fullscreen. */
     startup_timing_mark("renderer_created");
-    SDL_RenderSetLogicalSize(s_renderer, g_render_width, 240);
-    SDL_RenderSetIntegerScale(s_renderer, g_nes_config.integer_scale ? SDL_TRUE : SDL_FALSE);
+    video_set_logical_size(g_render_width, 240);
+    SDL_RenderSetIntegerScale(s_renderer, g_nes_config.integer_scale && !g_nes_config.stretch ? SDL_TRUE : SDL_FALSE);
 
     s_texture = SDL_CreateTexture(s_renderer,
         SDL_PIXELFORMAT_ARGB8888,
@@ -2378,7 +2390,7 @@ int nesrecomp_runner_run(int argc, char *argv[]) {
         fprintf(stderr, "SDL_CreateTexture: %s\n", SDL_GetError());
         exit(1);
     }
-    SDL_RenderSetLogicalSize(s_renderer, g_render_width, 240);
+    video_set_logical_size(g_render_width, 240);
     /* From here on geometry requests are queued and applied per frame
      * (video_apply_pending); seed the Fit mode with the real drawable size. */
     nes_video_mark_window_ready();
@@ -2399,7 +2411,7 @@ int nesrecomp_runner_run(int argc, char *argv[]) {
         s_hd_texture = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
                                          SDL_TEXTUREACCESS_STREAMING, hw, hh);
         if (s_hd_buf && s_hd_texture) {
-            SDL_RenderSetLogicalSize(s_renderer, hw, hh);
+            video_set_logical_size(hw, hh);
             /* The HD logical size is larger than the native window, so integer
              * scaling would round to 0 and draw nothing. Use fractional fit and
              * size the window to the HD frame (capped to ~90% of the desktop). */

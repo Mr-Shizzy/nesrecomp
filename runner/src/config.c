@@ -123,6 +123,7 @@ void config_load(const char *path) {
         else if (!strcmp(key, "LinearFilter"))  g_nes_config.linear_filter = val ? 1 : 0;
         else if (!strcmp(key, "Renderer"))      g_nes_config.renderer      = clampi(val, 0, 1);
         else if (!strcmp(key, "Widescreen"))    g_nes_config.widescreen    = val ? 1 : 0;
+        else if (!strcmp(key, "Stretch"))       g_nes_config.stretch       = val ? 1 : 0;
         else if (!strcmp(key, "Volume"))        g_nes_config.volume        = clampi(val, 0, 100);
         else if (!strcmp(key, "Player1Source")) g_nes_config.player_src[0] = clampi(val, 0, 2);
         else if (!strcmp(key, "Player2Source")) g_nes_config.player_src[1] = clampi(val, 0, 2);
@@ -160,6 +161,7 @@ void config_save(const char *path) {
     fprintf(f, "LinearFilter = %d\n",  c->linear_filter);
     fprintf(f, "Renderer = %d\n",      c->renderer);
     fprintf(f, "Widescreen = %d\n",    c->widescreen);
+    fprintf(f, "Stretch = %d\n",       c->stretch);
     fprintf(f, "HdPackEnabled = %d\n", c->hdpack_enabled);
     fprintf(f, "HdPackDir = %s\n",     c->hdpack_dir);
     fprintf(f, "[Audio]\n");

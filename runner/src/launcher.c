@@ -419,6 +419,7 @@ reopen_recomp_launcher:
             ls.linear_filter  = g_nes_config.linear_filter;
             ls.renderer       = g_nes_config.renderer;
             ls.widescreen     = g_nes_config.widescreen;
+            ls.aspect_index   = g_nes_config.stretch ? 1 : 0;
             ls.enable_audio   = 1;    /* NES audio is always on; volume gates it */
             ls.volume         = g_nes_config.volume;
             ls.player_src[0]  = g_nes_config.player_src[0];
@@ -453,6 +454,16 @@ reopen_recomp_launcher:
             gi.region           = "NTSC-U (USA)";
             gi.expected_crc     = expected_crc;
             gi.has_expected_crc = expected_crc != 0;
+            /* Aspect row: index 0 keeps the NES aspect (letterboxed), index 1
+             * stretches to fill the screen. Maps onto g_nes_config.stretch. */
+            static const char *const s_aspect_labels[] = { "Original", "Stretch to fill" };
+            gi.aspect_labels        = s_aspect_labels;
+            gi.num_aspect_labels    = 2;
+            gi.aspect_setting_label = "Aspect ratio";
+            gi.aspect_setting_help  =
+                "Original: correct NES shape, black bars at the sides.\n"
+                "Stretch to fill: fills the whole screen, but pixels and\n"
+                "sprites are distorted (wider than intended).";
 #ifdef NESRECOMP_GAME_PLAYERS
             gi.num_players      = NESRECOMP_GAME_PLAYERS;
 #else
@@ -544,6 +555,7 @@ reopen_recomp_launcher:
                 g_nes_config.linear_filter  = ls.linear_filter;
                 g_nes_config.renderer       = ls.renderer;
                 g_nes_config.widescreen     = ls.widescreen;
+                g_nes_config.stretch        = ls.aspect_index == 1;
                 g_nes_config.volume         = ls.volume;
                 g_nes_config.player_src[0]  = ls.player_src[0];
                 g_nes_config.player_src[1]  = ls.player_src[1];
