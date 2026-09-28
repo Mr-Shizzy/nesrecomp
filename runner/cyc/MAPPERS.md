@@ -22,6 +22,7 @@ models; it does not independently establish the mapper specification.
 
 | ID | Board / reference | Behavior and limits |
 |---:|---|---|
+| 20 | [FDS RAM Adapter](https://www.nesdev.org/wiki/Family_Computer_Disk_System) | Loaded from a BIOS and a disk image (`cyc_load_fds`), never from an iNES header. 32 KiB PRG RAM at $6000-$DFFF, the 8 KiB BIOS fixed at $E000-$FFFF, 8 KiB CHR RAM, CIRAM A10 from $4025.3. Timer IRQ ($4020-$4022), I/O enables ($4023), the disk drive ($4024-$4026, $4030-$4033) clocked every CPU cycle, and the sound unit's register side; its synthesis is not modeled yet. See [the FDS section](#fds-ram-adapter-mapper-20). |
 | 118 | [TxSROM](https://www.nesdev.org/wiki/TxSROM) | MMC3 banking and A12 IRQ. CHR A17 drives CIRAM A10: bit 7 of the register covering the nametable address's pattern page (R0/R1 or R2-R5 by $8000 bit 7; $3000-$3EFF uses pages 4-7). $A000 is disconnected. iNES keeps the MMC3 8 KiB WRAM default; four-screen headers are rejected. |
 | 119 | [TQROM](https://www.nesdev.org/wiki/TQROM) | MMC3 banking and A12 IRQ. CHR bank bit 6 (CHR A16) selects the 8 KiB CHR RAM chip, addressed by bank bits 0-2; otherwise CHR ROM sees bits 0-5 (at most 64 KiB). No work RAM. iNES implies the 8 KiB CHR RAM; NES 2.0 must declare exactly 8 KiB volatile CHR RAM. This is the only board accepted with both CHR ROM and CHR RAM. |
 | 69 | [Sunsoft FME-7 / 5A / 5B](https://www.nesdev.org/wiki/Sunsoft_FME-7) | Command/parameter registers: eight 1 KiB CHR banks, three 8 KiB PRG banks (6 bits) plus the fixed last bank, four mirroring modes, and a $6000 window that holds a PRG ROM bank, enabled RAM, or open bus. The 16-bit IRQ counter decrements every CPU cycle (including DMA) and interrupts on the $0000 to $FFFF wrap; only command 13 acknowledges. [5B audio](https://www.nesdev.org/wiki/Sunsoft_5B_audio) is always present: three tones, 17-bit noise, the 32-step envelope with all 16 shapes, and the 1.5 dB/step DAC. Mixing gain is nominal. Code at $6000 uses the interpreter. iNES implies 8 KiB PRG RAM. |
@@ -315,6 +316,63 @@ The enlarged fixture harness compiles its common runtime once as an object
 library, explicitly selects Release on single-configuration generators, and
 allows `--build-timeout` for slower machines. Generated game code still links
 into separate executables and runs all four execution modes.
+
+### FDS RAM Adapter (mapper 20)
+
+`hw_fds.c`. The board is built from `disksys.rom` (the host accepts only the
+image `bios/disksys.toml`, or the compiled program, identifies) and a `.fds`
+(fwNES or raw) or `.qd` image, whose sides `common/nes_fds.h` rebuilds into
+the byte streams the drive clocks. The reference is the FDS of nesref's
+"Mesen 0.9.9" libretro core, measured to be libretro/Mesen master (0102910):
+0.9.9's `Core/FDS.cpp` with a byte every 150 CPU cycles. The default profile
+(`--fds-profile mesen`) transcribes it cycle for cycle; `mesen2` follows
+Mesen2 b9fa69d, and `hardware` adds what nesdev describes and Mesen leaves
+out ($4030.3 and .6, a CRC check in $4030.4, the write-protect tab, the
+battery bit). `hw_fds.c` has the table of differences with line references;
+the `hardware` column is a judgment call, not oracle-verified.
+
+- Timer: the reload value is copied into the counter when $4022.1 enables it;
+  the IRQ fires the cycle after the counter reaches 0, every reload + 1 cycles
+  with $4022.0 set, once otherwise. $4030 reads, $4022 writes that disable it
+  and $4023.0 = 0 acknowledge; with the disk registers off $4022 cannot enable
+  it, while $4020/$4021 still take writes.
+- Drive: no disk or the motor off parks the head at the end; the motor turning
+  on (with $4025.1 released) rewinds to byte 0, waits 50,000 cycles, then clocks
+  one byte every 150 cycles. $4025.6 set, the first nonzero byte ends the gap
+  and transfers without an IRQ; each later byte raises the transfer flag and,
+  with $4025.7, the disk IRQ, acknowledged by a $4031 read, a $4024 or $4025
+  write, or a $4030 read (which also acknowledges the timer). At the end of the
+  side the drive stops its own motor.
+- $4032: disk absent (bit 0), not ready = not scanning (bit 1), not writable =
+  absent or protected (bit 2), bits 3-7 open bus. $4033 returns $4026 as
+  written (Mesen: "always return good battery").
+- Writes: write mode clocks $4024 (or the CRC) onto the in-memory disk, two
+  bytes behind the head as Mesen does; nothing is saved (disk-write sidecars
+  are a later phase).
+- CRC: the side streams carry the real CRC-16 by default; `--fds-crc mesen`
+  carries Mesen's constant $4D $62 instead. Mesen never reports a bad CRC; the
+  check (`--fds-crc-check`, or the `hardware` profile) raises $4030.4 when the
+  CRC register is not 0 as the CRC control bit rises. The BIOS boots and
+  RAM/picture agree with nesref either way, since it discards the CRC bytes.
+- Timing against the CPU: Mesen clocks the board before a cycle's bus access
+  and samples /IRQ after it; `hw_machine.c` clocks it at tick 11, after the
+  tick-7 IRQ sample and before the next access, the same order. In the SMB2J
+  boot, byte clocks keep the same offset from Mesen's cycle counter as the
+  frame points do (`tools/cyc/fds_oracle_gates.py`; see README).
+- Code: the BIOS compiles as a fixed ROM (100% native in the SMB2J boot); code
+  the BIOS loads into PRG RAM runs on the interpreter and is counted as
+  "PRG RAM" in the run summary and listed (with $6000+ addresses) in the miss
+  log.
+
+Every register access, IRQ edge and acknowledge, clocked byte, motor, rewind,
+ready and end-of-side transition, CRC check and side change goes into the
+always-on event ring (`cyc_ring.h`; `--ring-out`, `NESRECOMP_CYC_RING_DUMP`).
+`cyc_fds_board_test` (CTest) checks the registers, IRQs and drive directly and
+runs a synthetic BIOS (`tools/cyc/fds_board_fixtures.py`) on the machine;
+`tools/cyc/test_cyc_fds_runtime.py` compiles that BIOS and checks native,
+`--interp-only` and `cyc_interp` parity at all four alignments. Owner-image
+checks (local, not CI): `tools/cyc/fds_oracle_gates.py` against nesref and
+`tools/cyc/test_fds_owner_parity.py`. The TriCNES oracle has no RAM Adapter.
 
 ### MMC5 / ExROM (mapper 5)
 

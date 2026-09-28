@@ -50,6 +50,23 @@ paths are relative to the calling CMake source directory; a seed path inside
 `game.toml` is relative to that configuration file. `GAME_CONFIG` is optional.
 Existing legacy-generated C and `extras.c` are not cycle-backend inputs.
 
+## Famicom Disk System titles
+
+Point `ROM` (or `NESRECOMP_ROM`) at the `.fds`/`.qd` image. The BIOS comes from
+`BIOS` (`NESRECOMP_FDS_BIOS`), else `game.toml` `[fds] bios`, else
+`bios/disksys.rom` beside the image; configure fails unless it matches the
+identity in its `.toml` (`bios/disksys.toml`: size, CRC32, SHA-1). The BIOS
+and its identity file are configure dependencies. The built program runs the
+image and BIOS named at configure time when started without arguments; any
+image and `--fds-bios` can be given on its command line. See the FDS section
+of [README.md](README.md) for the host's disk options.
+
+```cmake
+nesrecomp_add_cycle_game(MyFdsGame
+    ROM "${CMAKE_SOURCE_DIR}/Game.fds"
+    GAME_CONFIG "${CMAKE_SOURCE_DIR}/game.toml")   # [game] fds = true, [fds] bios = "bios/disksys.rom"
+```
+
 ## Native coverage and rebuilding
 
 Unseen code runs through the cycle interpreter. Profile a route with

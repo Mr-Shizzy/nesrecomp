@@ -281,6 +281,62 @@ had exactly that problem at first — it sat in TriCNES's half-dot handler — a
 SMB3 disagreed with it at those two alignments until it moved to the end of
 `_EmulatePPU()`.
 
+### Famicom Disk System (`hw_fds.c`, `cyc_ring.c`)
+
+The RAM Adapter is board 20 ([MAPPERS.md](MAPPERS.md#fds-ram-adapter-mapper-20)):
+the recompiler compiles the BIOS (`disksys.rom`) as the program's fixed ROM at
+$E000-$FFFF, and the host loads it with a disk image instead of an iNES file:
+
+```bash
+NESRecomp game.fds --fds-bios bios/disksys.rom --cycle-accurate   # or game.toml [fds] image/bios
+FdsGame game.fds --fds-bios bios/disksys.rom                        # defaults: game.toml's media
+FdsGame --fds-boot-disk none --frames 1200 --screenshot nodisk.png  # the BIOS's insert-disk screen
+FdsGame otocky.fds --fds-event 1199:eject --fds-event 1258:insert=B --frames 3000
+```
+
+Only the BIOS its `bios/disksys.toml` (or, for a compiled program, the one it
+was compiled from) identifies is accepted: 8192 bytes, CRC32 5E607DCF. The
+BIOS passes arguments inline after its JSRs (`$E844`, `$E3E7`); discovery
+knows its routines that do (`FDS_BIOS_INLINE_JSR` in `cyc_codegen.c`, and
+`[game] cycle_inline_jsr` for any program), so the BIOS runs 100% native with
+no seed file. Code the BIOS loads from the disk into PRG RAM runs on the
+interpreter; the run summary counts it as "PRG RAM" and `--miss-log` lists
+its instruction starts. Disk events (`--fds-event`, or `F DISK_EJECT`,
+`F DISK_SELECT SIDE`, `F DISK_INSERT [SIDE]` lines in an `--input` file) apply
+before frame F runs, where nesref applies its script's disk commands; the SDL
+window has F1 (eject / insert) and F3 (next side).
+
+The drive and the board record every event from power-on into an always-on
+ring (`cyc_ring.h`): register accesses (a polling loop folds into one event
+with a repeat count), IRQ edges and acknowledges, each clocked byte with its
+position, motor, rewind, ready and end-of-side transitions, CRC checks and side
+changes. `--ring-out FILE [--ring-frames A:B]` writes it at exit, and
+`NESRECOMP_CYC_RING_DUMP=FILE` does for any host; nothing needs arming.
+
+Against nesref (Mesen), `tools/cyc/fds_oracle_gates.py` compares CPU RAM,
+PRG RAM, nametables, CHR RAM and the picture frame by frame; `--frame-log FILE
+--frame-log-at mesen` gives it cyc's memories at the point where Mesen ends a
+frame (scanline 240 dot 0, one scanline before cyc's VBlank frame end), so a
+frame that ends mid-loop is compared at the same instant. Measured (interpreter
+and native builds, alignment 0, `--ram-init zeros`):
+
+| Run | Frames | Identical frames | Notes |
+|-----|--------|------------------|-------|
+| BIOS, no disk | 1-1200 | CPU RAM, PRG RAM, CHR RAM 1200; nametables 1195; picture 1194 | "PLEASE SET DISK CARD" from 155 |
+| SMB2J, disk in at power-on | 1-800 | picture 794, PRG RAM 799, nametables 793, CHR RAM 797, CPU RAM 731 | title first at frame 751 in both |
+| Otocky, eject at 1199, side B at 1258 | every 10th, 1180-3000 | picture, PRG RAM, nametables, CHR RAM 183/183; CPU RAM 182 | OTOCKY SELECT at 1800 |
+
+The no-disk run also matches on every one of frames 1-1200 except the
+pictures of frames 1-6 and the nametables of 1-5: CIRAM and palette RAM
+power-on contents, which the hardware leaves undefined and Mesen zeroes. The
+SMB2J differences past frame 6 are one or two bytes each, caught mid-update or
+left on the stack by an NMI: at matched frame points the two CPU cycle counts
+differ by -5 to +3 cycles (+2 in 518 of 770 frames), so the snapshot or the
+NMI lands one instruction apart (in the title's 6-cycle idle loop the pushed
+return address alternates between $605B and $605D). Drive byte clocks keep
+that same +2 offset from Mesen's counter. In the SMB2J boot the BIOS is 89.7%
+of the CPU cycles, all native; the rest (10.3%) is disk-loaded code.
+
 ### Timing model (`hw_internal.h`, `hw_machine.c`)
 
 The NTSC master clock runs 12 ticks per CPU cycle and 4 per PPU dot. Within a
