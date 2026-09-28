@@ -31,6 +31,8 @@ machines number frames differently (measured and printed).
       --nesref F:/Projects/nesref_wt-fds/nesref.exe --image smb2j.fds --bios disksys.rom --out out/
   python tools/cyc/fds_oracle_gates.py --gate boot ...     # SMB2J, disk in at power-on
   python tools/cyc/fds_oracle_gates.py --gate otocky --image otocky.fds ...
+  python tools/cyc/fds_oracle_gates.py --gate input --input route.txt --frames 3200:3950 ...
+      # any cyc --input route (buttons and DISK_ lines), disk in at power-on
 """
 import argparse
 import concurrent.futures
@@ -101,6 +103,37 @@ def read_png_rgb(path):
 
 
 # ---------------------------------------------------------------- nesref side
+def nesref_script(route, frames):
+    """A cyc --input file as nesref script lines that run `frames` frames.
+
+    cyc applies a line `F ...` before frame F; nesref applies a command at the
+    frame boundary before its next retro_run, and WAIT n advances n - 1 frames,
+    so a first WAIT F + 1 and then WAIT (F - previous F) + 1 land every
+    command at nesref f = F (the gates pair nesref f with cyc record f - 1)."""
+    steps = []
+    for line in Path(route).read_text().splitlines():
+        line = line.split('#')[0].strip()
+        if not line:
+            continue
+        f, *rest = line.split(None, 1)
+        steps.append((int(f), rest[0].strip() if rest else '-'))
+    out, held, last = [], set(), None
+    for f, what in sorted(steps, key=lambda st: st[0]):
+        if f != last:
+            out.append(f'WAIT {f + 1 if last is None else f - last + 1}')
+        last = f
+        if what.startswith('DISK_'):
+            out.append(what)
+            continue
+        if what.startswith(('1:', '2:')):
+            raise SystemExit('nesref scripts drive controller 1 only')
+        new = set() if what in ('-', '') else {b.upper() for b in what.replace(' ', '+').split('+') if b}
+        out += [f'RELEASE {b}' for b in sorted(held - new)] + [f'HOLD {b}' for b in sorted(new - held)]
+        held = new
+    out.append(f'WAIT {frames - (last or 0) + 10}')
+    return out
+
+
 def nesref_env(args, sysdir, savedir, extra):
     env = {k: v for k, v in os.environ.items() if not k.startswith('NESREF_')}
     env.update({'NESREF_SYSTEM_DIR': str(sysdir), 'NESREF_SAVE_DIR': str(savedir)})
@@ -295,7 +328,8 @@ def pairing_offset(cyc, ref_ram, frames):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--gate', choices=['nodisk', 'boot', 'otocky'], required=True)
+    ap.add_argument('--gate', choices=['nodisk', 'boot', 'otocky', 'input'], required=True)
+    ap.add_argument('--input', type=Path, help='--gate input: the cyc --input route both machines run')
     ap.add_argument('--cyc', type=Path, required=True, help='cyc_interp or a compiled FDS program')
     ap.add_argument('--cyc-args', default='', help='extra cyc arguments (space separated)')
     ap.add_argument('--nesref', type=Path, required=True)
@@ -303,7 +337,7 @@ def main():
     ap.add_argument('--image', type=Path, required=True)
     ap.add_argument('--bios', type=Path, required=True)
     ap.add_argument('--out', type=Path, required=True)
-    ap.add_argument('--frames', help='nesref frames to compare: A:B or a,b,c (default per gate)')
+    ap.add_argument('--frames', help='nesref frames to compare: A:B[:STEP] or a,b,c (default per gate)')
     ap.add_argument('--offset', type=int, help='nesref frame - (cyc record + 1); measured if omitted')
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--phase', choices=['mesen', 'vblank'], default='mesen',
@@ -326,6 +360,11 @@ def main():
     elif args.gate == 'boot':
         args.boot, default_frames = '0', '1:800'
         cyc_extra += ['--fds-boot-disk', '0']
+    elif args.gate == 'input':
+        if not args.input or not args.frames:
+            raise SystemExit('--gate input needs --input and --frames')
+        args.boot, default_frames = '0', args.frames
+        cyc_extra += ['--fds-boot-disk', '0', '--input', str(args.input.resolve())]
     else:
         # nesref WAIT n advances n - 1 frames: eject at f=1199, select B and
         # insert at f=1258 (the phase-1 validation script).
@@ -333,8 +372,13 @@ def main():
         script = ['WAIT 1200', 'DISK_EJECT', 'WAIT 60', 'DISK_SELECT B', 'DISK_INSERT']
         cyc_extra += ['--fds-boot-disk', '0', '--fds-event', '1199:eject', '--fds-event', '1258:insert=1']
     spec = args.frames or default_frames
-    frames = list(range(int(spec.split(':')[0]), int(spec.split(':')[1]) + 1)) if ':' in spec else \
-        [int(x) for x in spec.split(',')]
+    if ':' in spec:
+        a, b, *step = (int(x) for x in spec.split(':'))
+        frames = list(range(a, b + 1, step[0] if step else 1))
+    else:
+        frames = [int(x) for x in spec.split(',')]
+    if args.gate == 'input':
+        script = nesref_script(args.input, 0)[:-1]
 
     # One long nesref run for the per-frame CPU RAM trace.
     trace = out / 'nesref_trace.jsonl'
