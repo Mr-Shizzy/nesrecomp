@@ -354,6 +354,10 @@ static uint8_t noise_out(const Noise *n) {
     return n->const_vol ? n->vol : n->env_vol;
 }
 
+/* Output-only channel mute (see apu_set_mute_mask); channels keep running. */
+static volatile uint8_t s_mute_mask;
+void apu_set_mute_mask(uint8_t mask) { s_mute_mask = mask; }
+
 /* ---- NES mixer (linear approximation) ----
  * This is the CANON, authoritative mixer. It also captures the per-channel
  * levels it used into *lv (when non-NULL) so the verified-enhancement audio
@@ -366,6 +370,13 @@ static float mix_sample_f(ApuChannelLevels *lv) {
     uint8_t l_tri = triangle_out(&s_tri);
     uint8_t l_nse = noise_out(&s_noise);
     uint8_t l_dmc = s_dmc.output;
+    if (s_mute_mask) {
+        if (s_mute_mask & 0x01) l_p1  = 0;
+        if (s_mute_mask & 0x02) l_p2  = 0;
+        if (s_mute_mask & 0x04) l_tri = 0;
+        if (s_mute_mask & 0x08) l_nse = 0;
+        if (s_mute_mask & 0x10) l_dmc = 0;
+    }
     if (lv) {
         lv->pulse1   = l_p1;
         lv->pulse2   = l_p2;

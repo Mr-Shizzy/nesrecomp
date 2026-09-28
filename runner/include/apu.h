@@ -13,6 +13,11 @@ uint8_t apu_read_status(void);
  * Call once per VBlank (n_samples = 735 at 44100 Hz / 60 fps). */
 void    apu_generate(int16_t *buf, int n_samples);
 
+/* Silence channels at the mixer only (bit0 pulse1, bit1 pulse2, bit2
+ * triangle, bit3 noise, bit4 dmc). Channel state keeps running, so a game
+ * option can mute a sound category without changing guest timing. */
+void    apu_set_mute_mask(uint8_t mask);
+
 /* Advance the APU frame sequencer's IRQ flag by `cpu_cycles` CPU cycles.
  * NMI-independent: code that runs with NMI disabled (blargg APU tests, any
  * main-thread $4015 poll) still sees the frame IRQ assert.  Call from the
