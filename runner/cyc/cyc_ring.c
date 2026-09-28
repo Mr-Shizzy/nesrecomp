@@ -28,11 +28,13 @@ void cyc_ring_push(CycRingKind kind, uint16_t addr, uint32_t value)
         ring = (CycRingEvent *)calloc(CYC_RING_CAPACITY, sizeof(CycRingEvent));
         if (!ring) return;
     }
-    if ((kind == CYC_EV_FDS_READ || kind == CYC_EV_RAM_INTERP) && ring_total) {
+    if ((kind == CYC_EV_FDS_READ || kind == CYC_EV_RAM_INTERP || kind == CYC_EV_FDS_ENV) && ring_total) {
         CycRingEvent *last = &ring[(ring_total - 1) & (CYC_RING_CAPACITY - 1)];
-        if (last->kind == kind && (last->addr == addr || kind == CYC_EV_RAM_INTERP) && last->value == value &&
-            last->frame == cyc_ring_frame && last->repeat != UINT32_MAX) {
+        if (last->kind == kind && (last->addr == addr || kind == CYC_EV_RAM_INTERP) &&
+            (last->value == value || kind == CYC_EV_FDS_ENV) && last->frame == cyc_ring_frame &&
+            last->repeat != UINT32_MAX) {
             last->repeat++;
+            last->value = value;
             return;
         }
     }
@@ -71,6 +73,7 @@ const char *cyc_ring_kind_name(unsigned kind)
         "none", "fds.read", "fds.write", "fds.irq", "fds.ack", "fds.byte", "fds.motor",
         "fds.rewind", "fds.ready", "fds.end", "fds.side", "fds.crc",
         "view.valid", "view.reject", "view.invalid", "view.exit", "ram.interp", "view.frame",
+        "fds.env", "fds.audio",
     };
     return kind < CYC_EV_KINDS ? NAMES[kind] : "?";
 }
@@ -112,6 +115,8 @@ static void describe(FILE *f, const CycRingEvent *e)
     case CYC_EV_VIEW_INVALID: fprintf(f, "store=%04X view=%u", e->addr, e->value); break;
     case CYC_EV_RAM_INTERP: fprintf(f, "pc=%04X chunk=%04X", e->addr, e->value); break;
     case CYC_EV_VIEW_FRAME: fprintf(f, "entries=%u validated=%u", e->value, e->addr); break;
+    case CYC_EV_FDS_ENV: fprintf(f, "%s gain=%u", e->addr ? "mod" : "volume", e->value); break;
+    case CYC_EV_FDS_AUDIO: fprintf(f, "wave_steps=%u mod_steps=%u", e->value, e->addr); break;
     default: fprintf(f, "addr=%04X value=%08X", e->addr, e->value); break;
     }
 }

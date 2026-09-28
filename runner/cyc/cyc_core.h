@@ -57,6 +57,12 @@ bool     cyc_fds_insert(unsigned side);
 /* The byte stream the drive clocks for a side, as disk writes left it. */
 const uint8_t *cyc_fds_side_stream(unsigned side, uint32_t *len);
 uint32_t cyc_fds_disk_writes(void);
+/* The sound unit's state in Mesen's field order and widths (FdsAudio,
+ * BaseFdsChannel, ModChannel StreamState), so it compares byte for byte with
+ * the FdsAudio snapshot in a nesref savestate (tools/cyc/fds_audio_gates.py).
+ * Writes CYC_FDS_AUDIO_STATE_BYTES and returns that count. */
+#define CYC_FDS_AUDIO_STATE_BYTES 171
+size_t   cyc_fds_audio_state(uint8_t *out);
 /* PRG RAM ($6000-$DFFF on the FDS) or cartridge work RAM, for host dumps. */
 const uint8_t *cyc_cart_ram(size_t *len);
 /* The PPU's memories and CHR RAM, for host dumps (NULL / 0 where absent). */

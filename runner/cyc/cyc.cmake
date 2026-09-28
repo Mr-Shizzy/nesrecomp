@@ -18,6 +18,7 @@ set(NESRECOMP_CYC_SOURCES
     ${NESRECOMP_CYC_DIR}/hw_machine.c
     ${NESRECOMP_CYC_DIR}/hw_mapper.c
     ${NESRECOMP_CYC_DIR}/hw_fds.c
+    ${NESRECOMP_CYC_DIR}/hw_fds_audio.c
     ${NESRECOMP_CYC_DIR}/vendor/emu2413/emu2413.c
     ${NESRECOMP_CYC_DIR}/hw_ppu.c
     ${NESRECOMP_CYC_DIR}/hw_apu.c

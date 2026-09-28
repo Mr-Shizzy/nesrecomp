@@ -11,6 +11,8 @@ project(nesrecomp_cyc C CXX)
 #                    (tools/cyc/fds_board_fixtures.py) on the whole machine
 #   cyc_ramview_test compiled RAM views never run stale code (builds the
 #                    recompiler and a synthetic self-modifying FDS program)
+#   cyc_fds_audio_test the FDS sound unit against an independent model and in
+#                    rendered PCM (builds synthetic FDS sound programs)
 # Game projects use runner/cyc/cyc.cmake instead.
 
 set(CMAKE_C_STANDARD 11)
@@ -32,7 +34,7 @@ target_include_directories(cyc_helper_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS}
 enable_testing()
 add_test(NAME cyc_helper_test COMMAND cyc_helper_test)
 
-add_executable(cyc_mapper_test mapper_test.c hw_mapper.c hw_fds.c cyc_ring.c cyc_trace.c vendor/emu2413/emu2413.c)
+add_executable(cyc_mapper_test mapper_test.c hw_mapper.c hw_fds.c hw_fds_audio.c cyc_ring.c cyc_trace.c vendor/emu2413/emu2413.c)
 target_link_libraries(cyc_mapper_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
 target_include_directories(cyc_mapper_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 add_test(NAME cyc_mapper_test COMMAND cyc_mapper_test)
@@ -56,7 +58,7 @@ set_tests_properties(cyc_fds_disk_test PROPERTIES FIXTURES_REQUIRED fds_fixtures
 
 # FDS RAM Adapter and drive: register/IRQ/drive contracts, then a synthetic
 # BIOS (tools/cyc/fds_board_fixtures.py) run on the whole machine.
-add_executable(cyc_fds_board_test fds_board_test.c cpu6502.c cpu6502_interp.c hw_machine.c hw_mapper.c hw_fds.c
+add_executable(cyc_fds_board_test fds_board_test.c cpu6502.c cpu6502_interp.c hw_machine.c hw_mapper.c hw_fds.c hw_fds_audio.c
     vendor/emu2413/emu2413.c hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_ramview.c cyc_native_none.c)
 target_include_directories(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 target_link_libraries(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
@@ -86,3 +88,15 @@ add_test(NAME cyc_ramview_test
             --recompiler $<TARGET_FILE:NESRecomp> --interp $<TARGET_FILE:cyc_interp>
             --out ${CMAKE_CURRENT_BINARY_DIR}/ramview_test ${NESRECOMP_RAMVIEW_BUILD} --config "$<CONFIG>")
 set_tests_properties(cyc_ramview_test PROPERTIES TIMEOUT 1800)
+
+# The FDS sound unit (hw_fds_audio.c): synthetic FDS programs that exercise
+# every register and behaviour the CPU can observe, compiled from their disks;
+# native, --interp-only and cyc_interp must match on every cycle at all four
+# alignments, every sound register read and every frame's sound state must
+# match an independent model of Mesen's FdsAudio (tools/cyc/fds_audio_model.py),
+# and the rendered PCM must have the expected pitch and FDS/2A03 level.
+add_test(NAME cyc_fds_audio_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/cyc/test_cyc_fds_audio.py
+            --recompiler $<TARGET_FILE:NESRecomp> --interp $<TARGET_FILE:cyc_interp>
+            --out ${CMAKE_CURRENT_BINARY_DIR}/fds_audio_test ${NESRECOMP_RAMVIEW_BUILD} --config "$<CONFIG>")
+set_tests_properties(cyc_fds_audio_test PROPERTIES TIMEOUT 1800)

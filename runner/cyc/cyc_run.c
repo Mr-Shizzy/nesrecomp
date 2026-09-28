@@ -5,6 +5,7 @@
 #include "cyc_ramview.h"
 #include "cyc_recomp.h"
 #include "cyc_ring.h"
+#include "hw_fds.h"
 #include "hw_internal.h"
 
 bool      cyc_run_native = true;
@@ -62,6 +63,7 @@ void cyc_run_frame(void) {
         hw_frame_done = false;
     }
     cyc_ramview_frame_end();
+    if (cyc_is_fds()) fds_audio_frame_end();
     cyc_ring_frame++;
 }
 

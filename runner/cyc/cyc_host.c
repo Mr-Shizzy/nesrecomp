@@ -51,8 +51,9 @@
  *                          number before its extension (shot.png -> shot_00120.png)
  *     --wav-out FILE       record the audio output (48 kHz mono)
  *     --frame-log FILE     binary per-frame snapshot of CPU RAM, CIRAM, palette,
- *                          OAM, cartridge/PRG RAM, CHR RAM and the picture's
- *                          color indices (format: write_frame_log below)
+ *                          OAM, cartridge/PRG RAM, CHR RAM, the picture's
+ *                          color indices and the FDS sound unit's state
+ *                          (format: write_frame_log below)
  *     --frame-log-frames A:B  only frames A..B
  *     --frame-log-at WHEN  vblank (default: at the frame's end) or mesen (at
  *                          scanline 240 dot 0, where Mesen/nesref end a frame)
@@ -426,17 +427,22 @@ static uint8_t *load_bios(const char *explicit_path, const char *image_path, siz
     return NULL;
 }
 
-/* --frame-log: "CYCFRAME" + u32 version (1), then per frame
- *   u32 frame, u32 cycles low, u32 cycles high, u32 lengths[5] (CPU RAM,
- *   CIRAM, cartridge RAM, CHR RAM, picture bytes), u8 palette[32], u8 oam[256],
- *   then the five blobs; the picture is 256x240 little-endian u16 color
- *   indices (color | emphasis << 6). */
+/* --frame-log: "CYCFRAME" + u32 version (2), then per frame
+ *   u32 frame, u32 cycles low, u32 cycles high, u32 lengths[6] (CPU RAM,
+ *   CIRAM, cartridge RAM, CHR RAM, picture bytes, FDS sound unit state),
+ *   u8 palette[32], u8 oam[256], then the six blobs; the picture is 256x240
+ *   little-endian u16 color indices (color | emphasis << 6), the FDS state
+ *   cyc_fds_audio_state() (0 bytes on a cartridge). Version 1 had no FDS
+ *   length or blob. */
 static void write_frame_log(FILE *f, long frame) {
     size_t ciram_len, cart_len, chr_len;
     const uint8_t *ciram = cyc_ppu_ciram(&ciram_len), *cart = cyc_cart_ram(&cart_len), *chr = cyc_chr_ram(&chr_len);
+    uint8_t audio[CYC_FDS_AUDIO_STATE_BYTES];
+    size_t audio_len = cyc_is_fds() ? cyc_fds_audio_state(audio) : 0;
     uint64_t cycles = cyc_cycle_count();
-    uint32_t head[8] = { (uint32_t)frame, (uint32_t)cycles, (uint32_t)(cycles >> 32), 0x800,
-                         (uint32_t)ciram_len, (uint32_t)cart_len, (uint32_t)chr_len, 256 * 240 * 2 };
+    uint32_t head[9] = { (uint32_t)frame, (uint32_t)cycles, (uint32_t)(cycles >> 32), 0x800,
+                         (uint32_t)ciram_len, (uint32_t)cart_len, (uint32_t)chr_len, 256 * 240 * 2,
+                         (uint32_t)audio_len };
     fwrite(head, sizeof(head), 1, f);
     fwrite(cyc_ppu_palette(), 1, 32, f);
     fwrite(cyc_ppu_oam(), 1, 256, f);
@@ -445,6 +451,7 @@ static void write_frame_log(FILE *f, long frame) {
     if (cart_len) fwrite(cart, 1, cart_len, f);
     if (chr_len) fwrite(chr, 1, chr_len, f);
     fwrite(cyc_frame_index(), 2, 256 * 240, f);
+    if (audio_len) fwrite(audio, 1, audio_len, f);
 }
 #endif
 
@@ -733,7 +740,7 @@ int main(int argc, char **argv) {
     FILE *frame_log_f = NULL;
     if (frame_log) {
         if (!(frame_log_f = fopen(frame_log, "wb"))) { fprintf(stderr, "cannot write %s\n", frame_log); return 2; }
-        uint32_t version = 1;
+        uint32_t version = 2;
         fwrite("CYCFRAME", 1, 8, frame_log_f);
         fwrite(&version, 4, 1, frame_log_f);
         if (frame_log_mesen) {

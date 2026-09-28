@@ -7,7 +7,7 @@
  *   $4020/$4021 timer IRQ reload   $4022 timer IRQ control   $4023 I/O enable
  *   $4024 write data   $4025 control   $4026 external connector
  *   $4030 status   $4031 read data   $4032 drive status   $4033 external/battery
- *   $4040-$4092 sound (register side only; synthesis is phase 5)
+ *   $4040-$4092 sound (hw_fds_audio.c)
  *
  * Reference. The FDS oracle is nesref's "Mesen 0.9.9" libretro core. Its
  * FDS is not the 0.9.9 release's: the drive clocks a byte every 150 CPU
@@ -192,6 +192,8 @@ void fds_power_on(void)
     /* FDS.h:22-66: everything clear except the two I/O enables. */
     memset(&F, 0, sizeof(F));
     F.disk_regs = F.sound_regs = 1;
+    fds_audio_set_profile(media.opt.profile);
+    fds_audio_power_on();
     hw_cart.mirroring = HW_MIRROR_VERTICAL;    /* FdsLoader.cpp:141 */
     cyc_ring_push(CYC_EV_FDS_SIDE, 1, media.side < 0 ? 0xFF : (uint32_t)media.side);
 }
@@ -203,35 +205,6 @@ static void ack(uint16_t addr, uint8_t sources)
     if (sources & CYC_FDS_IRQ_TIMER) F.timer_irq = 0;
     if (sources & CYC_FDS_IRQ_DISK) F.disk_irq = 0;
     if (cleared) cyc_ring_push(CYC_EV_FDS_IRQ_ACK, addr, cleared);
-}
-
-/* The sound unit's registers as far as the CPU can read them back
- * (Mesen FdsAudio.h:96-160): the wavetable, writable while $4089.7 is set,
- * and the two gains, which a write with bit 7 set (envelope off) loads
- * directly. Envelope ticking and synthesis are phase 5. */
-static void sound_write(uint16_t addr, uint8_t value)
-{
-    if (addr <= 0x407F) {
-        if (F.wave_write) F.wave[addr & 0x3F] = value & 0x3F;
-        return;
-    }
-    if (addr >= 0x4080 && addr <= 0x408A) F.sound_reg[addr - 0x4080] = value;
-    if (addr == 0x4080 && (value & 0x80)) F.vol_gain = value & 0x3F;
-    if (addr == 0x4084 && (value & 0x80)) F.mod_gain = value & 0x3F;
-    if (addr == 0x4089) F.wave_write = (value & 0x80) != 0;
-}
-
-static bool sound_read(uint16_t addr, uint8_t *value)
-{
-    /* lr FdsAudio.h: with writes disabled a read returns the sample at the
-     * current wave position, which only advances once synthesis runs (phase 5). */
-    if (addr <= 0x407F) {
-        *value = (uint8_t)((*value & 0xC0) | F.wave[F.wave_write ? (addr & 0x3F) : 0]);
-        return true;
-    }
-    if (addr == 0x4090) { *value = (uint8_t)((*value & 0xC0) | F.vol_gain); return true; }
-    if (addr == 0x4092) { *value = (uint8_t)((*value & 0xC0) | F.mod_gain); return true; }
-    return false;
 }
 
 /* lr:350-420. */
@@ -277,7 +250,7 @@ static void register_write(uint16_t addr, uint8_t value)
     }
     case 0x4026: F.ext_out = value; break;
     default:
-        if (addr >= 0x4040) sound_write(addr, value);
+        if (addr >= 0x4040) fds_audio_write(addr, value);
         break;
     }
 }
@@ -289,7 +262,7 @@ static bool register_read(uint16_t addr, uint8_t *value)
     uint8_t v = *value;
     bool driven = false;
     if (F.sound_regs && addr >= 0x4040) {
-        driven = sound_read(addr, &v);
+        driven = fds_audio_read(addr, &v);
     } else if (F.disk_regs && addr >= 0x4030 && addr <= 0x4033) {
         driven = true;
         switch (addr) {
@@ -499,6 +472,7 @@ void fds_cpu_clock(void)
             F.irq_counter--;
         }
     }
+    fds_audio_clock();                  /* lr:233: the sound unit, every cycle */
     /* lr:235-252: no disk or no motor -> the head is at the end; the
      * motor turning on rewinds it and starts the spin-up delay. */
     if (media.side < 0 || !F.motor_on) {
