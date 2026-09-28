@@ -516,6 +516,10 @@ static void video_alloc_buffers(void) {
     }
 }
 
+static NesEscapeHandler s_escape_handler = NULL;
+void nesrecomp_set_escape_handler(NesEscapeHandler fn) { s_escape_handler = fn; }
+int nesrecomp_escape_consumed(void) { return s_escape_handler && s_escape_handler(); }
+
 /* Set the renderer's logical size (letterboxed, aspect-preserving). With the
  * Stretch setting on, drop the logical size instead so RenderCopy(NULL, NULL)
  * fills the whole output, and integer scaling (meaningless there) is off. */
@@ -1213,6 +1217,9 @@ void nes_vblank_callback(void) {
             if (nes_netplay_active())
                 netplay_return_to_lobby("local player left");
 #endif
+            /* A game handler owns Escape (auto-repeat is swallowed). */
+            if ((ev.key.repeat && s_escape_handler) || nesrecomp_escape_consumed())
+                continue;
             fprintf(stderr, "[RunnerExit] Escape key at frame %llu\n",
                     (unsigned long long)g_frame_count);
             exit(0);

@@ -95,6 +95,10 @@ static char *trim(char *s) {
 
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
+void nesrecomp_guid_strip_crc(char *guid) {
+    if (guid && strlen(guid) >= 8) memcpy(guid + 4, "0000", 4);
+}
+
 void config_load(const char *path) {
     config_set_defaults(&g_nes_config);
     FILE *f = fopen(path, "r");
@@ -113,6 +117,7 @@ void config_load(const char *path) {
             key[6] >= '1' && key[6] < '1' + NESRECOMP_INPUT_SEATS &&
             !strcmp(key+7, "Device")) {
             snprintf(g_nes_config.player_gamepad_guid[key[6]-'1'], 40, "%s", valstr);
+            nesrecomp_guid_strip_crc(g_nes_config.player_gamepad_guid[key[6]-'1']);
             continue;
         }
         if      (!strcmp(key, "WindowScale"))   g_nes_config.window_scale  = clampi(val, 1, 8);

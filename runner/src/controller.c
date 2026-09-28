@@ -43,6 +43,7 @@ static void assign_seats(void) {
             if (!s_pads[d] || used[d]) continue;
             char guid[40];
             SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(SDL_GameControllerGetJoystick(s_pads[d])),guid,sizeof guid);
+            nesrecomp_guid_strip_crc(guid);
             int match=pass==0 ? instance>=0 && instance==s_pad_ids[d] :
                 pass==1 ? wanted[0] && !strcmp(wanted,guid) : !wanted[0] && instance<0;
             if (!match) continue;

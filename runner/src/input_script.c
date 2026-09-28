@@ -52,7 +52,7 @@ static SDL_Scancode parse_host_key(const char *name) {
 typedef enum {
     CMD_WAIT, CMD_HOLD, CMD_RELEASE,
     CMD_TURBO_ON, CMD_TURBO_OFF,
-    CMD_SCREENSHOT, CMD_LOG, CMD_EXIT,
+    CMD_SCREENSHOT, CMD_LOG, CMD_EXIT, CMD_ESCAPE,
     CMD_WAIT_RAM8, CMD_WAIT_FOREIGN_STATE, CMD_ASSERT_RAM8,
     CMD_WRITE_RAM8, CMD_WRITE_SRAM8, CMD_WRITE_PPU8,
     CMD_DUMP_RAM,
@@ -135,6 +135,8 @@ int script_load(const char *path) {
             /* Capture rest of line after "LOG " */
             const char *rest = strstr(line, " ");
             if (rest) strncpy(c.sarg, rest+1, sizeof(c.sarg)-1);
+        } else if (strcmp(tok, "ESCAPE") == 0) {
+            c.type = CMD_ESCAPE;   /* the Escape key, minus the SDL event */
         } else if (strcmp(tok, "EXIT") == 0) {
             c.type = CMD_EXIT; c.iarg = (n >= 2) ? atoi(arg1) : 0;
         } else if (strcmp(tok, "WAIT_RAM8") == 0 && n >= 3) {
@@ -347,6 +349,15 @@ void script_tick(uint64_t frame, const uint8_t *ram) {
                 s_wait_predicate_start_frame = UINT64_MAX;
                 s_cmd_cursor++;
                 return;
+            case CMD_ESCAPE:
+                printf("[Script] ESCAPE at frame %llu\n", (unsigned long long)frame);
+                if (!nesrecomp_escape_consumed()) {
+                    extern int g_nes_expected_exit;
+                    g_nes_expected_exit = 1;
+                    s_exit_code = 0;
+                    return;
+                }
+                break;
             case CMD_EXIT:
                 printf("[Script] EXIT %d at frame %llu\n",
                        c->iarg, (unsigned long long)frame);

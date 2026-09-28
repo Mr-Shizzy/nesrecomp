@@ -81,6 +81,14 @@ void nesrecomp_expect_process_exit(void);
  * with --launcher (so no guest state carries over), then exits. Does not
  * return. Falls back to a plain exit if the new process cannot start. */
 void nesrecomp_return_to_launcher(void);
+/* Offline Escape key: a game may install a handler (e.g. from game_on_init)
+ * that returns 1 when it consumed the key, such as to open its own pause /
+ * exit prompt. With no handler, or when it returns 0, Escape quits. */
+typedef int (*NesEscapeHandler)(void);
+void nesrecomp_set_escape_handler(NesEscapeHandler fn);
+/* Run the installed handler as if Escape were pressed; 1 = consumed. Used by
+ * the key handler and the ESCAPE input-script command. */
+int nesrecomp_escape_consumed(void);
 /* Push a context marker into the dispatch ring (kind e.g. 'N'/'n' = NMI
  * enter/exit; tag = vblank depth or other context id). */
 void nes_dring_mark(char kind, uint16_t tag);

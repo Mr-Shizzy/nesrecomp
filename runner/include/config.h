@@ -50,6 +50,11 @@ typedef struct {
 
 extern NesConfig g_nes_config;
 
+/* Zero the device-name CRC (hex chars 4-7) of an SDL GUID string in place.
+ * The CRC changes with the driver path (XInput/HIDAPI, USB/Bluetooth), so one
+ * physical pad could otherwise stop matching its saved selection. */
+void nesrecomp_guid_strip_crc(char *guid);
+
 /* Reset *c to built-in defaults. */
 void config_set_defaults(NesConfig *c);
 
