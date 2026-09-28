@@ -43,7 +43,10 @@ target_include_directories(cyc_helper_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS}
 enable_testing()
 add_test(NAME cyc_helper_test COMMAND cyc_helper_test)
 
-add_executable(cyc_mapper_test mapper_test.c hw_mapper.c hw_fds.c hw_fds_audio.c hw_fds_hle.c cyc_ring.c cyc_trace.c vendor/emu2413/emu2413.c)
+# Every cartridge board source; each test that links the boards uses this list.
+set(CYC_TEST_BOARD_SOURCES hw_mapper.c hw_fds.c hw_fds_audio.c hw_fds_hle.c vendor/emu2413/emu2413.c)
+
+add_executable(cyc_mapper_test mapper_test.c ${CYC_TEST_BOARD_SOURCES} cyc_ring.c cyc_trace.c)
 target_link_libraries(cyc_mapper_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
 target_include_directories(cyc_mapper_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 add_test(NAME cyc_mapper_test COMMAND cyc_mapper_test)
@@ -72,8 +75,8 @@ set_tests_properties(cyc_fds_disk_test PROPERTIES FIXTURES_REQUIRED fds_fixtures
 
 # FDS RAM Adapter and drive: register/IRQ/drive contracts, then a synthetic
 # BIOS (tools/cyc/fds_board_fixtures.py) run on the whole machine.
-add_executable(cyc_fds_board_test fds_board_test.c cpu6502.c cpu6502_interp.c hw_machine.c hw_mapper.c hw_fds.c hw_fds_audio.c hw_fds_hle.c
-    vendor/emu2413/emu2413.c hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_ramview.c cyc_native_none.c)
+add_executable(cyc_fds_board_test fds_board_test.c cpu6502.c cpu6502_interp.c hw_machine.c ${CYC_TEST_BOARD_SOURCES}
+    hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_ramview.c cyc_native_none.c)
 target_include_directories(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 target_link_libraries(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
 if(MSVC)
@@ -90,8 +93,8 @@ set_tests_properties(cyc_fds_board_test PROPERTIES FIXTURES_REQUIRED fds_board_f
 # The console output stage (hw_apu.c, cyc_set_console): board defaults, each
 # model's frequency and step response against its documented RC sections, and
 # no effect on the machine. The FDS default uses the board fixtures' disk.
-add_executable(cyc_console_audio_test console_audio_test.c cpu6502.c cpu6502_interp.c hw_machine.c hw_mapper.c hw_fds.c
-    hw_fds_audio.c vendor/emu2413/emu2413.c hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_ramview.c
+add_executable(cyc_console_audio_test console_audio_test.c cpu6502.c cpu6502_interp.c hw_machine.c ${CYC_TEST_BOARD_SOURCES}
+    hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_ramview.c
     cyc_native_none.c)
 target_include_directories(cyc_console_audio_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 target_link_libraries(cyc_console_audio_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
