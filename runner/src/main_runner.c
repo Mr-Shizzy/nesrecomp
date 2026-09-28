@@ -2299,6 +2299,14 @@ int nesrecomp_runner_run(int argc, char *argv[]) {
         }
         fflush(stdout); /* publish headless startup before entering the guest */
         memset(s_framebuf, 0, VIDEO_BUF_BYTES);
+        /* Load an HD pack here too (no texture), so scripted screenshots show
+         * the HD output and packs can be tested headlessly. */
+        if (hdpack_load_from_config(mapper_is_chr_ram(), g_render_width) == 0) {
+            s_hd_scale = hdpack_scale();
+            s_hd_buf = (uint32_t *)malloc((size_t)g_render_width * s_hd_scale *
+                                          240 * s_hd_scale * sizeof(uint32_t));
+            if (!s_hd_buf) hdpack_unload();
+        }
         run_guest_execution();
         fprintf(stderr, "[Headless] game_run_main returned unexpectedly at frame %llu\n",
                 (unsigned long long)g_frame_count);
