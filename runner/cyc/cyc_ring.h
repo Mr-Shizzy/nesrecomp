@@ -56,6 +56,23 @@ typedef enum {
     /* The CRC check the drive makes when $4025.4 rises in read mode.
      * addr = 1 bad / 0 good, value = the accumulator. */
     CYC_EV_FDS_CRC,
+    /* Disk writes (hw_fds.c). The event's `repeat` field holds a length for
+     * these, not folded repeats:
+     *   WRITE_RUN   the drive left write mode (or stopped): value = side << 24 |
+     *               first position stored, addr = bytes that changed the disk
+     *               (capped at $FFFF), length = bytes stored
+     *   WRITE_BLOCK a block written the BIOS way ended with its second CRC byte:
+     *               addr = side << 8 | block code, value = position of its
+     *               $80 mark, length = mark through CRC
+     * Host persistence (cyc_host.c disk saves):
+     *   FDS_SAVE    a save file write: addr = reason << 1 | ok (reasons in
+     *               CYC_FDS_SAVE_*), value = sides stored, length = file bytes
+     *   FDS_LOAD    a saved disk put in at start: addr = 0 disk save file, 1 a
+     *               Mesen .ips; value = sides replaced, length = file bytes */
+    CYC_EV_FDS_WRITE_RUN,
+    CYC_EV_FDS_WRITE_BLOCK,
+    CYC_EV_FDS_SAVE,
+    CYC_EV_FDS_LOAD,
     /* Compiled RAM views (cyc_ramview.c). value = view index (the host's
      * --ram-view-list names them), addr = CPU address:
      *   VIEW_VALID   a view was checked against RAM, matched, and entered at addr
@@ -75,6 +92,13 @@ typedef enum {
     CYC_EV_VIEW_FRAME,
     CYC_EV_KINDS
 } CycRingKind;
+
+enum {
+    CYC_FDS_SAVE_IDLE    = 1,   /* the drive stopped after changing the disk */
+    CYC_FDS_SAVE_EJECT   = 2,   /* the disk was ejected */
+    CYC_FDS_SAVE_EXIT    = 3,   /* the host is exiting */
+    CYC_FDS_SAVE_TIMEOUT = 4,   /* dirty for the longest time a save may wait */
+};
 
 enum {
     CYC_FDS_IRQ_TIMER = 1,
@@ -109,6 +133,8 @@ void cyc_ring_reset(void);
  * previous read, RAM_INTERP events into the previous one of the same chunk
  * and frame. */
 void cyc_ring_push(CycRingKind kind, uint16_t addr, uint32_t value);
+/* The kinds that carry a length (WRITE_RUN, WRITE_BLOCK, FDS_SAVE, FDS_LOAD). */
+void cyc_ring_push_len(CycRingKind kind, uint16_t addr, uint32_t value, uint32_t length);
 
 /* Events ever recorded (the index the next one gets), and the oldest index
  * still held. */

@@ -285,9 +285,20 @@ static void test_crc(void)
 
 static void test_write(void)
 {
-    for (int p = 0; p < 3; ++p) {
+    /* p: 0 mesen profile (under the head, the default), 1 mesen2, 2 write
+     * protected, 3 mesen profile with Mesen's two-behind write position. */
+    for (int p = 0; p < 4; ++p) {
         bool protect = p == 2;
         load(p == 1 ? CYC_FDS_PROFILE_MESEN2 : CYC_FDS_PROFILE_MESEN, CYC_FDS_CRC_COMPUTED, false, protect, 0);
+        if (p == 3) {
+            CycFdsOptions o;
+            cyc_fds_default_options(&o);
+            o.write_at = CYC_FDS_WRITE_MESEN;
+            CHECK(cyc_load_fds(bios, bios_size, image, image_size, &o));
+            cyc_power_on(0);
+            hw_cart_cpu_clock_late();
+        }
+        uint64_t gen0 = cyc_fds_disk_generation();
         uint32_t len;
         const uint8_t *side = cyc_fds_side_stream(0, &len);
         uint8_t before[64];
@@ -300,20 +311,49 @@ static void test_write(void)
         wr(0x4024, 0x5C);                                        /* acknowledges; byte 111 carries it */
         CHECK(!irq());
         CHECK(until_byte(1000, &e) && (e.value & 0xFFFFFF) == 111 && (e.value >> 24) == 0x5C);
-        /* Mesen writes two bytes behind the head (lr:96-98), Mesen2 under it
-         * (m2:131); a protected disk keeps its bytes. */
+        /* Under the head by default (m2:131); Mesen 0.9.9 two bytes behind it
+         * (lr:96-98); a protected disk keeps its bytes. */
         side = cyc_fds_side_stream(0, &len);
+        uint32_t base_len;
+        const uint8_t *base = cyc_fds_side_base(0, &base_len);
+        CHECK(base_len == len && !memcmp(base + 100, before, sizeof(before)));   /* the image's stream stays */
         if (protect) {
             CHECK(!memcmp(before, side + 100, sizeof(before)) && cyc_fds_disk_writes() == 0);
+            CHECK(cyc_fds_disk_generation() == gen0);
         } else {
-            uint32_t at = p == 1 ? 111 : 109;
+            uint32_t at = p == 3 ? 109 : 111;
             CHECK(side[at] == 0x5C && side[at - 1] == 0xA5 && side[at + 1] == before[at + 1 - 100]);
-            CHECK(cyc_fds_disk_writes() > 0);
+            CHECK(cyc_fds_disk_writes() > 0 && cyc_fds_disk_generation() > gen0);
         }
         /* The register side of writes leaves the read path intact. */
         wr(0x4025, 0x05 | 0x40);
         CHECK(until_byte(1000, &e) && !(e.addr & CYC_FDS_BYTE_WRITE));
+        /* Leaving write mode ends the write run: one ring event, from the
+         * first stored position. */
+        bool run = false;
+        for (uint64_t i = cyc_ring_total(); i-- > cyc_ring_oldest();) {
+            CycRingEvent r;
+            if (cyc_ring_get(i, &r) && r.kind == CYC_EV_FDS_WRITE_RUN) { run = true; e = r; break; }
+        }
+        CHECK(run == !protect);
+        if (run) CHECK((e.value >> 24) == 0 && e.repeat > 10 && e.addr >= 2);
     }
+    /* A saved side goes back in only with the motor off or the side out. */
+    load(CYC_FDS_PROFILE_MESEN, CYC_FDS_CRC_COMPUTED, false, false, 0);
+    uint32_t len;
+    const uint8_t *side = cyc_fds_side_stream(0, &len);
+    uint8_t *copy = (uint8_t *)malloc(len);
+    memcpy(copy, side, len);
+    copy[5000] ^= 0xFF;
+    uint64_t gen = cyc_fds_disk_generation();
+    wr(0x4025, 0x05);                                          /* motor on */
+    clock(4);
+    CHECK(cyc_fds_motor_on() && !cyc_fds_set_side_stream(0, copy, len));
+    CHECK(cyc_fds_set_side_stream(1, copy, len));             /* not in the drive */
+    wr(0x4025, 0x04);
+    CHECK(!cyc_fds_motor_on() && cyc_fds_set_side_stream(0, copy, len) && cyc_fds_disk_generation() > gen);
+    CHECK(cyc_fds_side_stream(0, &len)[5000] == copy[5000]);
+    free(copy);
 }
 
 static void test_disabled_registers(void)

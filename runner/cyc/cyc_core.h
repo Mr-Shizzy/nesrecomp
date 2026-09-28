@@ -34,9 +34,13 @@ bool cyc_load_ines(const uint8_t *image, size_t size);
  * $4D $62; crc_check makes $4030.4 report a mismatch in any profile. */
 typedef enum { CYC_FDS_PROFILE_MESEN, CYC_FDS_PROFILE_MESEN2, CYC_FDS_PROFILE_HARDWARE } CycFdsProfile;
 typedef enum { CYC_FDS_CRC_COMPUTED, CYC_FDS_CRC_MESEN } CycFdsStreamCrc;
+/* Where a written byte lands: under the head (default, every profile), or two
+ * bytes behind it as Mesen 0.9.9 / nesref's core store it (hw_fds.c). */
+typedef enum { CYC_FDS_WRITE_HEAD, CYC_FDS_WRITE_MESEN } CycFdsWriteAt;
 typedef struct {
     CycFdsProfile   profile;
     CycFdsStreamCrc stream_crc;
+    CycFdsWriteAt   write_at;
     bool crc_check;
     bool write_protect;    /* the disk's write-protect tab is broken off */
     bool qd;               /* the image is .qd (Mesen2 decides by extension) */
@@ -56,7 +60,18 @@ bool     cyc_fds_eject(void);
 bool     cyc_fds_insert(unsigned side);
 /* The byte stream the drive clocks for a side, as disk writes left it. */
 const uint8_t *cyc_fds_side_stream(unsigned side, uint32_t *len);
+/* The stream the loader built from the image, before any write or saved disk. */
+const uint8_t *cyc_fds_side_base(unsigned side, uint32_t *len);
+/* Put a saved side back (a host's disk sidecar): before power-on, or while the
+ * side is out of the drive or its motor is off. False otherwise. */
+bool     cyc_fds_set_side_stream(unsigned side, const uint8_t *bytes, uint32_t len);
+/* Disk bytes changed by writes since the image was loaded. */
 uint32_t cyc_fds_disk_writes(void);
+/* Advances on every change to any side (writes and cyc_fds_set_side_stream):
+ * hosts compare it with the value at their last save to know a disk is dirty. */
+uint64_t cyc_fds_disk_generation(void);
+/* A side is in the drive and its motor runs: a disk operation is in progress. */
+bool     cyc_fds_motor_on(void);
 /* PRG RAM ($6000-$DFFF on the FDS) or cartridge work RAM, for host dumps. */
 const uint8_t *cyc_cart_ram(size_t *len);
 /* The PPU's memories and CHR RAM, for host dumps (NULL / 0 where absent). */

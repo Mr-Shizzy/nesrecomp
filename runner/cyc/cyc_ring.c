@@ -46,6 +46,19 @@ void cyc_ring_push(CycRingKind kind, uint16_t addr, uint32_t value)
     ring_total++;
 }
 
+void cyc_ring_push_len(CycRingKind kind, uint16_t addr, uint32_t value, uint32_t length)
+{
+    cyc_ring_push(kind, addr, value);
+    if (ring && ring_total && ring[(ring_total - 1) & (CYC_RING_CAPACITY - 1)].kind == (uint16_t)kind)
+        ring[(ring_total - 1) & (CYC_RING_CAPACITY - 1)].repeat = length;
+}
+
+static bool has_length(unsigned kind)
+{
+    return kind == CYC_EV_FDS_WRITE_RUN || kind == CYC_EV_FDS_WRITE_BLOCK || kind == CYC_EV_FDS_SAVE ||
+           kind == CYC_EV_FDS_LOAD;
+}
+
 uint64_t cyc_ring_total(void) { return ring_total; }
 
 uint64_t cyc_ring_oldest(void)
@@ -70,6 +83,7 @@ const char *cyc_ring_kind_name(unsigned kind)
     static const char *const NAMES[CYC_EV_KINDS] = {
         "none", "fds.read", "fds.write", "fds.irq", "fds.ack", "fds.byte", "fds.motor",
         "fds.rewind", "fds.ready", "fds.end", "fds.side", "fds.crc",
+        "fds.wrun", "fds.wblock", "fds.save", "fds.load",
         "view.valid", "view.reject", "view.invalid", "view.exit", "ram.interp", "view.frame",
     };
     return kind < CYC_EV_KINDS ? NAMES[kind] : "?";
@@ -106,6 +120,22 @@ static void describe(FILE *f, const CycRingEvent *e)
         if (e->addr) fprintf(f, " (power-on)");
         break;
     case CYC_EV_FDS_CRC: fprintf(f, "%s acc=%04X", e->addr ? "bad" : "good", e->value & 0xFFFF); break;
+    case CYC_EV_FDS_WRITE_RUN:
+        fprintf(f, "side=%u from=%u stored=%u changed=%u", e->value >> 24, e->value & 0xFFFFFF, e->repeat, e->addr);
+        break;
+    case CYC_EV_FDS_WRITE_BLOCK:
+        fprintf(f, "side=%u code=%u mark=%u length=%u", e->addr >> 8, e->addr & 0xFF, e->value, e->repeat);
+        break;
+    case CYC_EV_FDS_SAVE: {
+        static const char *const WHY[] = { "?", "idle", "eject", "exit", "timeout" };
+        unsigned why = e->addr >> 1;
+        fprintf(f, "%s (%s) sides=%u bytes=%u", e->addr & 1 ? "saved" : "FAILED", why < 5 ? WHY[why] : "?",
+                e->value, e->repeat);
+        break;
+    }
+    case CYC_EV_FDS_LOAD:
+        fprintf(f, "%s sides=%u bytes=%u", e->addr ? "mesen-ips" : "save-file", e->value, e->repeat);
+        break;
     case CYC_EV_VIEW_VALID: case CYC_EV_VIEW_REJECT: case CYC_EV_VIEW_EXIT:
         fprintf(f, "pc=%04X view=%u", e->addr, e->value);
         break;
@@ -132,7 +162,7 @@ void cyc_ring_dump(void *file, uint32_t first_frame, uint32_t last_frame)
         fprintf(f, "%llu %u %llu %s ", (unsigned long long)i, e->frame, (unsigned long long)e->cycle,
                 cyc_ring_kind_name(e->kind));
         describe(f, e);
-        if (e->repeat) fprintf(f, " x%u", e->repeat + 1);
+        if (e->repeat && !has_length(e->kind)) fprintf(f, " x%u", e->repeat + 1);
         fputc('\n', f);
     }
 }

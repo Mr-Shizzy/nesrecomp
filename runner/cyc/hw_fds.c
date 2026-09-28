@@ -32,7 +32,7 @@
  *   $4030.4 bad CRC            never (lr:435)       .qd (m2:478)      always (nesdev)
  *   $4030.6 end of head        no (lr:436)          no                yes (nesdev)
  *   CRC register               augmented (lr:335)   direct (m2:380)   direct
- *   write lands at             position-2 (lr:96)   position (m2:131) position
+ *   write lands at             under the head in every profile (see below)
  *   $4032.2 write protect      disk absent only     same              + the tab
  *   $4033.7 battery            = $4026.7 (lr:481)   same              1 while $4025.1 = 0 (nesdev)
  *
@@ -50,8 +50,24 @@
  * next access, which is the same order (sample, clock, access), DMA cycles
  * included.
  *
+ * Write position. Mesen 0.9.9 and libretro/Mesen store a written byte two
+ * positions behind the head (lr:96-98); Mesen2 did too until 352adae9f
+ * (2025-02-15, "Implement CRC checks/writes for .qd files"), which moved it
+ * under the head and removed the comment "Unsure why this writes to
+ * _diskPosition - 2 - it's been this way since FDS support was added". A
+ * game that saves settles it (Nazo no Murasame-jou, name entry): the BIOS
+ * turns write mode on for the byte after the previous block's second CRC
+ * byte, so two-behind overwrites that CRC with gap zeros and a drive that
+ * checks CRCs fails the block on the next read. Under the head is the default
+ * in every profile; CYC_FDS_WRITE_MESEN (--fds-write-at mesen) reproduces
+ * nesref's stream for in-session comparisons. Measured: with two-behind and
+ * --fds-crc-check the saved disk's next boot stops at DISK TROUBLE ERR.27;
+ * under the head it boots, and the .ips Mesen would save is byte-identical
+ * to nesref's either way (tools/cyc/fds_save_compare.py).
+ *
  * Every register access, IRQ edge and acknowledge, clocked byte, motor and
- * rewind transition and side change goes to the always-on ring (cyc_ring.h).
+ * rewind transition, side change, write run and written block goes to the
+ * always-on ring (cyc_ring.h).
  */
 #include "hw_fds.h"
 
@@ -71,9 +87,21 @@
 /* ------------------------------------------------------------------------- */
 
 typedef struct {
-    uint8_t *bytes;
+    uint8_t *bytes;         /* the disk as it is now */
     uint32_t len;
+    uint8_t *base;          /* as the loader built it from the image */
+    uint32_t base_len;
 } FdsSide;
+
+/* The write run in progress, for the ring only (not machine state). */
+typedef struct {
+    bool     active;        /* a write run is storing bytes */
+    int      side;
+    uint32_t start, bytes, changed;
+    int      block;         /* 0 none, 1 mark stored (code next), 2 in a block */
+    uint32_t mark, crc_bytes;
+    uint8_t  code;
+} FdsWriteRun;
 
 static struct {
     CycFdsOptions opt;
@@ -81,19 +109,21 @@ static struct {
     unsigned count;
     int      side;          /* in the drive, or -1 */
     bool     qd;
-    uint64_t write_hash;    /* folds every byte written to a disk, for cyc_mem_state_hash */
+    uint64_t write_hash;    /* folds every disk change, for cyc_mem_state_hash */
     uint32_t writes;
+    uint64_t generation;    /* counts every change to any side's bytes */
+    FdsWriteRun run;
 } media = { .side = -1 };
 
 typedef struct {
     uint32_t byte_delay, spinup;
-    uint8_t  end_irq, open_4030, mirror_4030, end_of_head_4030, crc_direct, write_back2, battery_hw;
+    uint8_t  end_irq, open_4030, mirror_4030, end_of_head_4030, crc_direct, battery_hw;
 } FdsProfile;
 
 static const FdsProfile PROFILES[3] = {
-    /* MESEN    */ { 149, 50000, 0, 0x2C, 0, 0, 0, 1, 0 },
-    /* MESEN2   */ { 149, 50000, 1, 0x24, 1, 0, 1, 0, 0 },
-    /* HARDWARE */ { 149, 50000, 1, 0x24, 1, 1, 1, 0, 1 },
+    /* MESEN    */ { 149, 50000, 0, 0x2C, 0, 0, 0, 0 },
+    /* MESEN2   */ { 149, 50000, 1, 0x24, 1, 0, 1, 0 },
+    /* HARDWARE */ { 149, 50000, 1, 0x24, 1, 1, 1, 1 },
 };
 
 static const FdsProfile *prof(void)
@@ -114,11 +144,12 @@ void cyc_fds_default_options(CycFdsOptions *o)
     o->profile = CYC_FDS_PROFILE_MESEN;
     o->stream_crc = CYC_FDS_CRC_COMPUTED;
     o->boot_side = 0;
+    o->write_at = CYC_FDS_WRITE_HEAD;
 }
 
 static void free_media(void)
 {
-    for (unsigned i = 0; i < media.count; ++i) free(media.sides[i].bytes);
+    for (unsigned i = 0; i < media.count; ++i) { free(media.sides[i].bytes); free(media.sides[i].base); }
     free(media.sides);
     media.sides = NULL;
     media.count = 0;
@@ -136,12 +167,14 @@ bool cyc_fds_load_media(const uint8_t *image, size_t size, const CycFdsOptions *
     for (unsigned s = 0; s < img.sides; ++s) {
         size_t len = nes_fds_side_stream(&img, s, layout, crc, NULL, 0);
         sides[s].bytes = (uint8_t *)malloc(len ? len : 1);
-        if (!sides[s].bytes || nes_fds_side_stream(&img, s, layout, crc, sides[s].bytes, len) != len) {
-            for (unsigned i = 0; i <= s; ++i) free(sides[i].bytes);
+        sides[s].base = (uint8_t *)malloc(len ? len : 1);
+        if (!sides[s].bytes || !sides[s].base || nes_fds_side_stream(&img, s, layout, crc, sides[s].bytes, len) != len) {
+            for (unsigned i = 0; i <= s; ++i) { free(sides[i].bytes); free(sides[i].base); }
             free(sides);
             return false;
         }
-        sides[s].len = (uint32_t)len;
+        memcpy(sides[s].base, sides[s].bytes, len);
+        sides[s].len = sides[s].base_len = (uint32_t)len;
     }
     free_media();
     media.opt = *opt;
@@ -150,6 +183,8 @@ bool cyc_fds_load_media(const uint8_t *image, size_t size, const CycFdsOptions *
     media.qd = img.format == NES_FDS_QD;
     media.write_hash = 0;
     media.writes = 0;
+    media.generation = 0;
+    memset(&media.run, 0, sizeof(media.run));
     media.side = opt->boot_side >= 0 && (unsigned)opt->boot_side < img.sides ? opt->boot_side : -1;
     return true;
 }
@@ -164,12 +199,46 @@ const uint8_t *cyc_fds_side_stream(unsigned side, uint32_t *len)
     return media.sides[side].bytes;
 }
 uint32_t cyc_fds_disk_writes(void) { return media.writes; }
+uint64_t cyc_fds_disk_generation(void) { return media.generation; }
+bool     cyc_fds_motor_on(void) { return cyc_is_fds() && media.side >= 0 && F.motor_on; }
+
+const uint8_t *cyc_fds_side_base(unsigned side, uint32_t *len)
+{
+    if (side >= media.count) return NULL;
+    *len = media.sides[side].base_len;
+    return media.sides[side].base;
+}
+
+/* A saved disk replaces a side (before power-on, or with the drive stopped). */
+bool cyc_fds_set_side_stream(unsigned side, const uint8_t *bytes, uint32_t len)
+{
+    if (side >= media.count || !bytes || !len || ((int)side == media.side && F.motor_on)) return false;
+    FdsSide *s = &media.sides[side];
+    if (len != s->len) {
+        uint8_t *grown = (uint8_t *)realloc(s->bytes, len);
+        if (!grown) return false;
+        s->bytes = grown;
+        s->len = len;
+        media.generation++;
+    }
+    if (memcmp(s->bytes, bytes, len)) {
+        memcpy(s->bytes, bytes, len);
+        media.generation++;
+    }
+    /* The disk is memory a program reads back: fold what was loaded. */
+    media.write_hash = (media.write_hash ^ ((uint64_t)side << 40 | nes_crc32(0, bytes, len))) * 0x100000001B3ull;
+    if ((int)side == media.side && F.position >= len) F.position = len - 1;
+    return true;
+}
 
 /* lr:537-547: ejecting empties the drive; a side goes in only when the
  * drive is empty. The drive's lines follow on its next clock. */
+static void write_run_end(void);
+
 bool cyc_fds_eject(void)
 {
     if (media.side < 0) return false;
+    write_run_end();
     media.side = -1;
     cyc_ring_push(CYC_EV_FDS_SIDE, 0, 0xFF);
     return true;
@@ -191,6 +260,7 @@ void fds_power_on(void)
 {
     /* FDS.h:22-66: everything clear except the two I/O enables. */
     memset(&F, 0, sizeof(F));
+    memset(&media.run, 0, sizeof(media.run));
     F.disk_regs = F.sound_regs = 1;
     hw_cart.mirroring = HW_MIRROR_VERTICAL;    /* FdsLoader.cpp:141 */
     cyc_ring_push(CYC_EV_FDS_SIDE, 1, media.side < 0 ? 0xFF : (uint32_t)media.side);
@@ -381,16 +451,54 @@ static void crc_update(uint8_t value)
     else crc_augmented(value);
 }
 
+/* A write run ends when the drive leaves write mode, stops, rewinds or loses
+ * its disk: one ring event with where it started, the bytes it stored and
+ * how many of them changed the disk. */
+static void write_run_end(void)
+{
+    FdsWriteRun *r = &media.run;
+    if (!r->active) return;
+    cyc_ring_push_len(CYC_EV_FDS_WRITE_RUN, (uint16_t)(r->changed > 0xFFFF ? 0xFFFF : r->changed),
+                      (uint32_t)r->side << 24 | (r->start & 0xFFFFFF), r->bytes);
+    memset(r, 0, sizeof(*r));
+}
+
+/* Blocks as the BIOS writes them: the first nonzero byte stored with CRC
+ * enabled is the gap's end mark ($80), the next the block code, and the
+ * block ends with the second byte stored under CRC control. */
+static void write_run_byte(uint32_t at, uint8_t value, bool changed)
+{
+    FdsWriteRun *r = &media.run;
+    if (!r->active) {
+        memset(r, 0, sizeof(*r));
+        r->active = true;
+        r->side = media.side;
+        r->start = at;
+    }
+    r->bytes++;
+    r->changed += changed;
+    if (!F.crc_enable) { r->block = 0; return; }
+    if (r->block == 0 && value && !F.crc_control) { r->block = 1; r->mark = at; r->crc_bytes = 0; }
+    else if (r->block == 1) { r->block = 2; r->code = value; }
+    else if (r->block == 2 && F.crc_control && ++r->crc_bytes == 2) {
+        cyc_ring_push_len(CYC_EV_FDS_WRITE_BLOCK, (uint16_t)(r->side << 8 | r->code), r->mark, at - r->mark + 1);
+        r->block = 0;
+    }
+}
+
 static void disk_write(uint32_t index, uint8_t value, uint16_t *flags)
 {
     FdsSide *s = &media.sides[media.side];
     if (media.opt.write_protect || index >= s->len) return;
-    if (s->bytes[index] != value) {
+    bool changed = s->bytes[index] != value;
+    if (changed) {
         s->bytes[index] = value;
         media.write_hash = (media.write_hash ^ ((uint64_t)media.side << 32 | index << 8 | value)) * 0x100000001B3ull;
         media.writes++;
+        media.generation++;
     }
     *flags |= CYC_FDS_BYTE_STORED;
+    write_run_byte(index, value, changed);
 }
 
 static void clock_byte(void)
@@ -403,6 +511,7 @@ static void clock_byte(void)
     if (!F.scanning) cyc_ring_push(CYC_EV_FDS_READY, 0, F.position);
     F.scanning = 1;
     if (F.read_mode) {
+        write_run_end();
         /* lr:264-285, m2:301-327. */
         data = F.position < s->len ? s->bytes[F.position] : 0;
         if (!F.prev_crc_control) crc_update(data);
@@ -458,10 +567,10 @@ static void clock_byte(void)
             data = (uint8_t)F.crc;
             F.crc >>= 8;
         }
-        if (p->write_back2) {
-            if (F.position >= 2) disk_write(F.position - 2, data, &flags);
+        if (media.opt.write_at == CYC_FDS_WRITE_MESEN) {
+            if (F.position >= 2) disk_write(F.position - 2, data, &flags);   /* lr:96-98 */
         } else {
-            disk_write(F.position, data, &flags);
+            disk_write(F.position, data, &flags);                            /* m2:131 */
         }
         F.gap_ended = 0;
         if (p->crc_direct) F.bad_crc = 0;
@@ -472,6 +581,7 @@ static void clock_byte(void)
     F.position++;
     if (F.position >= s->len) {
         /* lr:317-326: the drive stops at the end of the side. */
+        write_run_end();
         F.motor_on = 0;
         F.at_end = 1;
         cyc_ring_push(CYC_EV_FDS_END, 0, s->len);
@@ -502,12 +612,14 @@ void fds_cpu_clock(void)
     /* lr:235-252: no disk or no motor -> the head is at the end; the
      * motor turning on rewinds it and starts the spin-up delay. */
     if (media.side < 0 || !F.motor_on) {
+        write_run_end();
         F.end_of_head = 1;
         F.scanning = 0;
         return;
     }
     if (F.reset_transfer && !F.scanning) return;
     if (F.end_of_head) {
+        write_run_end();
         F.delay = prof()->spinup;
         F.end_of_head = 0;
         F.at_end = 0;
@@ -533,6 +645,7 @@ uint64_t fds_state_hash(uint64_t acc)
     for (size_t i = 0; i < sizeof(F); ++i) acc = acc * 131 + b[i];
     acc = acc * 131 + (uint64_t)(media.side + 1);
     acc = acc * 131 + (uint64_t)media.opt.profile;
+    acc = acc * 131 + (uint64_t)media.opt.write_at;
     return acc;
 }
 
