@@ -387,6 +387,11 @@ runs a synthetic BIOS (`tools/cyc/fds_board_fixtures.py`) on the machine;
 checks (local, not CI): `tools/cyc/fds_oracle_gates.py` against nesref and
 `tools/cyc/test_fds_owner_parity.py`. The TriCNES oracle has no RAM Adapter.
 
+The opt-in HLE tier (`hw_fds_hle.c`, plan in `common/nes_fds_hle.h`: auto
+side swap from the disk ID the program asks the BIOS for, and fast load as
+unpaced host frames) sits on top and changes nothing with its axes off; see
+README, "The HLE tier".
+
 ### MMC5 / ExROM (mapper 5)
 
 All four PRG modes support ROM and protected RAM in $6000-$DFFF. Tagged bank

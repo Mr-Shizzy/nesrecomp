@@ -503,8 +503,8 @@ turns, and the save's state (SAVE LOADED, UNSAVED, SAVED F<frame>). It is drawn
 in window rows the picture never covers and is not part of the emulated
 frame, so screenshots and every comparison see only the machine's picture.
 F1 ejects or inserts, F3 picks the next side while the drive is empty; scripts
-use `--fds-event` or `DISK_` lines. There is no automatic side change here;
-that belongs to the optional HLE tier.
+use `--fds-event` or `DISK_` lines. Automatic side changes are the optional
+[HLE tier](#the-hle-tier-hw_fds_hlec-commonnes_fds_hleh).
 
 Ring events: `fds.wrun` (a write run: side, first position, bytes stored and
 changed), `fds.wblock` (a block written the BIOS way: code, mark position,
@@ -570,6 +570,107 @@ Checks:
   Mesen's savestates frame by frame, and in PCM with the A/B analyzer
   (`tools/nes_audio_ab.py`), also with the runtime's output stage applied to
   nesref's PCM so synthesis and output stage separate.
+
+#### The HLE tier (`hw_fds_hle.c`, `common/nes_fds_hle.h`)
+
+LLE (the real BIOS against the modelled drive) is the reference; the HLE tier
+is opt-in conveniences on top of it, in the shape of psxrecomp's
+`psx_bios_hle_plan()`: one pure function, `nes_fds_hle_plan()`, decides every
+axis from what was asked for and what the BIOS and disk support, every call
+site uses its answer, and an axis a BIOS or disk cannot support is refused
+with the reason (never forced). Off by default. With every axis off the
+machine runs exactly as without the tier: `--hash-out` of all owner routes at
+all four alignments is byte-identical to the build before it.
+
+```bash
+FdsGame game.fds --fds-hle auto-swap,fast-load   # or all / off / no-auto-swap / no-fast-load
+NESRECOMP_FDS_HLE=fast-load FdsGame game.fds     # the environment
+# game.toml: [fds] hle = "auto-swap,fast-load"   # the program's default
+FdsGame game.fds --fds-hle fast-load --realtime --frames 2000   # paced like the window; reports load time
+```
+
+Precedence per axis: live toggle (window F6 auto swap, F7 fast load) >
+`--fds-hle` > `NESRECOMP_FDS_HLE` > `[fds] hle` > off. The host prints the
+plan (`fds hle: auto-swap on (cli), fast-load REFUSED: ...`) whenever any
+source asked for anything; the drive bar's second line shows it (`HLE SWAP
+FAST`, `LOADING`, `AUTO SWAP TO DISK 1 SIDE B`).
+
+**Auto swap** needs the BIOS's disk-ID check anchor: the routine every
+ID-checking BIOS call runs ($E445 in disksys.rom; LoadFiles, WriteFile,
+AppendFile, CheckFileCount, AdjustFileCount and SetFileCount all reach it with
+the pointer to the caller's 10-byte disk ID at $00). It is built in for
+5E607DCF (and checked against the code there); another BIOS declares
+`hle_id_check` / `hle_id_pointer` in its identity file. Without it, or on a
+one-sided image, auto swap is refused. The signal is the request itself, read
+where the RAM Adapter sees it: the opcode fetch of the anchor (a read of it
+followed on the next cycle by the read of the byte after it, so data reads and
+interrupts do not count), then the 10 ID bytes matched against every side's
+disk header ($FF matches anything, as the BIOS compares). This observation is
+always on (ring `fds.idreq` + `fds.idbytes`, whatever the plan). With auto
+swap on:
+
+- a request matching exactly one side that is not in the drive: eject at the
+  end of the frame, 3 frames empty, insert that side. The BIOS is then still
+  in its wait before it starts the motor (~40 frames: Otocky's request at
+  cycle 21,623,595 reached the BIOS's $4032 disk test 1,185,167 cycles, 39.8 frames, later),
+  so the call finds its side and never fails;
+- a request the drive satisfies, one matching several sides (`ambiguous`) or
+  none (`nomatch`) changes nothing;
+- a game that shows "set side B" and watches $4032 for the disk to come out
+  makes no request until it has gone out and back in. After a disk access, 20
+  frames of $4032 polling with the drive idle (gaps up to 30 frames) count as
+  waiting: eject, 10 frames empty, put the same side back (a bump, harmless if
+  the program was not waiting); its next request then swaps as above. If it
+  keeps waiting with no request in between (a game that reads the header
+  itself), the next round inserts the next side. This path is inferred, like
+  Mesen's own auto-insert (FDS.cpp: > 20 $4032 reads, eject, 77 frames, insert
+  disk 1 side A, switch the side at $E445); a program that polls $4032 during
+  play without wanting a swap gets one bump per disk access.
+
+A host eject or insert takes the drive back from the tier until the next
+request. Owner titles (native, auto swap, no disk events): Otocky, Esper Dream
+and Nazo no Murasame-jou are all "watch" titles (no BIOS call until the disk
+is swapped); each had side B in 36-41 frames after it began to poll (Otocky
+f=691 -> 729, Esper 1008 -> 1049, Murasame 1484 -> 1520), against 94-105
+frames with Mesen's auto-insert through nesref (side B at Otocky ~796, Esper
+~1102, Murasame ~1585; sampled every 2-10 frames). Every request was unambiguous; in the owner's library
+(114 images, 198 sides) no two sides of an image share a disk ID and every
+side has a header, so exact requests are never ambiguous there. No library
+image has more than two sides: multi-disk swaps are fixture-checked only.
+
+**Fast load** needs only the drive. The machine is the same LLE machine frame
+for frame; only the host's pacing changes: load frames (the drive clocking
+bytes with the transfer released, data through $4031/$4024, the head rewinding
+or spinning up, the BIOS between its ID check and starting the motor, an auto
+swap in progress) run back to back without audio, and the window shows about
+60 of them a second. Load spans are always recorded (ring `fds.span`, marked
+`fast` when fast load ran them). A drive the BIOS leaves turning to the end of
+the side is not loading. Nothing the program can see changes: with fast load
+alone, and with auto swap + fast load against auto swap alone, `--hash-out`
+is identical on every owner route and fixture, so the state after each load is
+LLE's exactly (frame counters included, since the same frames run). Wall-clock
+time of the load frames, `--realtime`, auto swap on, native builds:
+
+| title (route) | frames | load frames | paced | fast load |
+|---|---|---|---|---|
+| SMB2J (boot) | 800 | 334 | 5.53 s | 0.58 s |
+| Otocky (boot, side B) | 2000 | 631 | 10.43 s | 1.20 s |
+| Esper Dream (boot, side B) | 2600 | 694 | 11.48 s | 2.00 s |
+| Nazo no Murasame-jou (boot, side B) | 3000 | 617 | 10.20 s | 1.00 s |
+| Dead Zone (two loads) | 1600 | 750 | 12.40 s | 2.14 s | A deeper
+HLE (servicing the BIOS's file calls directly) would skip those frames and so
+change what the program counts during a load; it is not done.
+
+Ring: `fds.idreq`, `fds.idbytes`, `fds.span`, `fds.hle` (config, keep, swap,
+ambiguous, nomatch, wait, eject, insert, cancel, with the evidence: the match
+mask, the side in the drive, the poll frames). Tests: `cyc_fds_hle_plan_test`
+(the plan over every request x capability, precedence, parsing, ID matching)
+and `cyc_fds_hle_test` (`tools/cyc/test_cyc_fds_hle.py`: a synthetic
+BIOS-and-game program, `tools/cyc/fds_hle_fixtures.py`, with 2- and 4-sided
+disks: a program that asks the BIOS, one that watches, one that never asks, a
+poller, short polls, ambiguous / unmatched / multi-disk / satisfied requests,
+a self-checking game; native = `--interp-only` = `cyc_interp`, fast load
+identity, config precedence, refusals, host disk changes, `--realtime`).
 
 ### Timing model (`hw_internal.h`, `hw_machine.c`)
 
