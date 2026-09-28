@@ -1,6 +1,7 @@
 /* Famicom Disk System media contracts (common/nes_fds.h) over the synthetic
  * images written by tools/cyc/fds_fixtures.py. Usage: cyc_fds_disk_test <dir> */
 #include "../../common/nes_fds.h"
+#include "../../common/nes_fds_save.h"
 #include <stdio.h>
 #include <stdlib.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "%d: %s\n", __LINE__, #x); exit(1); } } while (0)
@@ -158,6 +159,143 @@ static unsigned manifest_streams(void)
     }
     free(line);
     return count;
+}
+
+/* Disk saves (common/nes_fds_save.h): identity, the save file, Mesen's .ips. */
+static unsigned save_contracts(void)
+{
+    unsigned n = 0;
+    NesFdsImage hdr, raw, other;
+    uint8_t *h = open_image("two_side.fds", &hdr), *r = open_image("two_side_raw.fds", &raw);
+    uint8_t *o = open_image("basic.fds", &other);
+    NesFdsIdentity ih, ir, io;
+    nes_fds_identity(&hdr, &ih); nes_fds_identity(&raw, &ir); nes_fds_identity(&other, &io);
+    CHECK(nes_fds_identity_equal(&ih, &ir) && !nes_fds_identity_equal(&ih, &io)); n++;   /* the header is not the disk */
+    CHECK(ih.sides == 2 && ih.side_bytes == NES_FDS_SIDE_BYTES && ih.bytes == 2 * NES_FDS_SIDE_BYTES); n++;
+    /* a truncated image's identity counts the missing bytes as zero */
+    NesFdsImage t;
+    uint8_t *tr = open_image("truncated.fds", &t);
+    NesFdsIdentity it;
+    nes_fds_identity(&t, &it);
+    CHECK(it.bytes == 2 * NES_FDS_SIDE_BYTES); n++;
+    /* write -> parse round trip */
+    size_t l0, l1;
+    uint8_t *s0 = stream(&hdr, 0, NES_FDS_PROFILE_MESEN099, NES_FDS_CRC_COMPUTED, &l0);
+    uint8_t *s1 = stream(&hdr, 1, NES_FDS_PROFILE_MESEN2, NES_FDS_CRC_MESEN, &l1);
+    static NesFdsSave sv, back;
+    memset(&sv, 0, sizeof(sv));
+    sv.id = ih; sv.layout = 1; sv.crc_mode = 1; sv.write_at = 2; sv.count = 2;
+    sv.sides[0].side = 0; sv.sides[0].bytes = s0; sv.sides[0].len = (uint32_t)l0;
+    sv.sides[1].side = 1; sv.sides[1].bytes = s1; sv.sides[1].len = (uint32_t)l1;
+    size_t size = nes_fds_save_write(&sv, NULL, 0);
+    CHECK(size == NES_FDS_SAVE_HEADER + 4 + 24 + l0 + l1); n++;
+    uint8_t *file = (uint8_t *)malloc(size);
+    CHECK(nes_fds_save_write(&sv, file, size) == size); n++;
+    CHECK(nes_fds_save_parse(file, size, &ir, &back) == NES_FDS_SAVE_OK); n++;   /* the raw twin accepts it */
+    CHECK(back.count == 2 && back.sides[0].len == l0 && !memcmp(back.sides[0].bytes, s0, l0) &&
+          back.sides[1].side == 1 && back.sides[1].len == l1 && !memcmp(back.sides[1].bytes, s1, l1) &&
+          back.layout == 1 && back.crc_mode == 1 && back.write_at == 2); n++;
+    CHECK(nes_fds_save_parse(file, size, &io, &back) == NES_FDS_SAVE_FOREIGN); n++;
+    CHECK(nes_fds_save_parse(file, size, NULL, &back) == NES_FDS_SAVE_OK); n++;
+    /* single-bit errors (every bit near both ends, a spread in between) and
+     * truncations are caught: the file CRC-32 */
+    for (size_t i = 0; i < size; i += (i < 64 || size - i < 64) ? 1 : 97) {
+        for (int bit = 0; bit < 8; bit += (i < 64 ? 1 : 3)) {
+            file[i] ^= (uint8_t)(1u << bit);
+            CHECK(nes_fds_save_parse(file, size, &ih, &back) != NES_FDS_SAVE_OK); n++;
+            file[i] ^= (uint8_t)(1u << bit);
+        }
+    }
+    for (size_t cut = 0; cut < size; cut += cut < 128 ? 1 : 4099) {
+        CHECK(nes_fds_save_parse(file, cut, &ih, &back) == NES_FDS_SAVE_CORRUPT); n++;
+    }
+    /* malformed records under a valid file CRC: side 0 twice, a side past the
+     * disk, a reserved word set */
+    for (unsigned k = 0; k < 3; ++k) {
+        uint8_t *copy = (uint8_t *)malloc(size);
+        memcpy(copy, file, size);
+        if (k == 0) copy[NES_FDS_SAVE_HEADER + 12 + l0] = 0;
+        else if (k == 1) copy[NES_FDS_SAVE_HEADER] = 7;
+        else copy[36] = 1;
+        nes_fds_wr32(copy + size - 4, nes_crc32(0, copy, size - 4));
+        CHECK(nes_fds_save_parse(copy, size, &ih, &back) == NES_FDS_SAVE_CORRUPT); n++;
+        free(copy);
+    }
+    nes_fds_wr32(file + 8, 2);
+    nes_fds_wr32(file + size - 4, nes_crc32(0, file, size - 4));
+    CHECK(nes_fds_save_parse(file, size, &ih, &back) == NES_FDS_SAVE_VERSION_NEWER); n++;
+    sv.count = 0;
+    uint8_t empty[64];
+    CHECK(nes_fds_save_write(&sv, empty, sizeof(empty)) == NES_FDS_SAVE_HEADER + 4 &&
+          nes_fds_save_parse(empty, NES_FDS_SAVE_HEADER + 4, &ih, &back) == NES_FDS_SAVE_OK && back.count == 0); n++;
+    /* Mesen's rebuild undoes the 0.9.9 loader on a clean side (both CRC modes) */
+    static const char *const CLEAN[] = { "basic.fds", "two_side.fds", "hidden.fds", "full.fds", "missing.fds" };
+    static uint8_t side[NES_FDS_SIDE_BYTES];
+    for (unsigned k = 0; k < 5; ++k) {
+        NesFdsImage img;
+        uint8_t *d = open_image(CLEAN[k], &img);
+        for (unsigned sd = 0; sd < img.sides; ++sd)
+            for (int c = 0; c < 2; ++c) {
+                size_t len;
+                uint8_t *st = stream(&img, sd, NES_FDS_PROFILE_MESEN099, (NesFdsCrc)c, &len);
+                CHECK(nes_fds_rebuild_side(st, len, side));
+                CHECK(!memcmp(side, d + img.data_offset + (size_t)sd * NES_FDS_SIDE_BYTES, NES_FDS_SIDE_BYTES)); n++;
+                free(st);
+            }
+        free(d);
+    }
+    /* IPS: create then apply gives the new bytes; identical inputs give an empty patch */
+    size_t len = hdr.size;
+    uint8_t *mod = (uint8_t *)malloc(len);
+    memcpy(mod, h, len);
+    for (size_t i = 100; i < 140; ++i) mod[i] = 0x55;             /* a run: RLE */
+    mod[5000] ^= 1; mod[5002] ^= 2; mod[len - 1] ^= 0x80;          /* scattered bytes, the last one */
+    for (size_t i = 70000; i < 70300; ++i) mod[i] = (uint8_t)i;    /* literal bytes */
+    size_t ips_n = nes_fds_ips_create(h, mod, len, NULL, 0);
+    uint8_t *ips = (uint8_t *)malloc(ips_n), *patched = (uint8_t *)malloc(len);
+    CHECK(nes_fds_ips_create(h, mod, len, ips, ips_n) == ips_n && !memcmp(ips, "PATCH", 5) &&
+          !memcmp(ips + ips_n - 3, "EOF", 3)); n++;
+    size_t out_n = 0;
+    CHECK(nes_fds_ips_apply(ips, ips_n, h, len, patched, len, &out_n) && out_n == len && !memcmp(patched, mod, len)); n++;
+    CHECK(nes_fds_ips_create(h, h, len, NULL, 0) == 8); n++;
+    CHECK(!nes_fds_ips_apply(ips, ips_n - 1, h, len, NULL, 0, &out_n)); n++;   /* no EOF */
+    CHECK(!nes_fds_ips_apply((const uint8_t *)"PATCX\0\0\0EOF", 11, h, len, NULL, 0, &out_n)); n++;
+    free(ips); free(patched); free(mod);
+    /* Mesen's record splitting, byte for byte: a run of 4 from a record's
+     * start is RLE, a run of 3 stays literal, 14 equal bytes after another
+     * split off into RLE, a run of 4 after other bytes stays literal
+     * (expected bytes from a line-by-line Python transliteration of
+     * IpsPatcher::CreatePatch, uint8_t rleCount and uint16_t Length). */
+    {
+        uint8_t a[64] = { 0 }, b[64] = { 0 }, got[64];
+        memset(b + 10, 5, 4); memset(b + 20, 7, 3); b[30] = 1; memset(b + 31, 9, 15);
+        b[50] = 2; b[51] = 3; memset(b + 52, 4, 4);
+        static const uint8_t WANT[] = {
+            0x50, 0x41, 0x54, 0x43, 0x48, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x04, 0x05, 0x00, 0x00, 0x14, 0x00,
+            0x03, 0x07, 0x07, 0x07, 0x00, 0x00, 0x1E, 0x00, 0x01, 0x01, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00, 0x0F,
+            0x09, 0x00, 0x00, 0x32, 0x00, 0x06, 0x02, 0x03, 0x04, 0x04, 0x04, 0x04, 0x45, 0x4F, 0x46,
+        };
+        CHECK(nes_fds_ips_create(a, b, 64, got, sizeof(got)) == sizeof(WANT) && !memcmp(got, WANT, sizeof(WANT))); n++;
+        uint8_t back_b[64];
+        CHECK(nes_fds_ips_apply(got, sizeof(WANT), a, 64, back_b, 64, &out_n) && out_n == 64 && !memcmp(back_b, b, 64)); n++;
+    }
+    /* a stream byte changed under a recomputed file CRC: the record CRC catches it;
+     * and every byte of a stream reaches the file, the last one included */
+    {
+        s0[l0 - 1] = 0x5A;
+        sv.id = ih; sv.count = 1;
+        sv.sides[0].side = 0; sv.sides[0].bytes = s0; sv.sides[0].len = (uint32_t)l0;
+        size_t fs = nes_fds_save_write(&sv, NULL, 0);
+        uint8_t *f2 = (uint8_t *)malloc(fs);
+        CHECK(nes_fds_save_write(&sv, f2, fs) == fs && nes_fds_save_parse(f2, fs, &ih, &back) == NES_FDS_SAVE_OK &&
+              back.sides[0].bytes[l0 - 1] == 0x5A); n++;
+        f2[NES_FDS_SAVE_HEADER + 12 + 1000] ^= 1;
+        nes_fds_wr32(f2 + fs - 4, nes_crc32(0, f2, fs - 4));
+        CHECK(nes_fds_save_parse(f2, fs, &ih, &back) == NES_FDS_SAVE_CORRUPT); n++;
+        free(f2);
+    }
+    free(file); free(s0); free(s1); free(h); free(r); free(o); free(tr);
+    return n;
 }
 
 int main(int argc, char **argv)
@@ -337,6 +475,7 @@ int main(int argc, char **argv)
     unsigned streams = manifest_streams();
     CHECK(streams == 92);
     free(d_hdr); free(d_raw); free(d_qd);
-    printf("fds media contracts passed (%u Mesen-transliterated streams)\n", streams);
+    unsigned saves = save_contracts();
+    printf("fds media contracts passed (%u Mesen-transliterated streams, %u disk save checks)\n", streams, saves);
     return 0;
 }

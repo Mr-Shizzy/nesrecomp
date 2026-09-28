@@ -77,11 +77,22 @@
  *                          or mesen (Mesen's constant $4D $62)
  *     --fds-crc-check      report CRC mismatches in $4030.4 in any profile
  *     --fds-write-protect  the disk's write-protect tab is broken off
+ *     --fds-write-at W     where a written byte lands: head (default) or mesen
+ *                          (two bytes behind, as nesref's core; hw_fds.c)
+ *     --save-file FILE     the disk save: what the game writes to its disk,
+ *                          loaded at start and saved when the drive stops, on
+ *                          eject and at exit (cyc_fds_save.inc). The image is
+ *                          never written. A windowed run without it saves to
+ *                          <exe dir>/saves/<image stem>.fdssave; --no-save
+ *                          turns that off.
+ *     --fds-import-ips FILE  start from a Mesen/nesref disk save (<stem>.ips)
+ *     --fds-export-ips FILE  also write the disk as a Mesen .ips at each save
  *
  * Without CYC_WITH_SDL the host is always headless.
  */
 #include "cyc_accuracycoin.h"
 #include "cyc_core.h"
+#include "cyc_host.h"
 #include "../../common/nes_cart.h"
 #include "cyc_png.h"
 #include "cyc_ring.h"
@@ -368,6 +379,7 @@ static void disk_tick(long frame) {
             ok = cyc_fds_eject();
             if (ok) disk_selected = (unsigned)side;
             printf("[cyc disk] f=%ld eject%s\n", frame, ok ? "" : " (drive already empty)");
+            if (ok) cyc_host_disk_ejected();
         } else if (e->action == 'S') {
             ok = cyc_fds_side() < 0 && (unsigned)e->side < cyc_fds_side_count();
             if (ok) disk_selected = (unsigned)e->side;
@@ -503,6 +515,9 @@ static void numbered_path(char *buf, size_t n, const char *base, long frame) {
 }
 
 #include "cyc_save.inc"
+#ifndef CYC_ORACLE
+#include "cyc_fds_save.inc"
+#endif
 
 int main(int argc, char **argv) {
     const char *rom_path = NULL, *hash_out = NULL, *trace_out = NULL, *screenshot = NULL, *state_out = NULL,
@@ -522,7 +537,8 @@ int main(int argc, char **argv) {
     bool acccoin = false, headless = false, frames_given = false;
 #ifndef CYC_ORACLE
     const char *ring_out = NULL, *frame_log = NULL, *fds_bios = NULL;
-    bool frame_log_mesen = false;
+    const char *fds_import_ips = NULL, *fds_export_ips = NULL;
+    bool frame_log_mesen = false, no_save = false;
     long ring_first = 0, ring_last = -1, log_first = 0, log_last = -1;
     CycFdsOptions fds_opt;
     cyc_fds_default_options(&fds_opt);
@@ -607,6 +623,15 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(argv[i], "--fds-crc-check")) fds_opt.crc_check = true;
         else if (!strcmp(argv[i], "--fds-write-protect")) fds_opt.write_protect = true;
+        else if (!strcmp(argv[i], "--fds-write-at") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "head")) fds_opt.write_at = CYC_FDS_WRITE_HEAD;
+            else if (!strcmp(v, "mesen")) fds_opt.write_at = CYC_FDS_WRITE_MESEN;
+            else { fprintf(stderr, "--fds-write-at: head or mesen\n"); return 2; }
+        }
+        else if (!strcmp(argv[i], "--fds-import-ips") && i + 1 < argc) fds_import_ips = argv[++i];
+        else if (!strcmp(argv[i], "--fds-export-ips") && i + 1 < argc) fds_export_ips = argv[++i];
+        else if (!strcmp(argv[i], "--no-save")) no_save = true;
         else if (!strcmp(argv[i], "--miss-log") && i + 1 < argc) miss_log = argv[++i], headless = true;
         else if (!strcmp(argv[i], "--capture-log") && i + 1 < argc) capture_log = argv[++i], headless = true;
         else if (!strcmp(argv[i], "--ram-view-list") && i + 1 < argc) view_list = argv[++i], headless = true;
@@ -633,7 +658,8 @@ int main(int argc, char **argv) {
                         "       [--frame-log FILE [--frame-log-frames A:B]] [--ring-out FILE [--ring-frames A:B]]\n"
                         "       FDS: [--fds-bios FILE] [--fds-boot-disk none|SIDE] [--fds-event F:ACTION]\n"
                         "            [--fds-profile mesen|mesen2|hardware] [--fds-crc computed|mesen]\n"
-                        "            [--fds-crc-check] [--fds-write-protect]\n",
+                        "            [--fds-crc-check] [--fds-write-protect] [--fds-write-at head|mesen]\n"
+                        "            [--save-file FILE | --no-save] [--fds-import-ips FILE] [--fds-export-ips FILE]\n",
                 argv[0]);
         return 2;
     }
@@ -672,6 +698,24 @@ int main(int argc, char **argv) {
             return 2;
         }
         free(bios);
+        /* The disk save: explicit, or the windowed default; never the image. */
+        const char *disk_save = save_file;
+#if defined(CYC_WITH_SDL)
+        if (!disk_save && !headless && !no_save) disk_save = fds_default_save_path(rom_path);
+#endif
+        if (no_save) disk_save = NULL;
+        const char *mine[] = { disk_save, fds_export_ips, fds_import_ips };
+        for (size_t k = 0; k < 3; ++k)
+            if (mine[k] && !save_paths_distinct(mine[k], rom_path)) {
+                fprintf(stderr, "%s is the disk image; saves never write the image\n", mine[k]);
+                return 2;
+            }
+        if (disk_save && fds_export_ips && !save_paths_distinct(disk_save, fds_export_ips)) {
+            fprintf(stderr, "the disk save and --fds-export-ips must be different files\n");
+            return 2;
+        }
+        if (!fds_save_open(disk_save, fds_import_ips, fds_export_ips, image, size, &fds_opt)) return 2;
+        save_file = NULL;              /* the FDS has no cartridge NVRAM */
         nes_fds_cart_info(&cart_info);
         printf("fds: %s, %u side%s, BIOS %s (CRC32 %08X), drive %s\n", rom_path, cyc_fds_side_count(),
                cyc_fds_side_count() == 1 ? "" : "s", bios_path, crc,
@@ -702,12 +746,14 @@ int main(int argc, char **argv) {
     cyc_power_on((uint8_t)align);
 #ifndef CYC_ORACLE
     cyc_run_power_on();
+    fds_save_powered_on();
 #endif
 
 #if defined(CYC_WITH_SDL) && !defined(CYC_ORACLE)
     if (!headless) {
         int result=cyc_sdl_main(cyc_native_program_name ? cyc_native_program_name : rom_path, scale);
-        return save_write(save_file,0) && save_write(datach_save,1)?result:2;
+        bool disk_ok=fds_save_flush(CYC_FDS_SAVE_EXIT);
+        return save_write(save_file,0) && save_write(datach_save,1) && disk_ok?result:2;
     }
 #else
     (void)scale;
@@ -779,6 +825,7 @@ int main(int argc, char **argv) {
         if (disk_event_count) disk_tick(frame);
         observe_frame = frame;
         cyc_run_frame();
+        fds_save_frame(frame + 1);
         if (frame_log_f && !frame_log_mesen && frame >= log_first && (log_last < 0 || frame <= log_last))
             write_frame_log(frame_log_f, frame);
 #endif
@@ -857,10 +904,12 @@ int main(int argc, char **argv) {
                cyc_native_ram_view_count, cyc_ramview_count(), (unsigned long long)rv->entries,
                (unsigned long long)rv->validated, (unsigned long long)rv->rejected, (unsigned long long)rv->invalidated,
                (unsigned long long)rv->code_write_exits, (unsigned long long)rv->interp_insns);
+    bool disk_ok = fds_save_flush(CYC_FDS_SAVE_EXIT);
     if (cyc_is_fds())
-        printf("fds: side %d in the drive at exit, %u disk bytes written (in memory only), "
-               "%llu FDS events recorded\n", cyc_fds_side(), cyc_fds_disk_writes(),
-               (unsigned long long)cyc_ring_total());
+        printf("fds: side %d in the drive at exit, %u disk bytes written, %u disk save%s written%s%s, "
+               "%llu FDS events recorded\n", cyc_fds_side(), cyc_fds_disk_writes(), fds_save.saves,
+               fds_save.saves == 1 ? "" : "s", fds_save.path ? " to " : " (no --save-file: in memory only)",
+               fds_save.path ? fds_save.path : "", (unsigned long long)cyc_ring_total());
     if (ring_out) {
         FILE *rf = fopen(ring_out, "w");
         if (!rf) { fprintf(stderr, "cannot write %s\n", ring_out); return 2; }
@@ -892,6 +941,9 @@ int main(int argc, char **argv) {
     if (screenshot && !cyc_write_png(screenshot, cyc_frame_argb(), 256, 240))
         fprintf(stderr, "cannot write %s\n", screenshot);
 
+#ifndef CYC_ORACLE
+    if (!disk_ok) return 2;
+#endif
     if (!save_write(save_file,0) || !save_write(datach_save,1)) return 2;
     if (acccoin) {
         const uint8_t *prg = image + cart_info.data_offset;
