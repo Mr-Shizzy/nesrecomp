@@ -200,7 +200,9 @@ on [Talk:VRC6](https://www.nesdev.org/wiki/Talk:VRC6#Raw_data). The contracts co
 all 64 banking-style values, including CHR-ROM nametables and independent CIRAM
 selection. Execution fixtures read these through $2007 and enable rendering.
 The audio sequencers run during DMA and when host audio is disabled; PCM mixing
-adds their inverted linear DAC before the existing output filters. Nominal mixer
+adds their inverted linear DAC before the console output stage (famicom by
+default for VRC6, VRC7 and Namco 163, whose boards were only made for the
+Famicom; README, APU section). Nominal mixer
 gain is approximate; cartridge resistor tolerances and analog response need
 hardware comparison. `test_cyc_expansion_audio.py` records native/interpreter
 WAVs, checks exact parity and pulse/saw frequencies, and rejects silent/clipped
@@ -370,7 +372,9 @@ the `hardware` column is a judgment call, not oracle-verified.
   `FdsAudio.h` per CPU cycle (Mesen2's in the `mesen2` and `hardware`
   profiles), mixed at Mesen's level (20/5000 per step, 1.69 full pulses at
   full volume); `hardware` uses the nesdev level (2.4 pulses) and ~2 kHz
-  low-pass. See README, "The sound unit".
+  low-pass, the RAM Adapter's own filter on the FDS sound. The mix then goes
+  through the `famicom` console output stage by default (README, APU
+  section). See README, "The sound unit".
 - Code: the BIOS compiles as a fixed ROM. Code the BIOS loads into PRG RAM
   compiles as RAM views: every PRG file on every side at its load address,
   plus what the capture file adds, validated by content and a write watch

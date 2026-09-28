@@ -68,6 +68,14 @@ nesrecomp_add_cycle_game(MyFdsGame
     GAME_CONFIG "${CMAKE_SOURCE_DIR}/game.toml")   # [game] fds = true, [fds] bios = "bios/disksys.rom"
 ```
 
+## Audio output stage
+
+`game.toml` `[game] console = "nes"` or `"famicom"` compiles in the console
+whose analog output stage the audio goes through (see the APU section of
+[README.md](README.md)); `"default"` or no key picks by board (famicom for the
+FDS, Namco 163, VRC6 and VRC7, nes otherwise). The program's `--console`
+option overrides it. Any other value fails code generation.
+
 ## Native coverage and rebuilding
 
 Unseen code runs through the cycle interpreter. Profile a route with

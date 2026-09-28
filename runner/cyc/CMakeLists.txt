@@ -15,6 +15,8 @@ project(nesrecomp_cyc C CXX)
 #                    recompiler and a synthetic self-modifying FDS program)
 #   cyc_fds_audio_test the FDS sound unit against an independent model and in
 #                    rendered PCM (builds synthetic FDS sound programs)
+#   cyc_console_audio_test / cyc_console_audio_pcm  the console output stage
+#                    (nes / famicom): defaults, responses, pinned renders
 # Tests that build a generated program use this build's toolchain
 # (nested_build.json below, tools/cyc/nested_build.py).
 # Game projects use runner/cyc/cyc.cmake instead.
@@ -77,6 +79,19 @@ set_tests_properties(cyc_fds_board_fixtures PROPERTIES FIXTURES_SETUP fds_board_
 add_test(NAME cyc_fds_board_test COMMAND cyc_fds_board_test ${NESRECOMP_FDS_BOARD_FIXTURES})
 set_tests_properties(cyc_fds_board_test PROPERTIES FIXTURES_REQUIRED fds_board_fixtures)
 
+# The console output stage (hw_apu.c, cyc_set_console): board defaults, each
+# model's frequency and step response against its documented RC sections, and
+# no effect on the machine. The FDS default uses the board fixtures' disk.
+add_executable(cyc_console_audio_test console_audio_test.c cpu6502.c cpu6502_interp.c hw_machine.c hw_mapper.c hw_fds.c
+    hw_fds_audio.c vendor/emu2413/emu2413.c hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_ramview.c
+    cyc_native_none.c)
+target_include_directories(cyc_console_audio_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
+target_link_libraries(cyc_console_audio_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
+if(MSVC)
+    target_compile_definitions(cyc_console_audio_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME cyc_console_audio_test COMMAND cyc_console_audio_test ${NESRECOMP_FDS_BOARD_FIXTURES})
+set_tests_properties(cyc_console_audio_test PROPERTIES FIXTURES_REQUIRED fds_board_fixtures)
 
 # Compiled views of code in RAM (FDS disk files, captured code): a synthetic
 # FDS program whose RAM code rewrites itself every way a view can go stale
@@ -180,3 +195,11 @@ add_test(NAME cyc_fds_audio_test
             --recompiler $<TARGET_FILE:NESRecomp> --interp $<TARGET_FILE:cyc_interp>
             --out ${CMAKE_CURRENT_BINARY_DIR}/fds_audio_test ${NESRECOMP_NESTED_BUILD_ARGS})
 set_tests_properties(cyc_fds_audio_test PROPERTIES TIMEOUT 1800)
+# The console output stage end to end (tools/cyc/test_cyc_console_audio.py):
+# board defaults in cyc_interp, the nes and famicom renders pinned by SHA-256,
+# their spectra against the models, and game.toml [game] console compiled in.
+add_test(NAME cyc_console_audio_pcm
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/cyc/test_cyc_console_audio.py
+            --recompiler $<TARGET_FILE:NESRecomp> --interp $<TARGET_FILE:cyc_interp>
+            --out ${CMAKE_CURRENT_BINARY_DIR}/console_audio_test ${NESRECOMP_NESTED_BUILD_ARGS})
+set_tests_properties(cyc_console_audio_pcm PROPERTIES TIMEOUT 1800)

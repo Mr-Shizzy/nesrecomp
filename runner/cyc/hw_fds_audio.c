@@ -32,7 +32,11 @@
  * pulse, same polarity) and its output filter, "approximated as a 1-pole
  * lowpass with a cutoff of ~2000Hz" (nesdev FDS_audio). The hardware column
  * is a judgment call, not oracle-verified: nothing here can measure a
- * console. Neither Mesen models the newer nesdev findings ($4083.7 speeding
+ * console. That low-pass belongs to the RAM Adapter, on the 2C33's sound
+ * alone (nesdev gives it for "this output signal"; lidnariq derived it from
+ * the adapter board's RC network, forum t=10233; NSFPlay filters only its FDS
+ * channel), so it stays here and not in the console output stage the mix
+ * goes through afterwards (hw_apu.c: the FDS defaults to the famicom model). Neither Mesen models the newer nesdev findings ($4083.7 speeding
  * the envelopes up 4x, $4087.6, the 16-cycle wave/mod ticks and 20-bit wave
  * accumulator, $4091); they are not modelled in any profile.
  *

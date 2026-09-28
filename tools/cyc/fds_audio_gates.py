@@ -25,11 +25,13 @@ frames rule) is run on a cyc build and on nesref, and compared three ways:
           (tools/nes_audio_ab.py compare(): timbre L1, log-f pitch cents,
           onsets, drift; nes-audio-fidelity), plus DC and RMS per stream and
           the cyc self-floor (native against --interp-only, which must be
-          bit-identical). The comparison is repeated with the runtime's
-          console output stage (90/440 Hz high-pass, 14 kHz low-pass, which
-          Mesen leaves out) applied to nesref's PCM, which separates synthesis
-          from output-stage differences. --pcm-window A:B limits it to frames
-          A..B.
+          bit-identical). The comparison is repeated with the console output
+          stage cyc used (its "audio:" line; --console picks it: famicom, the
+          FDS default, is a 37 Hz high-pass, nes the front-loader's 90/440 Hz
+          high-pass and 14 kHz low-pass; tools/cyc/console_output.py) applied
+          to nesref's PCM, which Mesen leaves unfiltered: that separates
+          synthesis from output-stage differences. --pcm-window A:B limits it
+          to frames A..B.
 
   python tools/cyc/fds_audio_gates.py --cyc build/fds-otocky/nes_game.exe --image Otocky.fds \\
       --bios disksys.rom --input route.txt --frames 3500:6400 --nesref F:/Projects/nesref_wt-fds/nesref.exe \\
@@ -41,6 +43,7 @@ state.jsonl, abaudio.json, and a summary (stdout).
 import argparse
 import concurrent.futures
 import json
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -50,6 +53,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
+import console_output                        # noqa: E402
 import fds_audio_model as model              # noqa: E402
 from fds_oracle_gates import ram_trace, read_frame_log, run_nesref  # noqa: E402
 
@@ -183,6 +187,8 @@ def timing_explained(a, b, pitches, limit=8):
 def run_cyc(args, out, frames, extra, name):
     cmd = [str(args.cyc), str(args.image), '--fds-bios', str(args.bios), '--frames', str(frames),
            '--ram-init', 'zeros', '--fds-boot-disk', args.boot] + extra + args.cyc_args.split()
+    if args.console:
+        cmd += ['--console', args.console]
     if args.input:
         cmd += ['--input', str(args.input)]
     p = subprocess.run(cmd, cwd=out, capture_output=True, text=True, timeout=3600, creationflags=NO_WINDOW)
@@ -236,26 +242,12 @@ def phase_explained(cyc_blob, ref_blob, mask, limit=8):
     return None
 
 
-def console_output_stage(x, rate):
-    """The runtime's output stage (hw_apu.c audio_emit: 90 Hz and 440 Hz
-    high-pass, 14 kHz low-pass, nesdev APU Mixer), which Mesen does not
-    apply. Run on nesref's PCM it separates synthesis differences from the
-    output stage in the A/B numbers."""
-    import math
-    import numpy as np
-    dt = 1.0 / rate
-    rc = [1.0 / (2 * math.pi * f) for f in (90.0, 440.0, 14000.0)]
-    a90, a440, alp = rc[0] / (rc[0] + dt), rc[1] / (rc[1] + dt), dt / (rc[2] + dt)
-    y = np.empty_like(x)
-    i1 = o1 = i2 = o2 = lp = 0.0
-    for n, v in enumerate(x.tolist()):
-        o1 = a90 * (o1 + v - i1)
-        i1 = v
-        o2 = a440 * (o2 + o1 - i2)
-        i2 = o1
-        lp += alp * (o2 - lp)
-        y[n] = lp
-    return y
+def cyc_console(stdout):
+    """The output stage cyc reported ("audio: 48000 Hz, famicom output stage")."""
+    m = re.search(r'^audio: \d+ Hz, (\w+) output stage', stdout, re.M)
+    if not m:
+        raise RuntimeError('cyc did not report its audio output stage')
+    return m[1]
 
 
 def write_wav(path, x, rate):
@@ -268,7 +260,7 @@ def write_wav(path, x, rate):
         w.writeframes((np.clip(x, -1, 1) * 32767).astype('<i2').tobytes())
 
 
-def pcm_report(args, out, cyc_wav, ref_wav, floor_wav):
+def pcm_report(args, out, cyc_wav, ref_wav, floor_wav, console):
     import nes_audio_ab as ab
     import numpy as np
     if args.pcm_window:
@@ -281,9 +273,10 @@ def pcm_report(args, out, cyc_wav, ref_wav, floor_wav):
     except RuntimeError as e:                 # nes_audio_ab: under 1 s of sound in both
         print(f'  pcm: not compared ({e})')
         return None
-    staged = out / 'nesref_console_stage.wav'
+    staged = out / f'nesref_{console}_stage.wav'
     x, rate = ab.load_wav(str(ref_wav))
-    write_wav(staged, console_output_stage(x, rate), rate)
+    write_wav(staged, console_output.stage(x, rate, console), rate)
+    result['console'] = console
     result['ab_console_stage'] = ab.compare(str(staged), str(cyc_wav), start_s=start_s, dur_s=dur_s)
     if floor_wav:
         result['floor'] = ab.compare(str(cyc_wav), str(floor_wav), start_s=start_s, dur_s=dur_s)
@@ -297,7 +290,7 @@ def pcm_report(args, out, cyc_wav, ref_wav, floor_wav):
     (out / 'abaudio.json').write_text(json.dumps(result, indent=2, default=float))
     ab.print_report(result['ab'], 'cyc vs nesref (Mesen)')
     t = result['ab_console_stage']
-    print(f"  with the runtime's output stage applied to nesref: timbre L1 {t['timbre']['band_l1']:.3f}, "
+    print(f"  with the runtime's {console} output stage applied to nesref: timbre L1 {t['timbre']['band_l1']:.3f}, "
           f"pitch {t['pitch']['logf_psd']['cents']:+.2f} cents, onsets "
           f"{(t['onset'] or {}).get('match_rate', 0) * 100:.0f}%")
     if 'floor' in result:
@@ -314,6 +307,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--cyc', type=Path, required=True, help='cyc_interp or a compiled FDS program')
     ap.add_argument('--cyc-args', default='')
+    ap.add_argument('--console', choices=('nes', 'famicom'),
+                    help="cyc's output stage (default: the board's, famicom for the FDS)")
     ap.add_argument('--nesref', type=Path, required=True)
     ap.add_argument('--core', type=Path)
     ap.add_argument('--image', type=Path, required=True)
@@ -349,8 +344,10 @@ def run(args):
     (out / 'script.txt').write_text(script)
 
     # cyc: frame log at Mesen's frame end, ring, PCM; and the self-floor
-    print(run_cyc(args, out, args.frames, ['--frame-log', 'cyc.frames', '--frame-log-at', 'mesen',
-                                           '--ring-out', 'cyc.ring', '--wav-out', 'cyc.wav'], 'cyc').strip())
+    stdout = run_cyc(args, out, args.frames, ['--frame-log', 'cyc.frames', '--frame-log-at', 'mesen',
+                                              '--ring-out', 'cyc.ring', '--wav-out', 'cyc.wav'], 'cyc')
+    print(stdout.strip())
+    console = cyc_console(stdout)
     floor = None
     if not args.no_floor:
         run_cyc(args, out, args.frames, ['--interp-only', '--wav-out', 'cyc_interp.wav'], 'cyc_interp')
@@ -435,7 +432,7 @@ def run(args):
         print(f"  frame {row['frame']}: " + ', '.join(f'{n} cyc={v[0]} mesen={v[1]}' for n, v in row['fields'].items()))
 
     # 4. PCM
-    pcm_report(args, out, out / 'cyc.wav', ref_wav, floor)
+    pcm_report(args, out, out / 'cyc.wav', ref_wav, floor, console)
     ok = not bad and not differ
     print('PASS' if ok else 'DIFFERENCES (see state.jsonl)')
     return 0 if ok else 1

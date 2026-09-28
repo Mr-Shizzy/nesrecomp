@@ -372,6 +372,10 @@ typedef struct {
     bool             fds;
     char             fds_image[512];
     char             fds_bios[512];
+    /* [game] console = "nes" | "famicom" | "default": the audio output stage
+     * the cycle host uses by default (runner/cyc cyc_set_console); 0 = the
+     * board's default, 1 = nes, 2 = famicom. */
+    uint8_t          console;
     /* [game] cycle_inline_jsr = ["E7BB:2", ...]: subroutines that take N
      * bytes of inline arguments after the JSR and return past them, so the
      * cycle-accurate discovery continues at JSR + 3 + N. */

@@ -29,6 +29,9 @@ extern const uint32_t cyc_native_cart_hash;
 extern const uint32_t cyc_native_fds_bios_crc32;
 extern const char    *cyc_native_fds_bios_path;
 extern const char    *cyc_native_fds_image_path;
+/* game.toml [game] console: the host's default output stage, a CycConsole
+ * (0 = the board's default, 1 = nes, 2 = famicom); --console overrides it. */
+extern const uint8_t  cyc_native_console;
 bool cyc_native_has(uint16_t addr);
 void cyc_native_run(void);
 
