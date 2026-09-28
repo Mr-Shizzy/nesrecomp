@@ -546,6 +546,86 @@ void nesrecomp_apply_video_settings(void) {
     if (s_hd_texture) SDL_SetTextureScaleMode(s_hd_texture, sm);
 }
 
+/* ---- HD pack output (startup + live switching) ---------------------------
+ * A game may pick the pack folder at runtime (nesrecomp_hdpack_set_dir, e.g.
+ * from a mods menu); the switch is applied between frames by
+ * video_apply_pending. Without a game choice the config / <exe>/hdpack
+ * rules apply as before. */
+static char s_hdpack_dir_override[1024];
+static int  s_hdpack_dir_overridden;
+static int  s_hdpack_switch_pending;
+
+static int hdpack_load_current(void) {
+    if (s_hdpack_dir_overridden)
+        return s_hdpack_dir_override[0]
+            ? hdpack_load(s_hdpack_dir_override, mapper_is_chr_ram(), g_render_width)
+            : -1;
+    return hdpack_load_from_config(mapper_is_chr_ram(), g_render_width);
+}
+
+/* After a successful hdpack load: allocate the HD buffer (+ texture when a
+ * renderer exists). size_window: size the window to the HD frame (startup
+ * only; a live switch keeps the player's window). */
+static void hd_output_enable(int size_window) {
+    s_hd_scale = hdpack_scale();
+    int hw = g_render_width * s_hd_scale, hh = 240 * s_hd_scale;
+    s_hd_buf = (uint32_t *)malloc((size_t)hw * hh * sizeof(uint32_t));
+    if (s_renderer)
+        s_hd_texture = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
+                                         SDL_TEXTUREACCESS_STREAMING, hw, hh);
+    if (!s_hd_buf || (s_renderer && !s_hd_texture)) {
+        fprintf(stderr, "[HDPack] HD texture/buffer alloc failed; using native output\n");
+        free(s_hd_buf); s_hd_buf = NULL;
+        if (s_hd_texture) { SDL_DestroyTexture(s_hd_texture); s_hd_texture = NULL; }
+        hdpack_unload();
+        s_hd_scale = 1;
+        return;
+    }
+    if (!s_renderer) return;
+    video_set_logical_size(hw, hh);
+    /* The HD logical size is larger than the native window, so integer
+     * scaling would round to 0 and draw nothing. Use fractional fit. */
+    SDL_RenderSetIntegerScale(s_renderer, SDL_FALSE);
+    if (g_nes_config.linear_filter)
+        SDL_SetTextureScaleMode(s_hd_texture, SDL_ScaleModeLinear);
+    if (size_window && !g_nes_config.fullscreen) {
+        int ww = hw, wh = hh;
+        SDL_DisplayMode dm;
+        if (SDL_GetCurrentDisplayMode(0, &dm) == 0) {
+            double sc = 1.0;
+            int maxw = (int)(dm.w * 0.9), maxh = (int)(dm.h * 0.9);
+            if (ww > maxw) sc = (double)maxw / ww;
+            if (wh * sc > maxh) sc = (double)maxh / wh;
+            ww = (int)(ww * sc); wh = (int)(wh * sc);
+        }
+        SDL_SetWindowSize(s_window, ww, wh);
+        SDL_SetWindowPosition(s_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    }
+    printf("[HDPack] HD output enabled: %dx%d (%dx)\n", hw, hh, s_hd_scale);
+}
+
+static void hd_output_disable(void) {
+    free(s_hd_buf); s_hd_buf = NULL;
+    if (s_hd_texture) { SDL_DestroyTexture(s_hd_texture); s_hd_texture = NULL; }
+    hdpack_unload();
+    s_hd_scale = 1;
+}
+
+void nesrecomp_hdpack_set_dir(const char *dir) {
+    snprintf(s_hdpack_dir_override, sizeof(s_hdpack_dir_override), "%s", dir ? dir : "");
+    s_hdpack_dir_overridden = dir != NULL;
+    s_hdpack_switch_pending = 1;
+}
+
+/* Apply a pending pack switch (between frames). */
+static void hdpack_apply_pending(void) {
+    if (!s_hdpack_switch_pending) return;
+    s_hdpack_switch_pending = 0;
+    hd_output_disable();
+    if (hdpack_load_current() == 0) hd_output_enable(0);
+    nesrecomp_apply_video_settings();
+}
+
 /* ---- Game image overlays (nes_runtime.h) ---------------------------------
  * RGBA images drawn over the presented game image at their own resolution,
  * placed in native NES pixels so they line up at any window size, with an
@@ -563,27 +643,38 @@ static Overlay s_overlays[MAX_OVERLAYS];
 static int     s_overlay_count;
 
 int nesrecomp_overlay_load_png(const char *path) {
-    if (s_overlay_count >= MAX_OVERLAYS) return 0;
+    int slot = 0;
+    while (slot < s_overlay_count && s_overlays[slot].rgba) slot++;   /* reuse freed */
+    if (slot >= MAX_OVERLAYS) return 0;
     int w, h, comp;
     unsigned char *rgba = stbi_load(path, &w, &h, &comp, 4);
     if (!rgba) return 0;
-    Overlay *o = &s_overlays[s_overlay_count++];
+    Overlay *o = &s_overlays[slot];
     memset(o, 0, sizeof(*o));
     o->rgba = rgba;
     o->w = w;
     o->h = h;
-    return s_overlay_count;
+    if (slot == s_overlay_count) s_overlay_count++;
+    return slot + 1;
+}
+
+void nesrecomp_overlay_free(int id) {
+    if (id < 1 || id > s_overlay_count) return;
+    Overlay *o = &s_overlays[id - 1];
+    if (o->tex) SDL_DestroyTexture(o->tex);
+    stbi_image_free(o->rgba);
+    memset(o, 0, sizeof(*o));
 }
 
 int nesrecomp_overlay_size(int id, int *w, int *h) {
-    if (id < 1 || id > s_overlay_count) return 0;
+    if (id < 1 || id > s_overlay_count || !s_overlays[id - 1].rgba) return 0;
     *w = s_overlays[id - 1].w;
     *h = s_overlays[id - 1].h;
     return 1;
 }
 
 void nesrecomp_overlay_place(int id, int visible, float x, float y, float w, float h) {
-    if (id < 1 || id > s_overlay_count) return;
+    if (id < 1 || id > s_overlay_count || !s_overlays[id - 1].rgba) return;
     Overlay *o = &s_overlays[id - 1];
     o->visible = visible;
     o->x = x; o->y = y; o->dw = w; o->dh = h;
@@ -624,6 +715,7 @@ void nesrecomp_set_audio_filter(NesAudioFilter fn) { s_audio_filter = fn; }
  * requests were applied immediately by nes_video and never reach here. */
 static void video_apply_pending(void) {
     int left, right;
+    hdpack_apply_pending();
     if (!nes_video_take_pending(&left, &right)) return;
     nes_video_commit(left, right);
     /* Stale narrower/wider content would sit misaligned under the new
@@ -2373,12 +2465,7 @@ int nesrecomp_runner_run(int argc, char *argv[]) {
         memset(s_framebuf, 0, VIDEO_BUF_BYTES);
         /* Load an HD pack here too (no texture), so scripted screenshots show
          * the HD output and packs can be tested headlessly. */
-        if (hdpack_load_from_config(mapper_is_chr_ram(), g_render_width) == 0) {
-            s_hd_scale = hdpack_scale();
-            s_hd_buf = (uint32_t *)malloc((size_t)g_render_width * s_hd_scale *
-                                          240 * s_hd_scale * sizeof(uint32_t));
-            if (!s_hd_buf) hdpack_unload();
-        }
+        if (hdpack_load_current() == 0) hd_output_enable(0);
         run_guest_execution();
         fprintf(stderr, "[Headless] game_run_main returned unexpectedly at frame %llu\n",
                 (unsigned long long)g_frame_count);
@@ -2510,40 +2597,7 @@ int nesrecomp_runner_run(int argc, char *argv[]) {
      * or config.ini [Display] HdPackEnabled/HdPackDir. When a pack loads, present
      * an HD-resolution texture and set the renderer logical size to match so the
      * upscaled art shows at full detail. Mirrors the SNES MSU-1 opt-in wiring. */
-    if (hdpack_load_from_config(mapper_is_chr_ram(), g_render_width) == 0) {
-        s_hd_scale = hdpack_scale();
-        int hw = g_render_width * s_hd_scale, hh = 240 * s_hd_scale;
-        s_hd_buf = (uint32_t *)malloc((size_t)hw * hh * sizeof(uint32_t));
-        s_hd_texture = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
-                                         SDL_TEXTUREACCESS_STREAMING, hw, hh);
-        if (s_hd_buf && s_hd_texture) {
-            video_set_logical_size(hw, hh);
-            /* The HD logical size is larger than the native window, so integer
-             * scaling would round to 0 and draw nothing. Use fractional fit and
-             * size the window to the HD frame (capped to ~90% of the desktop). */
-            SDL_RenderSetIntegerScale(s_renderer, SDL_FALSE);
-            if (!g_nes_config.fullscreen) {
-                int ww = hw, wh = hh;
-                SDL_DisplayMode dm;
-                if (SDL_GetCurrentDisplayMode(0, &dm) == 0) {
-                    double sc = 1.0;
-                    int maxw = (int)(dm.w * 0.9), maxh = (int)(dm.h * 0.9);
-                    if (ww > maxw) sc = (double)maxw / ww;
-                    if (wh * sc > maxh) sc = (double)maxh / wh;
-                    ww = (int)(ww * sc); wh = (int)(wh * sc);
-                }
-                SDL_SetWindowSize(s_window, ww, wh);
-                SDL_SetWindowPosition(s_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-            }
-            printf("[HDPack] HD output enabled: %dx%d (%dx)\n", hw, hh, s_hd_scale);
-        } else {
-            fprintf(stderr, "[HDPack] HD texture/buffer alloc failed; using native output\n");
-            free(s_hd_buf); s_hd_buf = NULL;
-            if (s_hd_texture) { SDL_DestroyTexture(s_hd_texture); s_hd_texture = NULL; }
-            hdpack_unload();
-            s_hd_scale = 1;
-        }
-    }
+    if (hdpack_load_current() == 0) hd_output_enable(1);
 
     memset(s_framebuf, 0, VIDEO_BUF_BYTES);
 

@@ -105,6 +105,11 @@ int nesrecomp_rumble(int player, uint16_t low, uint16_t high, uint32_t ms);
  * positions it in native NES pixels (the 256x240 picture), every frame it
  * should change; it stays as placed until placed again. */
 int  nesrecomp_overlay_load_png(const char *path);
+/* Release an overlay's image (its id is not reused). */
+void nesrecomp_overlay_free(int id);
+/* Use the HD pack in `dir` (a folder with hires.txt), switching live between
+ * frames; "" = no pack. NULL = back to the config / <exe>/hdpack default. */
+void nesrecomp_hdpack_set_dir(const char *dir);
 int  nesrecomp_overlay_size(int id, int *w, int *h);
 void nesrecomp_overlay_place(int id, int visible, float x, float y, float w, float h);
 /* Push a context marker into the dispatch ring (kind e.g. 'N'/'n' = NMI
