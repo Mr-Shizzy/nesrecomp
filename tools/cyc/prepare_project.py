@@ -6,6 +6,36 @@ import json
 from pathlib import Path
 import subprocess
 import tomllib
+import zlib
+
+# The one RAM Adapter BIOS with a recorded identity (common/nes_fds.h).
+FDS_BIOS = {'size': 8192, 'crc32': 0x5E607DCF}
+
+
+def is_fds_image(path):
+    head = path.read_bytes()[:16]
+    return head[:4] == b'FDS\x1a' or head[:15] == b'\x01*NINTENDO-HVC*' or path.suffix.lower() == '.qd'
+
+
+def check_fds_bios(bios):
+    """The BIOS must match the identity its <stem>.toml records (bios/disksys.toml:
+    size, crc32, sha1), else the known disksys.rom. Returns the files it read."""
+    data = bios.read_bytes()
+    identity, used = dict(FDS_BIOS), [bios]
+    toml = bios.with_suffix('.toml')
+    if toml.exists():
+        program = tomllib.loads(toml.read_text(encoding='utf-8')).get('program', {})
+        identity = {'size': int(program.get('size', FDS_BIOS['size'])),
+                    'crc32': int(str(program.get('crc32', FDS_BIOS['crc32'])), 0)}
+        if 'sha1' in program:
+            identity['sha1'] = str(program['sha1']).lower()
+        used.append(toml)
+    got = {'size': len(data), 'crc32': zlib.crc32(data), 'sha1': hashlib.sha1(data).hexdigest()}
+    bad = [k for k, v in identity.items() if got[k] != v]
+    if bad:
+        raise RuntimeError(f'{bios} is not the expected FDS BIOS ({", ".join(bad)} differ: '
+                           f'got {got}, expected {identity})')
+    return used
 
 
 def digest(path):
@@ -24,8 +54,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     for flag in ('rom', 'recompiler', 'out'):
         ap.add_argument('--' + flag, type=Path, required=True)
-    for flag in ('game', 'seeds'):
-        ap.add_argument('--' + flag, type=Path)
+    for flag in ('game', 'seeds', 'fds_bios'):
+        ap.add_argument('--' + flag.replace('_', '-'), dest=flag, type=Path)
     args = ap.parse_args()
     rom, compiler, out = (p.resolve() for p in (args.rom, args.recompiler, args.out))
     dependencies = [rom, compiler]
@@ -40,6 +70,18 @@ def main():
     if seeds:
         # A typo must not silently turn a profiled build into interpreter-only.
         dependencies.append(seeds)
+    # A Famicom Disk System title compiles the RAM Adapter BIOS; the image is
+    # the disk. The BIOS comes from --fds-bios, game.toml [fds] bios, or
+    # bios/disksys.rom beside the image, and must match its identity.
+    bios = args.fds_bios.resolve() if args.fds_bios else None
+    fds = is_fds_image(rom) or bool(game and config.get('game', {}).get('fds'))
+    if fds and bios is None:
+        configured = config.get('fds', {}).get('bios') if game else None
+        bios = (game.parent / configured).resolve() if configured else rom.parent / 'bios' / 'disksys.rom'
+    if fds:
+        if not bios.exists():
+            raise RuntimeError(f'FDS title without its BIOS: {bios} does not exist')
+        dependencies += check_fds_bios(bios)
     identity = {p.as_posix(): digest(p) for p in dependencies}
     identity['bridge'] = digest(Path(__file__))
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:20]
@@ -56,6 +98,8 @@ def main():
                    '--cycle-accurate', '--output-prefix', 'game']
         if seeds:
             command += ['--cycle-seed-file', str(seeds)]
+        if fds:
+            command += ['--fds-bios', str(bios)]
         run = subprocess.run(command, cwd=folder, capture_output=True, text=True,
                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         log = folder / 'codegen.log'

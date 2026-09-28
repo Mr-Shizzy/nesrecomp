@@ -2,7 +2,7 @@
 include_guard(GLOBAL)
 
 function(nesrecomp_add_cycle_game target)
-    cmake_parse_arguments(CYC "HEADLESS" "ROM;GAME_CONFIG;SEED_FILE;RECOMPILER" "" ${ARGN})
+    cmake_parse_arguments(CYC "HEADLESS" "ROM;GAME_CONFIG;SEED_FILE;RECOMPILER;BIOS" "" ${ARGN})
     if(CYC_UNPARSED_ARGUMENTS OR NOT CYC_ROM)
         message(FATAL_ERROR "nesrecomp_add_cycle_game requires ROM; unknown arguments: ${CYC_UNPARSED_ARGUMENTS}")
     endif()
@@ -51,6 +51,9 @@ function(nesrecomp_add_cycle_game target)
     endif()
     if(CYC_SEED_FILE)
         list(APPEND args --seeds "${CYC_SEED_FILE}")
+    endif()
+    if(CYC_BIOS)
+        list(APPEND args --fds-bios "${CYC_BIOS}")
     endif()
     execute_process(COMMAND "${Python3_EXECUTABLE}" "${root}/tools/cyc/prepare_project.py" ${args}
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE result
