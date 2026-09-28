@@ -97,6 +97,39 @@ static bool game_config_load_toml(GameConfig *cfg, const char *path) {
         }
         toml_datum_t sf = toml_string_in(game, "symbol_file");
         if (sf.ok) { strncpy(cfg->symbol_file, sf.u.s, sizeof(cfg->symbol_file) - 1); free(sf.u.s); }
+        toml_datum_t fds = toml_bool_in(game, "fds");
+        if (fds.ok) cfg->fds = fds.u.b;
+        toml_array_t *inl = toml_array_in(game, "cycle_inline_jsr");
+        for (int i = 0; inl && i < toml_array_nelem(inl) && cfg->cycle_inline_jsr_count < 64; i++) {
+            toml_datum_t d = toml_string_at(inl, i);
+            if (!d.ok) continue;
+            unsigned target, bytes;
+            if (sscanf(d.u.s, "%x:%u", &target, &bytes) == 2 && target <= 0xFFFF && bytes <= 255) {
+                cfg->cycle_inline_jsr[cfg->cycle_inline_jsr_count].target = (uint16_t)target;
+                cfg->cycle_inline_jsr[cfg->cycle_inline_jsr_count].bytes = (uint8_t)bytes;
+                cfg->cycle_inline_jsr_count++;
+            } else {
+                fprintf(stderr, "[GameConfig] Warning: cycle_inline_jsr entry '%s' is not ADDR:BYTES\n", d.u.s);
+            }
+            free(d.u.s);
+        }
+    }
+
+    /* [fds]: image and bios paths, relative to this file. */
+    toml_table_t *fds = toml_table_in(root, "fds");
+    if (fds) {
+        const char *slash = NULL;
+        for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') slash = p;
+        const char *keys[2] = { "image", "bios" };
+        char *dest[2] = { cfg->fds_image, cfg->fds_bios };
+        for (int i = 0; i < 2; ++i) {
+            toml_datum_t d = toml_string_in(fds, keys[i]);
+            if (!d.ok) continue;
+            bool absolute = d.u.s[0] == '/' || d.u.s[0] == '\\' || (d.u.s[0] && d.u.s[1] == ':');
+            int dir_len = (slash && !absolute) ? (int)(slash - path) + 1 : 0;
+            snprintf(dest[i], 512, "%.*s%s", dir_len, path, d.u.s);
+            free(d.u.s);
+        }
     }
 
     /* [mapper] */

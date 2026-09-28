@@ -360,6 +360,17 @@ typedef struct {
      * interpreter (written by the cycle-accurate host's --miss-log), used as
      * extra discovery entry points. Resolved relative to game.toml. */
     char             cycle_seed_file[512];
+    /* [game] fds = true and [fds] image / bios: a Famicom Disk System title.
+     * The paths are resolved relative to game.toml. The compiler builds the
+     * RAM Adapter's BIOS as the program's ROM (cycle backend only). */
+    bool             fds;
+    char             fds_image[512];
+    char             fds_bios[512];
+    /* [game] cycle_inline_jsr = ["E7BB:2", ...]: subroutines that take N
+     * bytes of inline arguments after the JSR and return past them, so the
+     * cycle-accurate discovery continues at JSR + 3 + N. */
+    struct { uint16_t target; uint8_t bytes; } cycle_inline_jsr[64];
+    int              cycle_inline_jsr_count;
 } GameConfig;
 
 /* Initialize to empty (no dispatch tables, prefix derived from ROM name) */
