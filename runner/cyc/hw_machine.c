@@ -26,6 +26,9 @@ int        hw_observe_line = -1;
 bool       hw_observe_hit;
 bool       hw_frame_end_hit;
 int        hw_dma_stalls;
+uint8_t    hw_code_watch[HW_CODE_BYTES];
+static void no_code_write(unsigned phys, uint8_t value) { (void)phys; (void)value; }
+void     (*hw_code_write)(unsigned phys, uint8_t value) = no_code_write;
 /* What CPU RAM holds at power-on (cyc_core.h). It belongs to the machine, not
  * to a host: every host that links this implementation needs it, and the
  * cosimulation harnesses in tools/cyc are hosts too. tric_core.cpp defines
@@ -246,7 +249,7 @@ void hw_bus_write(uint16_t addr, uint8_t value)
 {
     if (cyc_trace_enabled) cyc_trace_access(addr, value, true);
     if (hw_cart.mapper==5 && addr<0x4020) hw_cart_cpu_write(addr,value);
-    if (addr < 0x2000) hw.ram[addr & 0x7FF] = value;
+    if (addr < 0x2000) hw_code_store(&hw.ram[addr & 0x7FF], addr & 0x7FF, value);
     else if (addr < 0x4000) ppu_write(addr, value);
     else if (addr <= 0x4017) apu_write(addr, value);
     else if (addr >= 0x4020) hw_cart_cpu_write(addr, value);

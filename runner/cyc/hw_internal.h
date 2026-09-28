@@ -258,6 +258,22 @@ void hw_clock_run_ticks(int n);
 uint8_t hw_bus_read(uint16_t addr);
 void    hw_bus_write(uint16_t addr, uint8_t value);
 
+/* The code watch: RAM bytes that some compiled RAM view folds to a constant
+ * (cyc_ramview.c fills it). Indexed by physical RAM byte: CPU RAM 0-$7FF,
+ * then the FDS PRG RAM ($6000-$DFFF) from HW_CODE_PRG_RAM. Every store that
+ * reaches RAM (CPU writes; the DMAs only read) goes through hw_bus_write or
+ * fds_cpu_write, which call hw_code_write before a watched byte changes
+ * value. It observes and never alters what the machine does. */
+#define HW_CODE_PRG_RAM 0x800u
+#define HW_CODE_BYTES   (HW_CODE_PRG_RAM + 0x8000u)
+extern uint8_t hw_code_watch[HW_CODE_BYTES];
+extern void (*hw_code_write)(unsigned phys, uint8_t value);
+HW_ALWAYS_INLINE void hw_code_store(uint8_t *cell, unsigned phys, uint8_t value)
+{
+    if (hw_code_watch[phys] && *cell != value) hw_code_write(phys, value);
+    *cell = value;
+}
+
 /* ------------------------------------------------------------------------- */
 /* PPU (hw_ppu.c)                                                            */
 /* ------------------------------------------------------------------------- */

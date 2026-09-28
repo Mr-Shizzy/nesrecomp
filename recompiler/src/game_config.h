@@ -360,6 +360,12 @@ typedef struct {
      * interpreter (written by the cycle-accurate host's --miss-log), used as
      * extra discovery entry points. Resolved relative to game.toml. */
     char             cycle_seed_file[512];
+    /* [game] cycle_capture_file: RAM code that ran on the interpreter with no
+     * compiled view (the cycle host's --capture-log: instructions, chunk
+     * snapshots, bytes rewritten under a view). The compiler seeds disk files
+     * with it and compiles snapshots of code no disk file holds. Resolved
+     * relative to game.toml. */
+    char             cycle_capture_file[512];
     /* [game] fds = true and [fds] image / bios: a Famicom Disk System title.
      * The paths are resolved relative to game.toml. The compiler builds the
      * RAM Adapter's BIOS as the program's ROM (cycle backend only). */

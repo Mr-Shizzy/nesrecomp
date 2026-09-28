@@ -95,6 +95,15 @@ static bool game_config_load_toml(GameConfig *cfg, const char *path) {
             snprintf(cfg->cycle_seed_file, sizeof(cfg->cycle_seed_file), "%.*s%s", dir_len, path, csf.u.s);
             free(csf.u.s);
         }
+        toml_datum_t ccf = toml_string_in(game, "cycle_capture_file");
+        if (ccf.ok) {
+            const char *slash = NULL;
+            for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') slash = p;
+            bool absolute = ccf.u.s[0] == '/' || ccf.u.s[0] == '\\' || (ccf.u.s[0] && ccf.u.s[1] == ':');
+            int dir_len = (slash && !absolute) ? (int)(slash - path) + 1 : 0;
+            snprintf(cfg->cycle_capture_file, sizeof(cfg->cycle_capture_file), "%.*s%s", dir_len, path, ccf.u.s);
+            free(ccf.u.s);
+        }
         toml_datum_t sf = toml_string_in(game, "symbol_file");
         if (sf.ok) { strncpy(cfg->symbol_file, sf.u.s, sizeof(cfg->symbol_file) - 1); free(sf.u.s); }
         toml_datum_t fds = toml_bool_in(game, "fds");

@@ -334,7 +334,7 @@ static bool register_read(uint16_t addr, uint8_t *value)
 void fds_cpu_write(uint16_t addr, uint8_t value)
 {
     if (addr >= 0x6000) {
-        if (addr < 0xE000) hw_cart.wram[addr - 0x6000] = value;
+        if (addr < 0xE000) hw_code_store(&hw_cart.wram[addr - 0x6000], HW_CODE_PRG_RAM + (addr - 0x6000u), value);
         return;                                  /* $E000-$FFFF: the BIOS ROM */
     }
     if (addr <= 0x4092) register_write(addr, value);

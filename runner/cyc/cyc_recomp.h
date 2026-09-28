@@ -31,3 +31,31 @@ extern const char    *cyc_native_fds_bios_path;
 extern const char    *cyc_native_fds_image_path;
 bool cyc_native_has(uint16_t addr);
 void cyc_native_run(void);
+
+/* One compiled view of code in RAM: instructions compiled from one known
+ * image of RAM (a disk file at its load address, or a snapshot a run
+ * captured), grouped by static control flow within one 1KB chunk. The block
+ * folds its instructions' own bytes to constants and nothing else, so it is
+ * valid exactly while RAM holds those bytes: the dependency runs below. The
+ * scheduler (cyc_ramview.c) enters it only while that holds, keeping the
+ * answer current by watching writes to every byte a view folds; a block that
+ * stores to a byte some validated view folds returns (cyc_ram_code_dirty).
+ * Addresses are CPU RAM $0000-$07FF (not the stack page) and, on the FDS,
+ * PRG RAM $6000-$DFFF. */
+typedef struct {
+    void (*fn)(void);               /* runs from cpu.pc, one of entries */
+    const uint16_t *entries;        /* instruction starts, ascending */
+    const uint16_t *runs;           /* dependency: (address, length) pairs */
+    const uint8_t  *bytes;          /* what the runs must hold, concatenated */
+    uint16_t entry_count, run_count;
+    uint32_t hash;                  /* FNV-1a of addresses and bytes: the view's identity */
+    uint32_t image;                 /* FNV-1a of the image it was compiled from (base, bytes) */
+} CycRamView;
+
+/* Provided by the generated umbrella file (cyc_native_ram_view_count may be 0). */
+extern const CycRamView *const cyc_native_ram_views[];
+extern const uint32_t cyc_native_ram_view_count;
+/* Set by the write watch when a store changes a byte that a validated RAM
+ * view folds; cleared by the scheduler before it enters a view. Compiled RAM
+ * code tests it after every store that can reach such a byte. */
+extern uint8_t cyc_ram_code_dirty;

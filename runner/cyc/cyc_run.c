@@ -2,6 +2,7 @@
 #include "cyc_run.h"
 
 #include "cyc_core.h"
+#include "cyc_ramview.h"
 #include "cyc_recomp.h"
 #include "cyc_ring.h"
 #include "hw_internal.h"
@@ -40,6 +41,7 @@ void cyc_run_miss_decode(unsigned index, unsigned *bank, uint16_t *addr) {
 
 void cyc_run_power_on(void) {
     cpu_power_on();
+    cyc_ramview_power_on();
 }
 
 void (*cyc_run_observer)(void);
@@ -59,10 +61,12 @@ void cyc_run_frame(void) {
         if (hw_frame_end_hit) break;
         hw_frame_done = false;
     }
+    cyc_ramview_frame_end();
     cyc_ring_frame++;
 }
 
 static void run_until_stop(void) {
+    int view;
     while (!hw_frame_done) {
         if (cpu.jammed) {
             cpu_jam_cycle();
@@ -70,16 +74,25 @@ static void run_until_stop(void) {
             uint64_t before = cyc_cycle_count();
             cyc_native_run();
             cyc_run_native_cycles += cyc_cycle_count() - before;
+        } else if (cyc_run_native && (view = cyc_ramview_find(cpu.pc)) >= 0) {
+            /* Code in RAM that a compiled view covers, as RAM holds it now. */
+            uint64_t before = cyc_cycle_count();
+            cyc_ramview_run(view);
+            uint64_t took = cyc_cycle_count() - before;
+            cyc_run_native_cycles += took;
+            cyc_ramview_stats.native_cycles += took;
         } else {
             uint16_t pc = cpu.pc;
             uint64_t before = cyc_cycle_count();
+            bool ram = pc < 0x2000 || is_prg_ram(pc);
             if (cyc_run_miss && hw_prg_is_rom(pc)) cyc_run_miss[cyc_run_miss_index(pc)]++;
-            else if (cyc_run_ram_miss && (pc < 0x2000 || is_prg_ram(pc))) {
+            else if (cyc_run_ram_miss && ram) {
                 cyc_run_ram_miss[pc]++;
                 uint8_t op;
                 if (cyc_run_ram_opcodes && cyc_debug_peek(pc, &op))
                     cyc_run_ram_opcodes[(size_t)pc * 32 + (op >> 3)] |= (uint8_t)(1u << (op & 7));
             }
+            if (ram) cyc_ramview_interp(pc);
             cpu_interp_step();
             uint64_t took = cyc_cycle_count() - before;
             if (pc < 0x2000) cyc_run_interp_ram_cycles += took;

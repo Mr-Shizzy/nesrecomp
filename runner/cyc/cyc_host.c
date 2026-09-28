@@ -41,6 +41,11 @@
  *     --miss-log FILE      ROM addresses that began an instruction on the
  *                          interpreter, with counts, merged into FILE (use it
  *                          as game.toml [game] cycle_seed_file)
+ *     --capture-log FILE   RAM code that ran on the interpreter with no
+ *                          compiled view (instructions, chunk snapshots, bytes
+ *                          stores changed under a view), merged into FILE (use
+ *                          it as game.toml [game] cycle_capture_file)
+ *     --ram-view-list FILE the program's compiled RAM views and their state at exit
  *     --screenshot FILE    save the last frame as PNG
  *     --shot-every N       also save every Nth frame, as FILE with the frame
  *                          number before its extension (shot.png -> shot_00120.png)
@@ -84,6 +89,7 @@
 #include "../../common/nes_fds.h"
 
 #ifndef CYC_ORACLE
+#include "cyc_ramview.h"
 #include "cyc_recomp.h"
 #include "cyc_run.h"
 #endif
@@ -505,7 +511,7 @@ int main(int argc, char **argv) {
     long barcode_frame=0; unsigned barcode_speed=1000;
     long mem_frame = -1, shot_every = 0;
 #ifndef CYC_ORACLE
-    const char *miss_log = NULL;
+    const char *miss_log = NULL, *capture_log = NULL, *view_list = NULL;
 #endif
     int align = 0, scale = 3;
     long frames = 600, trace_frame = -1, state_frame = -1;
@@ -602,6 +608,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--fds-crc-check")) fds_opt.crc_check = true;
         else if (!strcmp(argv[i], "--fds-write-protect")) fds_opt.write_protect = true;
         else if (!strcmp(argv[i], "--miss-log") && i + 1 < argc) miss_log = argv[++i], headless = true;
+        else if (!strcmp(argv[i], "--capture-log") && i + 1 < argc) capture_log = argv[++i], headless = true;
+        else if (!strcmp(argv[i], "--ram-view-list") && i + 1 < argc) view_list = argv[++i], headless = true;
 #endif
         else if (argv[i][0] != '-' && !rom_path) rom_path = argv[i];
         else {
@@ -620,7 +628,8 @@ int main(int argc, char **argv) {
                         "       headless: [--frames N] [--acccoin] [--hash-out FILE]\n"
                         "       [--spam PAGE ROW] [--spam-seed N] [--spam-no-dpad] [--input FILE]\n"
                         "       [--trace-frame N --trace-out FILE] [--state-frame N --state-out FILE]\n"
-                        "       [--miss-log FILE] [--screenshot FILE [--shot-every N]] [--wav-out FILE]\n"
+                        "       [--miss-log FILE] [--capture-log FILE] [--ram-view-list FILE]\n"
+                        "       [--screenshot FILE [--shot-every N]] [--wav-out FILE]\n"
                         "       [--frame-log FILE [--frame-log-frames A:B]] [--ring-out FILE [--ring-frames A:B]]\n"
                         "       FDS: [--fds-bios FILE] [--fds-boot-disk none|SIDE] [--fds-event F:ACTION]\n"
                         "            [--fds-profile mesen|mesen2|hardware] [--fds-crc computed|mesen]\n"
@@ -715,6 +724,7 @@ int main(int argc, char **argv) {
         cyc_trace_enabled = true;
     }
 #ifndef CYC_ORACLE
+    if (capture_log) cyc_ramview_capture_start();
     if (miss_log) {
         cyc_run_miss = (uint32_t *)calloc(cyc_run_miss_slots(), sizeof(uint32_t));
         cyc_run_ram_miss = (uint32_t *)calloc(0x10000, sizeof(uint32_t));
@@ -816,16 +826,24 @@ int main(int argc, char **argv) {
            cyc_run_native ? "native" : "interp-only", frame, (unsigned long long)cycles,
            (unsigned long long)cyc_run_native_cycles, cycles ? 100.0 * (double)cyc_run_native_cycles / (double)cycles : 0.0,
            acccoin && drv.timed_out ? " TIMEOUT" : "");
-    /* Where the rest of the cycles went, so a coverage gap can be acted on:
-     * ROM cycles become native by seeding them, RAM cycles never can. */
+    /* Where the cycles went, so a coverage gap can be acted on: ROM cycles
+     * become native by seeding them (cycle_seed_file), RAM code by capturing
+     * it (cycle_capture_file) when no compiled view of it exists yet. */
+    const CycRamViewStats *rv = &cyc_ramview_stats;
+    if (cycles && (cyc_ramview_count() || rv->native_cycles)) {
+        double pct = 100.0 / (double)cycles;
+        uint64_t rom = cyc_run_native_cycles - rv->native_cycles;
+        printf("  native: ROM %llu (%.1f%%)  RAM views %llu (%.1f%%)\n", (unsigned long long)rom, (double)rom * pct,
+               (unsigned long long)rv->native_cycles, (double)rv->native_cycles * pct);
+    }
     if (cyc_run_native && cycles && cyc_run_native_cycles != cycles) {
         double pct = 100.0 / (double)cycles;
         printf("  interpreted: ROM %llu (%.1f%%, add to cycle_seed_file)"
-               "  RAM %llu (%.1f%%, written at run time, not compilable)",
+               "  RAM %llu (%.1f%%, CPU RAM code no view covers: --capture-log)",
                (unsigned long long)cyc_run_interp_rom_cycles, (double)cyc_run_interp_rom_cycles * pct,
                (unsigned long long)cyc_run_interp_ram_cycles, (double)cyc_run_interp_ram_cycles * pct);
         if (cyc_run_interp_prg_ram_cycles)
-            printf(cyc_is_fds() ? "  PRG RAM %llu (%.1f%%, loaded from disk)"
+            printf(cyc_is_fds() ? "  PRG RAM %llu (%.1f%%, disk code no view covers: --capture-log)"
                                 : "  $6000+ %llu (%.1f%%, cartridge RAM, or ROM below $8000)",
                    (unsigned long long)cyc_run_interp_prg_ram_cycles, (double)cyc_run_interp_prg_ram_cycles * pct);
         if (cyc_run_interp_other_cycles)
@@ -833,6 +851,12 @@ int main(int argc, char **argv) {
                    (double)cyc_run_interp_other_cycles * pct);
         printf("\n");
     }
+    if (cyc_native_ram_view_count)
+        printf("  ram views: %u compiled (%u usable here), %llu entries, %llu validated, %llu rejected, "
+               "%llu invalidated by stores, %llu block exits after code stores, %llu RAM instructions interpreted\n",
+               cyc_native_ram_view_count, cyc_ramview_count(), (unsigned long long)rv->entries,
+               (unsigned long long)rv->validated, (unsigned long long)rv->rejected, (unsigned long long)rv->invalidated,
+               (unsigned long long)rv->code_write_exits, (unsigned long long)rv->interp_insns);
     if (cyc_is_fds())
         printf("fds: side %d in the drive at exit, %u disk bytes written (in memory only), "
                "%llu FDS events recorded\n", cyc_fds_side(), cyc_fds_disk_writes(),
@@ -845,6 +869,18 @@ int main(int argc, char **argv) {
     }
     if (frame_log_f) fclose(frame_log_f);
     if (cyc_run_miss) write_miss_log(miss_log);
+    if (capture_log) {
+        long n = cyc_ramview_capture_write(capture_log, cyc_native_program_name);
+        if (n < 0) { fprintf(stderr, "cannot write %s\n", capture_log); return 2; }
+        printf("capture-log: %llu RAM instructions ran with no view this run; %ld instruction variants -> %s\n",
+               (unsigned long long)rv->interp_insns, n, capture_log);
+    }
+    if (view_list) {
+        FILE *vf = fopen(view_list, "w");
+        if (!vf) { fprintf(stderr, "cannot write %s\n", view_list); return 2; }
+        cyc_ramview_list(vf);
+        fclose(vf);
+    }
 #endif
 
     if (wav_f) {

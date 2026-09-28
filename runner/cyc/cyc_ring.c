@@ -28,10 +28,10 @@ void cyc_ring_push(CycRingKind kind, uint16_t addr, uint32_t value)
         ring = (CycRingEvent *)calloc(CYC_RING_CAPACITY, sizeof(CycRingEvent));
         if (!ring) return;
     }
-    if (kind == CYC_EV_FDS_READ && ring_total) {
+    if ((kind == CYC_EV_FDS_READ || kind == CYC_EV_RAM_INTERP) && ring_total) {
         CycRingEvent *last = &ring[(ring_total - 1) & (CYC_RING_CAPACITY - 1)];
-        if (last->kind == kind && last->addr == addr && last->value == value && last->frame == cyc_ring_frame &&
-            last->repeat != UINT32_MAX) {
+        if (last->kind == kind && (last->addr == addr || kind == CYC_EV_RAM_INTERP) && last->value == value &&
+            last->frame == cyc_ring_frame && last->repeat != UINT32_MAX) {
             last->repeat++;
             return;
         }
@@ -70,6 +70,7 @@ const char *cyc_ring_kind_name(unsigned kind)
     static const char *const NAMES[CYC_EV_KINDS] = {
         "none", "fds.read", "fds.write", "fds.irq", "fds.ack", "fds.byte", "fds.motor",
         "fds.rewind", "fds.ready", "fds.end", "fds.side", "fds.crc",
+        "view.valid", "view.reject", "view.invalid", "view.exit", "ram.interp", "view.frame",
     };
     return kind < CYC_EV_KINDS ? NAMES[kind] : "?";
 }
@@ -105,6 +106,12 @@ static void describe(FILE *f, const CycRingEvent *e)
         if (e->addr) fprintf(f, " (power-on)");
         break;
     case CYC_EV_FDS_CRC: fprintf(f, "%s acc=%04X", e->addr ? "bad" : "good", e->value & 0xFFFF); break;
+    case CYC_EV_VIEW_VALID: case CYC_EV_VIEW_REJECT: case CYC_EV_VIEW_EXIT:
+        fprintf(f, "pc=%04X view=%u", e->addr, e->value);
+        break;
+    case CYC_EV_VIEW_INVALID: fprintf(f, "store=%04X view=%u", e->addr, e->value); break;
+    case CYC_EV_RAM_INTERP: fprintf(f, "pc=%04X chunk=%04X", e->addr, e->value); break;
+    case CYC_EV_VIEW_FRAME: fprintf(f, "entries=%u validated=%u", e->value, e->addr); break;
     default: fprintf(f, "addr=%04X value=%08X", e->addr, e->value); break;
     }
 }

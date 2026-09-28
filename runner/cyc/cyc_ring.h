@@ -56,6 +56,23 @@ typedef enum {
     /* The CRC check the drive makes when $4025.4 rises in read mode.
      * addr = 1 bad / 0 good, value = the accumulator. */
     CYC_EV_FDS_CRC,
+    /* Compiled RAM views (cyc_ramview.c). value = view index (the host's
+     * --ram-view-list names them), addr = CPU address:
+     *   VIEW_VALID   a view was checked against RAM, matched, and entered at addr
+     *   VIEW_REJECT  a view was checked at addr and RAM no longer holds its bytes
+     *   VIEW_INVALID a store to addr changed a byte of a validated view
+     *   VIEW_EXIT    a view returned at addr because a store invalidated a view
+     *   RAM_INTERP   the interpreter ran a RAM instruction at addr that no view
+     *                covers; value = its 1KB chunk; the following ones in the
+     *                same chunk and frame fold into repeat
+     *   VIEW_FRAME   end of a frame in which RAM views ran: value = entries
+     *                into RAM views that frame, addr = views validated (<= $FFFF) */
+    CYC_EV_VIEW_VALID,
+    CYC_EV_VIEW_REJECT,
+    CYC_EV_VIEW_INVALID,
+    CYC_EV_VIEW_EXIT,
+    CYC_EV_RAM_INTERP,
+    CYC_EV_VIEW_FRAME,
     CYC_EV_KINDS
 } CycRingKind;
 
@@ -89,7 +106,8 @@ extern uint32_t cyc_ring_frame;
 
 void cyc_ring_reset(void);
 /* Record an event at the current cycle. Reads fold into an identical
- * previous read. */
+ * previous read, RAM_INTERP events into the previous one of the same chunk
+ * and frame. */
 void cyc_ring_push(CycRingKind kind, uint16_t addr, uint32_t value);
 
 /* Events ever recorded (the index the next one gets), and the oldest index

@@ -366,6 +366,8 @@ static void print_usage(void) {
         "                         runner/cyc) instead of the function-level output. Also\n"
         "                         enabled by game.toml [game] cycle_accurate = true.\n"
         "  --cycle-seed-file <path> Override the cycle seed file from game.toml.\n"
+        "  --cycle-capture-file <path> Override the cycle RAM capture file from game.toml\n"
+        "                         (the cycle host's --capture-log).\n"
         "  --emit-cycle-interpreter <path>\n"
         "                         Write the cycle-accurate 6502 interpreter generated\n"
         "                         from the same templates (runner/cyc/cpu6502_interp.c)\n"
@@ -650,7 +652,7 @@ int main(int argc, char *argv[]) {
     const char *game_path = NULL;
     const char *proposal_out = NULL;
     const char *prefix_override = NULL;
-    const char *cycle_seed_override = NULL;
+    const char *cycle_seed_override = NULL, *cycle_capture_override = NULL;
     bool cycle_accurate = false;
     const char *fds_info_path = NULL;
     const char *fds_stream_args[3] = { NULL, NULL, NULL };
@@ -692,6 +694,8 @@ int main(int argc, char *argv[]) {
             prefix_override = argv[++i];
         } else if (strcmp(argv[i], "--cycle-seed-file") == 0 && i+1 < argc) {
             cycle_seed_override = argv[++i];
+        } else if (strcmp(argv[i], "--cycle-capture-file") == 0 && i+1 < argc) {
+            cycle_capture_override = argv[++i];
         } else if (strcmp(argv[i], "--proposal-out") == 0 && i+1 < argc) {
             proposal_out = argv[++i];
         } else if (!rom_path) {
@@ -796,6 +800,13 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         strcpy(cfg.cycle_seed_file, cycle_seed_override);
+    }
+    if (cycle_capture_override) {
+        if (strlen(cycle_capture_override) >= sizeof(cfg.cycle_capture_file)) {
+            fprintf(stderr, "Error: cycle capture path is too long\n");
+            return 1;
+        }
+        strcpy(cfg.cycle_capture_file, cycle_capture_override);
     }
     if (fds_input) {
         if (!(cycle_accurate || cfg.cycle_accurate)) {
