@@ -15,6 +15,9 @@ project(nesrecomp_cyc C CXX)
 #                    recompiler and a synthetic self-modifying FDS program)
 #   cyc_fds_audio_test the FDS sound unit against an independent model and in
 #                    rendered PCM (builds synthetic FDS sound programs)
+#   cyc_fds_hle_plan_test the FDS HLE plan (common/nes_fds_hle.h)
+#   cyc_fds_hle_test the FDS HLE tier on the whole machine: auto swap and fast
+#                    load with a synthetic BIOS and multi-side disks
 # Game projects use runner/cyc/cyc.cmake instead.
 
 set(CMAKE_C_STANDARD 11)
@@ -36,13 +39,18 @@ target_include_directories(cyc_helper_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS}
 enable_testing()
 add_test(NAME cyc_helper_test COMMAND cyc_helper_test)
 
-add_executable(cyc_mapper_test mapper_test.c hw_mapper.c hw_fds.c hw_fds_audio.c cyc_ring.c cyc_trace.c vendor/emu2413/emu2413.c)
+add_executable(cyc_mapper_test mapper_test.c hw_mapper.c hw_fds.c hw_fds_audio.c hw_fds_hle.c cyc_ring.c cyc_trace.c vendor/emu2413/emu2413.c)
 target_link_libraries(cyc_mapper_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
 target_include_directories(cyc_mapper_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 add_test(NAME cyc_mapper_test COMMAND cyc_mapper_test)
 
 add_executable(cyc_cart_header_test cart_header_test.c)
 add_test(NAME cyc_cart_header_test COMMAND cyc_cart_header_test)
+
+# The FDS HLE tier's pure decisions (common/nes_fds_hle.h): request parsing,
+# source precedence, the plan over every request x capability, disk-ID matching.
+add_executable(cyc_fds_hle_plan_test fds_hle_plan_test.c)
+add_test(NAME cyc_fds_hle_plan_test COMMAND cyc_fds_hle_plan_test)
 
 # FDS media: the fixture generator runs first (FIXTURES_SETUP), then the test.
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
@@ -60,7 +68,7 @@ set_tests_properties(cyc_fds_disk_test PROPERTIES FIXTURES_REQUIRED fds_fixtures
 
 # FDS RAM Adapter and drive: register/IRQ/drive contracts, then a synthetic
 # BIOS (tools/cyc/fds_board_fixtures.py) run on the whole machine.
-add_executable(cyc_fds_board_test fds_board_test.c cpu6502.c cpu6502_interp.c hw_machine.c hw_mapper.c hw_fds.c hw_fds_audio.c
+add_executable(cyc_fds_board_test fds_board_test.c cpu6502.c cpu6502_interp.c hw_machine.c hw_mapper.c hw_fds.c hw_fds_audio.c hw_fds_hle.c
     vendor/emu2413/emu2413.c hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_ramview.c cyc_native_none.c)
 target_include_directories(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 target_link_libraries(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
@@ -111,3 +119,17 @@ add_test(NAME cyc_fds_audio_test
             --recompiler $<TARGET_FILE:NESRecomp> --interp $<TARGET_FILE:cyc_interp>
             --out ${CMAKE_CURRENT_BINARY_DIR}/fds_audio_test ${NESRECOMP_RAMVIEW_BUILD} --config "$<CONFIG>")
 set_tests_properties(cyc_fds_audio_test PROPERTIES TIMEOUT 1800)
+# The FDS HLE tier (hw_fds_hle.c, common/nes_fds_hle.h) on the whole machine: a
+# synthetic BIOS-and-game program whose disk-ID check anchor its identity file
+# declares (tools/cyc/fds_hle_fixtures.py), with 2- and 4-sided disks, one per
+# scenario (a program that asks the BIOS for side B, one that waits for the
+# player, one that never asks, a drive poller, ambiguous / unmatched / multi-disk
+# / already-inserted requests, a game that reads the header itself). Compiled
+# with and without game.toml [fds] hle; auto swap on and off at all four
+# alignments, native = --interp-only = cyc_interp, fast load hashing exactly as
+# its absence, config precedence, refusals, a host disk change, --realtime.
+add_test(NAME cyc_fds_hle_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/cyc/test_cyc_fds_hle.py
+            --recompiler $<TARGET_FILE:NESRecomp> --interp $<TARGET_FILE:cyc_interp>
+            --out ${CMAKE_CURRENT_BINARY_DIR}/fds_hle_test ${NESRECOMP_RAMVIEW_BUILD} --config "$<CONFIG>")
+set_tests_properties(cyc_fds_hle_test PROPERTIES TIMEOUT 1800)
