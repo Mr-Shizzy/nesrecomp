@@ -57,7 +57,7 @@ static NesFdsHleRequest capable(void)
 {
     NesFdsHleRequest r;
     memset(&r, 0, sizeof(r));
-    r.config = r.env = r.cli = r.live = NES_FDS_HLE_ASK_NONE;
+    r.config = r.user = r.env = r.cli = r.live = NES_FDS_HLE_ASK_NONE;
     r.is_fds = true;
     r.have_anchor = true;
     r.sides = 2;
@@ -68,31 +68,75 @@ static NesFdsHleRequest capable(void)
 static void precedence(void)
 {
     static const int8_t V[3] = { -1, 0, 1 };
-    static const char *const FROM[4] = { "game.toml", "env", "cli", "toggle" };
-    /* Every combination of the four sources for both axes: the last source that
-     * says something decides, and says where the decision came from. */
+    static const char *const FROM[5] = { "game.toml", "settings", "env", "cli", "toggle" };
+    /* Every combination of the five sources for both axes: the last source that
+     * says something decides, and says where the decision came from. The two
+     * axes read the sources in different orders so they are not in lockstep. */
     for (int c = 0; c < 3; ++c)
-        for (int e = 0; e < 3; ++e)
-            for (int l = 0; l < 3; ++l)
-                for (int t = 0; t < 3; ++t) {
-                    NesFdsHleRequest r = capable();
-                    r.config.auto_swap = V[c]; r.env.auto_swap = V[e]; r.cli.auto_swap = V[l]; r.live.auto_swap = V[t];
-                    r.config.fast_load = V[t]; r.env.fast_load = V[l]; r.cli.fast_load = V[e]; r.live.fast_load = V[c];
-                    NesFdsHlePlan p = nes_fds_hle_plan(r);
-                    int8_t s[4] = { V[c], V[e], V[l], V[t] }, f[4] = { V[t], V[l], V[e], V[c] };
-                    int8_t ws = 0, wf = 0;
-                    const char *fs = "default", *ff = "default";
-                    for (int i = 0; i < 4; ++i) {
-                        if (s[i] >= 0) { ws = s[i]; fs = FROM[i]; }
-                        if (f[i] >= 0) { wf = f[i]; ff = FROM[i]; }
+        for (int u = 0; u < 3; ++u)
+            for (int e = 0; e < 3; ++e)
+                for (int l = 0; l < 3; ++l)
+                    for (int t = 0; t < 3; ++t) {
+                        NesFdsHleRequest r = capable();
+                        int8_t s[5] = { V[c], V[u], V[e], V[l], V[t] }, f[5] = { V[t], V[l], V[c], V[u], V[e] };
+                        NesFdsHleAsk *src[5] = { &r.config, &r.user, &r.env, &r.cli, &r.live };
+                        for (int i = 0; i < 5; ++i) { src[i]->auto_swap = s[i]; src[i]->fast_load = f[i]; }
+                        NesFdsHlePlan p = nes_fds_hle_plan(r);
+                        int8_t ws = 0, wf = 0;
+                        const char *fs = "default", *ff = "default";
+                        for (int i = 0; i < 5; ++i) {
+                            if (s[i] >= 0) { ws = s[i]; fs = FROM[i]; }
+                            if (f[i] >= 0) { wf = f[i]; ff = FROM[i]; }
+                        }
+                        CHECK(p.auto_swap == (ws == 1));
+                        CHECK(p.fast_load == (wf == 1));
+                        CHECK(!strcmp(p.auto_swap_from, fs));
+                        CHECK(!strcmp(p.fast_load_from, ff));
+                        CHECK(!p.auto_swap_denied && !p.fast_load_denied);
+                        CHECK(p.observe);
                     }
-                    CHECK(p.auto_swap == (ws == 1));
-                    CHECK(p.fast_load == (wf == 1));
-                    CHECK(!strcmp(p.auto_swap_from, fs));
-                    CHECK(!strcmp(p.fast_load_from, ff));
-                    CHECK(!p.auto_swap_denied && !p.fast_load_denied);
-                    CHECK(p.observe);
-                }
+    /* A zeroed source is an explicit "off", not silence: hosts must say NONE. */
+    NesFdsHleRequest r = capable();
+    r.config.auto_swap = 1;
+    memset(&r.user, 0, sizeof(r.user));
+    NesFdsHlePlan p = nes_fds_hle_plan(r);
+    CHECK(!p.auto_swap && !strcmp(p.auto_swap_from, "settings"));
+}
+
+/* The axis table (nes_fds_hle_axes) names every axis the plan has, and its
+ * accessors read exactly the plan's and the ask's fields. */
+static void axes(void)
+{
+    unsigned n = 0;
+    const NesFdsHleAxis *ax = nes_fds_hle_axes(&n);
+    CHECK(n == 2);
+    CHECK(!strcmp(ax[0].word, "auto-swap") && !strcmp(ax[1].word, "fast-load"));
+    for (unsigned i = 0; i < n; ++i) {
+        CHECK(ax[i].key && *ax[i].key && ax[i].label && *ax[i].label && ax[i].help && *ax[i].help);
+        for (unsigned j = 0; j < i; ++j) CHECK(strcmp(ax[i].key, ax[j].key) && ax[i].ask != ax[j].ask);
+        /* the axis's word asks for exactly its own field */
+        NesFdsHleAsk a = ask(ax[i].word);
+        for (unsigned j = 0; j < n; ++j)
+            CHECK(*nes_fds_hle_ask_axis(&a, &ax[j]) == (i == j ? 1 : -1));
+        char no[32];
+        snprintf(no, sizeof(no), "no-%s", ax[i].word);
+        a = ask(no);
+        CHECK(*nes_fds_hle_ask_axis(&a, &ax[i]) == 0);
+    }
+    /* accessors against the named fields, on a granted and a refused plan */
+    NesFdsHleRequest r = capable();
+    r.cli.auto_swap = 1; r.live.fast_load = 1;
+    NesFdsHlePlan p = nes_fds_hle_plan(r);
+    CHECK(nes_fds_hle_plan_on(&p, &ax[0]) == p.auto_swap && nes_fds_hle_plan_on(&p, &ax[1]) == p.fast_load);
+    CHECK(!strcmp(nes_fds_hle_plan_from(&p, &ax[0]), "cli") && !strcmp(nes_fds_hle_plan_from(&p, &ax[1]), "toggle"));
+    r.have_anchor = false;
+    p = nes_fds_hle_plan(r);
+    CHECK(nes_fds_hle_plan_denied(&p, &ax[0]) && strstr(nes_fds_hle_plan_why(&p, &ax[0]), "anchor"));
+    CHECK(!nes_fds_hle_plan_denied(&p, &ax[1]) && !nes_fds_hle_plan_why(&p, &ax[1]));
+    /* writing through the ask accessor is the same as naming the field */
+    NesFdsHleAsk w = NES_FDS_HLE_ASK_NONE;
+    *nes_fds_hle_ask_axis(&w, &ax[1]) = 1;
+    CHECK(w.fast_load == 1 && w.auto_swap == -1);
 }
 
 static void matrix(void)
@@ -205,6 +249,7 @@ int main(void)
 {
     parsing();
     precedence();
+    axes();
     matrix();
     anchors();
     matching();

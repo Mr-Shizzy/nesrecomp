@@ -72,6 +72,9 @@ uint32_t cyc_fds_disk_writes(void);
 uint64_t cyc_fds_disk_generation(void);
 /* A side is in the drive and its motor runs: a disk operation is in progress. */
 bool     cyc_fds_motor_on(void);
+/* The drive is storing bytes on the side in it (a write run: write mode, motor
+ * on, not in transfer reset). A host swap waits for it to end. */
+bool     cyc_fds_writing(void);
 /* ---- the FDS HLE tier (hw_fds_hle.c; decisions: common/nes_fds_hle.h) ----
  *
  * Hosts decide the plan with nes_fds_hle_plan() and pass its answer here,

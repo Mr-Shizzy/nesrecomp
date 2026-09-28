@@ -7,7 +7,7 @@
  *     --align N            CPU/PPU clock alignment 0-3 (default 0)
  *     --ram-init MODE      CPU RAM at power-on: pattern (default, the reference
  *                          console's), zeros or ones (what other emulators do)
- *     --scale N            window scale (default 3)
+ *     --scale N            window scale (default: config.ini WindowScale, 3)
  *
  *   Headless (implied by any of the options below, or --headless):
  *     --frames N           frames to run (default 600; with --acccoin, a limit)
@@ -103,6 +103,34 @@
  *     --realtime           headless: pace frames at the console's 60.0988 Hz as
  *                          the window does (fast load then skips the pacing of
  *                          load frames), and report the wall-clock time of loads
+ *     --input lines `F DISK_ACTION` (or --fds-event F:action) press the Disk
+ *                          action (cyc_disk_action.h) before frame F: the first
+ *                          press shows the drive, presses while its toast is up
+ *                          swap to the next side. The toast's clock is emulated
+ *                          time headless.
+ *     --present-out FILE   headless: also save what a window would present
+ *     --present-every N    (the picture plus the toast), every Nth frame and the
+ *                          last, numbered like --shot-every. Never the picture
+ *                          --screenshot, --hash-out or --frame-log see.
+ *
+ *   Window (SDL builds without headless options): config.ini beside the
+ *   executable holds the settings and every binding (cyc_settings.h); a build
+ *   with recomp-ui opens its launcher first and has an in-game menu (the Menu
+ *   shortcut, Escape by default). NESRECOMP_NO_LAUNCHER=1 skips the launcher.
+ *     --virtual-pad FILE   attach an SDL virtual game controller and press its
+ *                          buttons on a schedule (`<frame> <names>`, SDL names
+ *                          joined by +, `-` releases): drives the controller
+ *                          bindings end to end without a physical pad
+ *     --present-out FILE / --present-every N   read back what the window
+ *                          presented (picture, toast, menu, dev bar)
+ *     --exit-after N       close the window after N frames
+ *     --config FILE        the settings file (default <exe dir>/config.ini)
+ *     --tcp PORT           the TCP debug server (cyc_tcp.h; also NESRECOMP_CYC_TCP,
+ *                          or debug.ini beside the executable: port 4370): input,
+ *                          the Disk action, the menu, screenshots of the picture
+ *                          and of the window, state, the event ring
+ *     --hidden             never show the window (with SDL_VIDEODRIVER=dummy,
+ *                          nothing reaches a desktop); drive it over --tcp
  *
  * Without CYC_WITH_SDL the host is always headless.
  */
@@ -115,6 +143,8 @@
 #include "cyc_trace.h"
 #include "../../common/nes_fds.h"
 #include "../../common/nes_fds_hle.h"
+#include "cyc_disk_action.h"
+#include "cyc_overlay.h"
 
 #ifndef CYC_ORACLE
 #include "cyc_ramview.h"
@@ -134,6 +164,8 @@
 
 #if defined(CYC_WITH_SDL) && !defined(CYC_ORACLE)
 int cyc_sdl_main(const char *title, int scale);
+void cyc_sdl_option(const char *name, const char *value);
+void cyc_sdl_present_out(const char *path, long every);
 #endif
 #ifdef CYC_ORACLE
 void cyc_oracle_address_report(void *file);
@@ -257,7 +289,7 @@ static uint8_t    input_held[2];
  * where nesref applies them ("f=F", after F retro_runs). */
 typedef struct {
     long frame;
-    char action;   /* 'E'ject, 'S'elect, 'I'nsert */
+    char action;   /* 'E'ject, 'S'elect, 'I'nsert, 'A': a press of the Disk action */
     int  side;     /* -1: the selected side */
 } DiskEvent;
 
@@ -282,7 +314,9 @@ static bool add_disk_event(long frame, const char *action, const char *arg) {
     if (!strcmp(action, "eject") || !strcmp(action, "DISK_EJECT")) e.action = 'E';
     else if (!strcmp(action, "insert") || !strcmp(action, "DISK_INSERT")) e.action = 'I';
     else if (!strcmp(action, "select") || !strcmp(action, "DISK_SELECT")) e.action = 'S';
+    else if (!strcmp(action, "action") || !strcmp(action, "DISK_ACTION")) e.action = 'A';
     else return false;
+    if (e.action == 'A' && arg && *arg) return false;
     if (arg && *arg && (e.side = parse_side(arg)) < 0) return false;
     if (e.action == 'S' && e.side < 0) return false;
     DiskEvent *grown = (DiskEvent *)realloc(disk_events, sizeof(DiskEvent) * (size_t)(disk_event_count + 1));
@@ -393,6 +427,7 @@ static void input_tick(long frame) {
 }
 
 #ifndef CYC_ORACLE
+static uint64_t emulated_ms(long frame);
 static void disk_tick(long frame) {
     while (disk_event_next < disk_event_count && disk_events[disk_event_next].frame <= frame) {
         const DiskEvent *e = &disk_events[disk_event_next++];
@@ -403,6 +438,8 @@ static void disk_tick(long frame) {
             if (ok) disk_selected = (unsigned)side;
             printf("[cyc disk] f=%ld eject%s\n", frame, ok ? "" : " (drive already empty)");
             if (ok) cyc_host_disk_ejected();
+        } else if (e->action == 'A') {
+            cyc_host_disk_press(emulated_ms(frame), frame);
         } else if (e->action == 'S') {
             ok = cyc_fds_side() < 0 && (unsigned)e->side < cyc_fds_side_count();
             if (ok) disk_selected = (unsigned)e->side;
@@ -514,27 +551,152 @@ static void hle_apply(bool banner) {
     cyc_fds_hle_configure(&hle_core);
     hle_describe();
     if (!banner) return;
-    /* Said whenever any source asked anything, so a refusal is never silent. */
+    /* Said whenever any source asked anything, so a refusal is never silent:
+     * "fds hle: auto-swap on (cli), fast-load REFUSED (env): why", one entry
+     * per axis of nes_fds_hle_axes(). */
     const NesFdsHlePlan *p = &hle_plan;
-    const NesFdsHleAsk *asks[4] = { &hle_req.config, &hle_req.env, &hle_req.cli, &hle_req.live };
+    NesFdsHleAsk *asks[5] = { &hle_req.config, &hle_req.user, &hle_req.env, &hle_req.cli, &hle_req.live };
+    unsigned n;
+    const NesFdsHleAxis *ax = nes_fds_hle_axes(&n);
     bool asked = false;
-    for (int i = 0; i < 4; ++i) asked |= asks[i]->auto_swap >= 0 || asks[i]->fast_load >= 0;
-    if (asked)
-        printf("fds hle: auto-swap %s (%s)%s%s, fast-load %s (%s)%s%s\n",
-               p->auto_swap ? "on" : p->auto_swap_denied ? "REFUSED" : "off", p->auto_swap_from,
-               p->auto_swap_denied ? ": " : "", p->auto_swap_denied ? p->auto_swap_why : "",
-               p->fast_load ? "on" : p->fast_load_denied ? "REFUSED" : "off", p->fast_load_from,
-               p->fast_load_denied ? ": " : "", p->fast_load_denied ? p->fast_load_why : "");
+    for (int i = 0; i < 5; ++i)
+        for (unsigned a = 0; a < n; ++a) asked |= *nes_fds_hle_ask_axis(asks[i], &ax[a]) >= 0;
+    if (!asked) return;
+    printf("fds hle:");
+    for (unsigned a = 0; a < n; ++a) {
+        bool denied = nes_fds_hle_plan_denied(p, &ax[a]);
+        printf("%s %s %s (%s)%s%s", a ? "," : "", ax[a].word,
+               nes_fds_hle_plan_on(p, &ax[a]) ? "on" : denied ? "REFUSED" : "off", nes_fds_hle_plan_from(p, &ax[a]),
+               denied ? ": " : "", denied ? nes_fds_hle_plan_why(p, &ax[a]) : "");
+    }
+    printf("\n");
 }
 
+/* A live toggle (a dev build's keys): flip axis `axis` of nes_fds_hle_axes(). */
 const char *cyc_host_hle_toggle(int axis) {
-    if (axis == 0) hle_req.live.auto_swap = hle_plan.auto_swap ? 0 : 1;
-    else hle_req.live.fast_load = hle_plan.fast_load ? 0 : 1;
+    unsigned n;
+    const NesFdsHleAxis *ax = nes_fds_hle_axes(&n);
+    if (axis < 0 || (unsigned)axis >= n) return hle_text;
+    *nes_fds_hle_ask_axis(&hle_req.live, &ax[axis]) = nes_fds_hle_plan_on(&hle_plan, &ax[axis]) ? 0 : 1;
     hle_apply(true);
     fflush(stdout);
     return hle_text;
 }
 
+/* The player's saved choice for an axis (the runtime menu): -1 says nothing. */
+void cyc_host_hle_user_set(unsigned axis, int8_t value) {
+    unsigned n;
+    const NesFdsHleAxis *ax = nes_fds_hle_axes(&n);
+    if (axis >= n) return;
+    *nes_fds_hle_ask_axis(&hle_req.user, &ax[axis]) = value < 0 ? -1 : value ? 1 : 0;
+    hle_apply(true);
+    fflush(stdout);
+}
+
+/* ---- the player's Disk action (cyc_disk_action.h) on the real drive ----
+ * Both the window's bindable Disk shortcut and the headless --input
+ * DISK_ACTION command drive this one state machine; it changes the drive
+ * only through cyc_fds_eject/insert (as --fds-event does), and an eject saves
+ * the disk like any other. */
+static CycDiskAction disk_action;
+static bool          disk_action_ready;
+static long          disk_action_frame_now;
+
+static int      dd_side(void *c) { (void)c; return cyc_fds_side(); }
+static unsigned dd_count(void *c) { (void)c; return cyc_is_fds() ? cyc_fds_side_count() : 0; }
+static bool     dd_motor(void *c) { (void)c; return cyc_fds_motor_on(); }
+static bool     dd_writing(void *c) { (void)c; return cyc_fds_writing(); }
+static const char *dd_save(void *c) { (void)c; return cyc_host_disk_save_status(); }
+static bool dd_eject(void *c)
+{
+    (void)c;
+    int side = cyc_fds_side();
+    if (!cyc_fds_eject()) return false;
+    disk_selected = (unsigned)side;
+    printf("[cyc disk] f=%ld eject side %d (disk action)\n", disk_action_frame_now, side);
+    fflush(stdout);
+    cyc_host_disk_ejected();
+    return true;
+}
+static bool dd_insert(void *c, unsigned side)
+{
+    (void)c;
+    if (!cyc_fds_insert(side)) return false;
+    disk_selected = side;
+    printf("[cyc disk] f=%ld insert side %u (disk action)\n", disk_action_frame_now, side);
+    fflush(stdout);
+    return true;
+}
+
+CycDiskAction *cyc_host_disk_action(void)
+{
+    if (!disk_action_ready) {
+        CycDiskDrive d = { NULL, dd_side, dd_count, dd_eject, dd_insert, dd_motor, dd_writing, dd_save };
+        cyc_disk_action_init(&disk_action, &d);
+        disk_action_ready = true;
+    }
+    return &disk_action;
+}
+
+CycDiskPress cyc_host_disk_press(uint64_t now_ms, long frame)
+{
+    disk_action_frame_now = frame;
+    CycDiskPress r = cyc_disk_action_press(cyc_host_disk_action(), now_ms, frame);
+    static const char *const WHAT[] = { "none", "peek", "swap", "next side", "insert" };
+    CycDiskToast t;
+    cyc_disk_action_toast(&disk_action, now_ms, &t);
+    printf("[cyc disk] f=%ld disk action: %s (side %d, target %d)\n", frame, WHAT[r], t.side, t.target);
+    fflush(stdout);
+    return r;
+}
+
+CycDiskPress cyc_host_disk_choose(uint64_t now_ms, long frame, unsigned side)
+{
+    disk_action_frame_now = frame;
+    return cyc_disk_action_choose(cyc_host_disk_action(), now_ms, frame, side);
+}
+
+bool cyc_host_disk_frame(uint64_t now_ms, long frame)
+{
+    if (!cyc_is_fds()) return false;
+    disk_action_frame_now = frame;
+    return cyc_disk_action_frame(cyc_host_disk_action(), now_ms, frame);
+}
+
+/* The dev build's F1/F3 and the menu's eject/insert rows change the drive
+ * directly; a swap the Disk action had scheduled gives way to them. */
+bool cyc_host_disk_eject(long frame)
+{
+    cyc_disk_action_cancel(cyc_host_disk_action());
+    disk_action_frame_now = frame;
+    int side = cyc_fds_side();
+    if (!cyc_fds_eject()) return false;
+    disk_selected = (unsigned)side;
+    printf("[cyc disk] f=%ld eject side %d\n", frame, side);
+    fflush(stdout);
+    cyc_host_disk_ejected();
+    return true;
+}
+
+bool cyc_host_disk_insert(long frame, unsigned side)
+{
+    cyc_disk_action_cancel(cyc_host_disk_action());
+    if (!cyc_fds_insert(side)) return false;
+    disk_selected = side;
+    printf("[cyc disk] f=%ld insert side %u\n", frame, side);
+    fflush(stdout);
+    return true;
+}
+
+unsigned cyc_host_disk_selected(void) { return disk_selected; }
+void     cyc_host_disk_select(unsigned side) { if (side < cyc_fds_side_count()) disk_selected = side; }
+
+/* Headless runs use emulated time for the toast's clock, so a scripted
+ * DISK_ACTION run is the same at any speed. */
+static uint64_t emulated_ms(long frame) { return (uint64_t)((double)frame * 1000.0 / 60.0988); }
+
+const NesFdsHlePlan    *cyc_host_hle_plan(void) { return &hle_plan; }
+const NesFdsHleRequest *cyc_host_hle_request(void) { return &hle_req; }
 const char *cyc_host_hle_text(void) { return hle_text; }
 
 /* --realtime and the window: the console's frame rate, and fast load. */
@@ -650,6 +812,27 @@ static void numbered_path(char *buf, size_t n, const char *base, long frame) {
     snprintf(buf, n, "%.*s_%05ld%s", stem, base, frame, dot ? dot : ".png");
 }
 
+#ifndef CYC_ORACLE
+/* --present-out: what a window would present after frame `frame` -- the
+ * picture, then the Disk action's toast when it is up at now_ms -- drawn in a
+ * copy, never in the machine's picture. */
+static void write_presentation(const char *base, long frame, uint64_t now_ms, bool numbered)
+{
+    static uint32_t buf[256 * 240];
+    memcpy(buf, cyc_frame_argb(), sizeof(buf));
+    CycDiskToast t;
+    if (cyc_is_fds() && cyc_disk_action_toast(cyc_host_disk_action(), now_ms, &t)) {
+        char title[64], body[256];
+        cyc_disk_toast_text(&t, "DISK", title, sizeof(title), body, sizeof(body));
+        cyc_overlay_toast(buf, 256, 240, title, body);
+    }
+    char path[1024];
+    if (numbered) numbered_path(path, sizeof(path), base, frame);
+    else snprintf(path, sizeof(path), "%s", base);
+    if (!cyc_write_png(path, buf, 256, 240)) fprintf(stderr, "cannot write %s\n", path);
+}
+#endif
+
 #include "cyc_save.inc"
 #ifndef CYC_ORACLE
 #include "cyc_fds_save.inc"
@@ -664,7 +847,7 @@ int main(int argc, char **argv) {
 #ifndef CYC_ORACLE
     const char *miss_log = NULL, *capture_log = NULL, *view_list = NULL;
 #endif
-    int align = 0, scale = 3;
+    int align = 0, scale = 0;          /* 0: the window scale in config.ini */
     CycConsole console = CYC_CONSOLE_DEFAULT;
     bool console_given = false;
     long frames = 600, trace_frame = -1, state_frame = -1;
@@ -676,7 +859,10 @@ int main(int argc, char **argv) {
 #ifndef CYC_ORACLE
     const char *ring_out = NULL, *frame_log = NULL, *fds_bios = NULL;
     const char *fds_import_ips = NULL, *fds_export_ips = NULL, *fds_hle_arg = NULL;
+    const char *present_out = NULL;
+    long present_every = 0;
     bool frame_log_mesen = false, no_save = false, realtime = false;
+    NesFdsHleAsk saved_hle = NES_FDS_HLE_ASK_NONE;
     long ring_first = 0, ring_last = -1, log_first = 0, log_last = -1;
     CycFdsOptions fds_opt;
     cyc_fds_default_options(&fds_opt);
@@ -780,6 +966,20 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--no-save")) no_save = true;
         else if (!strcmp(argv[i], "--fds-hle") && i + 1 < argc) fds_hle_arg = argv[++i];
         else if (!strcmp(argv[i], "--realtime")) realtime = headless = true;
+        else if (!strcmp(argv[i], "--present-out") && i + 1 < argc) present_out = argv[++i];
+        else if (!strcmp(argv[i], "--present-every") && i + 1 < argc) present_every = atol(argv[++i]);
+        else if ((!strcmp(argv[i], "--virtual-pad") || !strcmp(argv[i], "--exit-after") ||
+                  !strcmp(argv[i], "--config") || !strcmp(argv[i], "--tcp")) && i + 1 < argc) {
+#if defined(CYC_WITH_SDL)
+            cyc_sdl_option(argv[i], argv[i + 1]);
+#endif
+            ++i;
+        }
+        else if (!strcmp(argv[i], "--hidden")) {
+#if defined(CYC_WITH_SDL)
+            cyc_sdl_option(argv[i], "");
+#endif
+        }
         else if (!strcmp(argv[i], "--miss-log") && i + 1 < argc) miss_log = argv[++i], headless = true;
         else if (!strcmp(argv[i], "--capture-log") && i + 1 < argc) capture_log = argv[++i], headless = true;
         else if (!strcmp(argv[i], "--ram-view-list") && i + 1 < argc) view_list = argv[++i], headless = true;
@@ -792,6 +992,10 @@ int main(int argc, char **argv) {
     }
 #ifndef CYC_ORACLE
     if (!rom_path) rom_path = cyc_native_fds_image_path;   /* game.toml [fds] image */
+#if defined(CYC_WITH_SDL)
+    /* The window: its settings, and recomp-ui's launcher where the build has it. */
+    if (!headless && cyc_sdl_prelaunch(&rom_path, &saved_hle)) return 0;
+#endif
 #endif
     if (!rom_path) {
         fprintf(stderr, "usage: %s <rom.nes | disk.fds> [--interp-only] [--align N] [--scale N]\n"
@@ -882,6 +1086,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "--fds-hle: unknown word at '%s' (auto-swap, fast-load, all, off)\n", bad);
             return 2;
         }
+        hle_req.user = saved_hle;              /* the window's config.ini [FDS]; headless: none */
         hle_req.live = NES_FDS_HLE_ASK_NONE;
         NesFdsHleAnchor anchor = hle_anchor(bios_path, crc);
         hle_core.id_check = anchor.id_check;
@@ -936,6 +1141,7 @@ int main(int argc, char **argv) {
 
 #if defined(CYC_WITH_SDL) && !defined(CYC_ORACLE)
     if (!headless) {
+        cyc_sdl_present_out(present_out, present_every);
         int result=cyc_sdl_main(cyc_native_program_name ? cyc_native_program_name : rom_path, scale);
         bool disk_ok=fds_save_flush(CYC_FDS_SAVE_EXIT);
         return save_write(save_file,0) && save_write(datach_save,1) && disk_ok?result:2;
@@ -1014,6 +1220,7 @@ int main(int argc, char **argv) {
         cyc_oracle_run_frame();
 #else
         if (disk_event_count) disk_tick(frame);
+        cyc_host_disk_frame(emulated_ms(frame), frame);
         observe_frame = frame;
         double frame_start = wall_seconds();
         cyc_run_frame();
@@ -1051,6 +1258,10 @@ int main(int argc, char **argv) {
                 fclose(sf);
             }
         }
+#ifndef CYC_ORACLE
+        if (present_out && present_every > 0 && frame % present_every == 0)
+            write_presentation(present_out, frame, emulated_ms(frame + 1), true);
+#endif
         if (screenshot && shot_every > 0 && frame % shot_every == 0) {
             char path[1024];
             numbered_path(path, sizeof path, screenshot, frame);
@@ -1156,6 +1367,9 @@ int main(int argc, char **argv) {
     if (trace_f) fclose(trace_f);
     if (screenshot && !cyc_write_png(screenshot, cyc_frame_argb(), 256, 240))
         fprintf(stderr, "cannot write %s\n", screenshot);
+#ifndef CYC_ORACLE
+    if (present_out) write_presentation(present_out, frame - 1, emulated_ms(frame), false);
+#endif
 
 #ifndef CYC_ORACLE
     if (!disk_ok) return 2;

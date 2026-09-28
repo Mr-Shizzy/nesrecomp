@@ -7,6 +7,8 @@ set(NESRECOMP_CYCLE_CAPTURES "" CACHE FILEPATH "Cycle RAM capture file override 
 set(NESRECOMP_HOST_COMPILER "" CACHE FILEPATH "Prebuilt host NESRecomp (optional)")
 set(NESRECOMP_FDS_BIOS "" CACHE FILEPATH "FDS BIOS (optional; default game.toml [fds] bios)")
 option(NESRECOMP_HEADLESS "Build without SDL window/audio support" OFF)
+# NESRECOMP_RECOMP_UI=<recomp-ui checkout> adds the launcher and in-game menu;
+# NESRECOMP_DEV_UI=ON the developer surface (runner/cyc/cyc.cmake).
 include("${CMAKE_CURRENT_LIST_DIR}/../project.cmake")
 set(options "")
 if(NESRECOMP_HEADLESS)
