@@ -29,6 +29,9 @@ extern const uint32_t cyc_native_cart_hash;
 extern const uint32_t cyc_native_fds_bios_crc32;
 extern const char    *cyc_native_fds_bios_path;
 extern const char    *cyc_native_fds_image_path;
+/* game.toml [fds] hle: the HLE axes the program asks for by default (a list
+ * common/nes_fds_hle.h parses), or NULL. */
+extern const char    *cyc_native_fds_hle;
 bool cyc_native_has(uint16_t addr);
 void cyc_native_run(void);
 

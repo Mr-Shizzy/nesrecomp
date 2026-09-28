@@ -372,6 +372,9 @@ typedef struct {
     bool             fds;
     char             fds_image[512];
     char             fds_bios[512];
+    /* [fds] hle = "auto-swap,fast-load": the HLE axes the program asks for by
+     * default (common/nes_fds_hle.h); empty = none. */
+    char             fds_hle[128];
     /* [game] cycle_inline_jsr = ["E7BB:2", ...]: subroutines that take N
      * bytes of inline arguments after the JSR and return past them, so the
      * cycle-accurate discovery continues at JSR + 3 + N. */

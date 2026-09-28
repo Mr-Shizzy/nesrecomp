@@ -1484,6 +1484,8 @@ static void emit_umbrella(const Program *p, const char *path, const char *prefix
     emit_c_string(f, fds ? fds->bios_path : NULL);
     fputs(";\nconst char *cyc_native_fds_image_path = ", f);
     emit_c_string(f, fds ? fds->image_path : NULL);
+    fputs(";\nconst char *cyc_native_fds_hle = ", f);
+    emit_c_string(f, fds ? fds->hle : NULL);
     fputs(";\n", f);
     for (uint32_t i = 0; i < p->prg_len; i++) prg_hash = (prg_hash ^ p->rom->prg_data[i]) * 16777619u;
     fprintf(f,

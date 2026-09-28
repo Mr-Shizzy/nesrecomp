@@ -63,7 +63,10 @@ void cyc_run_frame(void) {
         hw_frame_done = false;
     }
     cyc_ramview_frame_end();
-    if (cyc_is_fds()) fds_audio_frame_end();
+    if (cyc_is_fds()) {
+        fds_audio_frame_end();
+        fds_hle_frame_end();
+    }
     cyc_ring_frame++;
 }
 

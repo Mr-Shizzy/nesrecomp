@@ -139,6 +139,11 @@ static bool game_config_load_toml(GameConfig *cfg, const char *path) {
             snprintf(dest[i], 512, "%.*s%s", dir_len, path, d.u.s);
             free(d.u.s);
         }
+        toml_datum_t hle = toml_string_in(fds, "hle");
+        if (hle.ok) {
+            snprintf(cfg->fds_hle, sizeof(cfg->fds_hle), "%s", hle.u.s);
+            free(hle.u.s);
+        }
     }
 
     /* [mapper] */

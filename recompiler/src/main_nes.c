@@ -24,6 +24,7 @@
 #include "cyc_codegen.h"
 #include "toml.h"
 #include "../../common/nes_fds.h"
+#include "../../common/nes_fds_hle.h"
 
 static bool file_exists(const char *path) {
     FILE *f = fopen(path, "r");
@@ -633,6 +634,16 @@ static bool fds_program(const char *image_path, const char *bios_arg, const Game
     rom->reset_vector = (uint16_t)(bios[0x1FFC] | bios[0x1FFD] << 8);
     rom->irq_vector = (uint16_t)(bios[0x1FFE] | bios[0x1FFF] << 8);
     memset(prog, 0, sizeof(*prog));
+    NesFdsHleAsk ask;
+    const char *bad = NULL;
+    if (!nes_fds_hle_parse(cfg->fds_hle, &ask, &bad)) {
+        fprintf(stderr, "[NESRecomp] game.toml [fds] hle: unknown word at '%s' (auto-swap, fast-load, all, off, "
+                        "no-auto-swap, no-fast-load)\n", bad);
+        free(bios);
+        return false;
+    }
+    snprintf(prog->hle, sizeof(prog->hle), "%s", cfg->fds_hle);
+    if (cfg->fds_hle[0]) printf("[NESRecomp] FDS HLE default: %s\n", cfg->fds_hle);
     prog->bios_crc32 = crc;
     absolute_path(bios_path, prog->bios_path, sizeof(prog->bios_path));
     absolute_path(image_path, prog->image_path, sizeof(prog->image_path));

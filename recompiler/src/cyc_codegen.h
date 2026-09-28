@@ -22,6 +22,7 @@ typedef struct {
     uint32_t bios_crc32;
     char     bios_path[1024];    /* absolute */
     char     image_path[1024];   /* absolute, or empty */
+    char     hle[128];           /* game.toml [fds] hle, checked; empty = none */
 } CycFdsProgram;
 
 bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *output_prefix,

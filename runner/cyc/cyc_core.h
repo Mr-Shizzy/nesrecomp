@@ -72,6 +72,34 @@ uint32_t cyc_fds_disk_writes(void);
 uint64_t cyc_fds_disk_generation(void);
 /* A side is in the drive and its motor runs: a disk operation is in progress. */
 bool     cyc_fds_motor_on(void);
+/* ---- the FDS HLE tier (hw_fds_hle.c; decisions: common/nes_fds_hle.h) ----
+ *
+ * Hosts decide the plan with nes_fds_hle_plan() and pass its answer here,
+ * after cyc_load_fds() and before power-on, and again between frames when a
+ * live toggle changes it. id_check / id_pointer are the BIOS's disk-ID check
+ * anchor (0: none known, which also turns the always-on disk-ID request
+ * observation off). With auto_swap and fast_load off the machine runs exactly
+ * as it does without the tier. */
+typedef struct {
+    bool     auto_swap, fast_load;
+    uint16_t id_check;
+    uint8_t  id_pointer;
+} CycFdsHle;
+void cyc_fds_hle_configure(const CycFdsHle *hle);
+/* The frame just run was part of a disk load (a load span: data moving, the
+ * head rewinding or spinning up, or the BIOS about to start the drive). A
+ * host with fast load on runs such frames unpaced. */
+bool cyc_fds_hle_loading(void);
+typedef struct {
+    bool     auto_swap, fast_load, observing, loading;
+    int      swap_target;          /* the side an auto swap is putting in, or -1 */
+    uint32_t swaps;                /* sides changed by auto swap */
+    uint32_t bumps;                /* the same side put back after a wait (no request yet) */
+    uint32_t spans, requests;      /* load spans; disk-ID requests seen */
+} CycFdsHleStatus;
+void cyc_fds_hle_status(CycFdsHleStatus *out);
+/* fds.side event sources */
+enum { CYC_FDS_SIDE_HOST = 0, CYC_FDS_SIDE_POWER_ON = 1, CYC_FDS_SIDE_HLE = 2 };
 /* The sound unit's state in Mesen's field order and widths (FdsAudio,
  * BaseFdsChannel, ModChannel StreamState), so it compares byte for byte with
  * the FdsAudio snapshot in a nesref savestate (tools/cyc/fds_audio_gates.py).

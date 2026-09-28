@@ -10,6 +10,7 @@ const uint32_t cyc_native_cart_hash = 0;
 const uint32_t cyc_native_fds_bios_crc32 = 0;
 const char    *cyc_native_fds_bios_path = NULL;
 const char    *cyc_native_fds_image_path = NULL;
+const char    *cyc_native_fds_hle = NULL;
 const CycRamView *const cyc_native_ram_views[1] = { NULL };
 const uint32_t cyc_native_ram_view_count = 0;
 

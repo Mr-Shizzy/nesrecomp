@@ -88,6 +88,14 @@
  *                          turns that off.
  *     --fds-import-ips FILE  start from a Mesen/nesref disk save (<stem>.ips)
  *     --fds-export-ips FILE  also write the disk as a Mesen .ips at each save
+ *     --fds-hle LIST       the HLE tier (common/nes_fds_hle.h): auto-swap,
+ *                          fast-load, all, off, no-auto-swap, no-fast-load.
+ *                          Overrides NESRECOMP_FDS_HLE, which overrides
+ *                          game.toml [fds] hle; default off. An axis the BIOS or
+ *                          image cannot support is refused with the reason.
+ *     --realtime           headless: pace frames at the console's 60.0988 Hz as
+ *                          the window does (fast load then skips the pacing of
+ *                          load frames), and report the wall-clock time of loads
  *
  * Without CYC_WITH_SDL the host is always headless.
  */
@@ -99,6 +107,7 @@
 #include "cyc_ring.h"
 #include "cyc_trace.h"
 #include "../../common/nes_fds.h"
+#include "../../common/nes_fds_hle.h"
 
 #ifndef CYC_ORACLE
 #include "cyc_ramview.h"
@@ -109,6 +118,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #if defined(CYC_WITH_SDL) && !defined(CYC_ORACLE)
 int cyc_sdl_main(const char *title, int scale);
@@ -439,6 +454,113 @@ static uint8_t *load_bios(const char *explicit_path, const char *image_path, siz
     return NULL;
 }
 
+/* ---- the FDS HLE tier: requests, capability facts, the plan ---- */
+static NesFdsHleRequest hle_req;
+static NesFdsHlePlan    hle_plan;
+static CycFdsHle        hle_core;
+static char             hle_text[48];
+
+/* The disk-ID check anchor of the BIOS: the built-in one for a known image
+ * (verified against its code), else hle_id_check / hle_id_pointer in the
+ * BIOS's identity file (<bios>.toml), which must name a JSR in the BIOS. */
+static NesFdsHleAnchor hle_anchor(const char *bios_path, uint32_t bios_crc) {
+    NesFdsHleAnchor a = nes_fds_hle_builtin_anchor(bios_crc);
+    if (!a.id_check) {
+        char toml[1024];
+        snprintf(toml, sizeof(toml), "%s", bios_path);
+        char *dot = strrchr(toml, '.'), *slash = strrchr(toml, '/'), *bslash = strrchr(toml, '\\');
+        if (dot && dot > slash && dot > bslash) *dot = 0;
+        strncat(toml, ".toml", sizeof(toml) - strlen(toml) - 1);
+        FILE *f = fopen(toml, "r");
+        if (f) {
+            char line[256];
+            unsigned v;
+            while (fgets(line, sizeof(line), f)) {
+                if (sscanf(line, " hle_id_check = \"0x%x\"", &v) == 1 || sscanf(line, " hle_id_check = 0x%x", &v) == 1)
+                    a.id_check = (uint16_t)v;
+                else if (sscanf(line, " hle_id_pointer = \"0x%x\"", &v) == 1 ||
+                         sscanf(line, " hle_id_pointer = 0x%x", &v) == 1)
+                    a.id_pointer = (uint8_t)v;
+            }
+            fclose(f);
+        }
+        if (a.id_check) { a.check_len = 1; a.check[0] = 0x20; }   /* a JSR */
+    }
+    uint8_t b;
+    if (a.id_check && a.id_check < 0xE000) a.id_check = 0;
+    for (unsigned i = 0; a.id_check && i < a.check_len; ++i)
+        if (!cyc_debug_peek((uint16_t)(a.id_check + i), &b) || b != a.check[i]) a.id_check = 0;
+    return a;
+}
+
+static void hle_describe(void) {
+    /* The drive bar's font: capitals, digits, space and -.:/()= */
+    const NesFdsHlePlan *p = &hle_plan;
+    snprintf(hle_text, sizeof(hle_text), "HLE%s%s%s%s", p->auto_swap ? " SWAP" : "", p->fast_load ? " FAST" : "",
+             !p->auto_swap && !p->fast_load ? " OFF" : "", p->auto_swap_denied ? " (NO SWAP)" : "");
+}
+
+static void hle_apply(bool banner) {
+    hle_plan = nes_fds_hle_plan(hle_req);
+    hle_core.auto_swap = hle_plan.auto_swap;
+    hle_core.fast_load = hle_plan.fast_load;
+    cyc_fds_hle_configure(&hle_core);
+    hle_describe();
+    if (!banner) return;
+    /* Said whenever any source asked anything, so a refusal is never silent. */
+    const NesFdsHlePlan *p = &hle_plan;
+    const NesFdsHleAsk *asks[4] = { &hle_req.config, &hle_req.env, &hle_req.cli, &hle_req.live };
+    bool asked = false;
+    for (int i = 0; i < 4; ++i) asked |= asks[i]->auto_swap >= 0 || asks[i]->fast_load >= 0;
+    if (asked)
+        printf("fds hle: auto-swap %s (%s)%s%s, fast-load %s (%s)%s%s\n",
+               p->auto_swap ? "on" : p->auto_swap_denied ? "REFUSED" : "off", p->auto_swap_from,
+               p->auto_swap_denied ? ": " : "", p->auto_swap_denied ? p->auto_swap_why : "",
+               p->fast_load ? "on" : p->fast_load_denied ? "REFUSED" : "off", p->fast_load_from,
+               p->fast_load_denied ? ": " : "", p->fast_load_denied ? p->fast_load_why : "");
+}
+
+const char *cyc_host_hle_toggle(int axis) {
+    if (axis == 0) hle_req.live.auto_swap = hle_plan.auto_swap ? 0 : 1;
+    else hle_req.live.fast_load = hle_plan.fast_load ? 0 : 1;
+    hle_apply(true);
+    fflush(stdout);
+    return hle_text;
+}
+
+const char *cyc_host_hle_text(void) { return hle_text; }
+
+/* --realtime and the window: the console's frame rate, and fast load. */
+static const double FRAME_SECONDS = 1.0 / 60.0988;
+double cyc_host_frame_seconds(void) { return FRAME_SECONDS; }
+bool   cyc_host_frame_unpaced(void) { return hle_plan.fast_load && cyc_fds_hle_loading(); }
+
+static double wall_seconds(void) {
+#ifdef _WIN32
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER now;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&now);
+    return (double)now.QuadPart / (double)freq.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + ts.tv_nsec * 1e-9;
+#endif
+}
+
+static void wait_until(double t) {
+    for (;;) {
+        double left = t - wall_seconds();
+        if (left <= 0) return;
+#ifdef _WIN32
+        if (left > 0.002) Sleep((DWORD)((left - 0.001) * 1000));
+#else
+        if (left > 0.002) usleep((useconds_t)((left - 0.001) * 1e6));
+#endif
+    }
+}
+
 /* --frame-log: "CYCFRAME" + u32 version (2), then per frame
  *   u32 frame, u32 cycles low, u32 cycles high, u32 lengths[6] (CPU RAM,
  *   CIRAM, cartridge RAM, CHR RAM, picture bytes, FDS sound unit state),
@@ -544,8 +666,8 @@ int main(int argc, char **argv) {
     bool acccoin = false, headless = false, frames_given = false;
 #ifndef CYC_ORACLE
     const char *ring_out = NULL, *frame_log = NULL, *fds_bios = NULL;
-    const char *fds_import_ips = NULL, *fds_export_ips = NULL;
-    bool frame_log_mesen = false, no_save = false;
+    const char *fds_import_ips = NULL, *fds_export_ips = NULL, *fds_hle_arg = NULL;
+    bool frame_log_mesen = false, no_save = false, realtime = false;
     long ring_first = 0, ring_last = -1, log_first = 0, log_last = -1;
     CycFdsOptions fds_opt;
     cyc_fds_default_options(&fds_opt);
@@ -639,6 +761,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--fds-import-ips") && i + 1 < argc) fds_import_ips = argv[++i];
         else if (!strcmp(argv[i], "--fds-export-ips") && i + 1 < argc) fds_export_ips = argv[++i];
         else if (!strcmp(argv[i], "--no-save")) no_save = true;
+        else if (!strcmp(argv[i], "--fds-hle") && i + 1 < argc) fds_hle_arg = argv[++i];
+        else if (!strcmp(argv[i], "--realtime")) realtime = headless = true;
         else if (!strcmp(argv[i], "--miss-log") && i + 1 < argc) miss_log = argv[++i], headless = true;
         else if (!strcmp(argv[i], "--capture-log") && i + 1 < argc) capture_log = argv[++i], headless = true;
         else if (!strcmp(argv[i], "--ram-view-list") && i + 1 < argc) view_list = argv[++i], headless = true;
@@ -666,7 +790,8 @@ int main(int argc, char **argv) {
                         "       FDS: [--fds-bios FILE] [--fds-boot-disk none|SIDE] [--fds-event F:ACTION]\n"
                         "            [--fds-profile mesen|mesen2|hardware] [--fds-crc computed|mesen]\n"
                         "            [--fds-crc-check] [--fds-write-protect] [--fds-write-at head|mesen]\n"
-                        "            [--save-file FILE | --no-save] [--fds-import-ips FILE] [--fds-export-ips FILE]\n",
+                        "            [--save-file FILE | --no-save] [--fds-import-ips FILE] [--fds-export-ips FILE]\n"
+                        "            [--fds-hle auto-swap,fast-load|all|off] [--realtime]\n",
                 argv[0]);
         return 2;
     }
@@ -724,6 +849,35 @@ int main(int argc, char **argv) {
         if (!fds_save_open(disk_save, fds_import_ips, fds_export_ips, image, size, &fds_opt)) return 2;
         save_file = NULL;              /* the FDS has no cartridge NVRAM */
         nes_fds_cart_info(&cart_info);
+        /* The HLE plan: requests from game.toml, the environment and the
+         * command line, capability facts from the BIOS and the disk. */
+        const char *bad = NULL;
+        if (!nes_fds_hle_parse(cyc_native_fds_hle, &hle_req.config, &bad)) {
+            fprintf(stderr, "game.toml [fds] hle: unknown word at '%s'\n", bad);
+            return 2;
+        }
+        if (!nes_fds_hle_parse(getenv("NESRECOMP_FDS_HLE"), &hle_req.env, &bad)) {
+            fprintf(stderr, "NESRECOMP_FDS_HLE: unknown word at '%s' (auto-swap, fast-load, all, off)\n", bad);
+            return 2;
+        }
+        if (!nes_fds_hle_parse(fds_hle_arg, &hle_req.cli, &bad)) {
+            fprintf(stderr, "--fds-hle: unknown word at '%s' (auto-swap, fast-load, all, off)\n", bad);
+            return 2;
+        }
+        hle_req.live = NES_FDS_HLE_ASK_NONE;
+        NesFdsHleAnchor anchor = hle_anchor(bios_path, crc);
+        hle_core.id_check = anchor.id_check;
+        hle_core.id_pointer = anchor.id_pointer;
+        hle_req.is_fds = true;
+        hle_req.have_anchor = anchor.id_check != 0;
+        hle_req.sides = cyc_fds_side_count();
+        for (unsigned s = 0; s < hle_req.sides; ++s) {
+            uint32_t len;
+            uint8_t block1[56];
+            const uint8_t *stream = cyc_fds_side_stream(s, &len);
+            hle_req.sides_with_id += stream && nes_fds_hle_block1(stream, len, block1);
+        }
+        hle_apply(true);
         printf("fds: %s, %u side%s, BIOS %s (CRC32 %08X), drive %s\n", rom_path, cyc_fds_side_count(),
                cyc_fds_side_count() == 1 ? "" : "s", bios_path, crc,
                cyc_fds_side() < 0 ? "empty" : "loaded");
@@ -818,6 +972,10 @@ int main(int argc, char **argv) {
     }
     if (input_file && !load_input(input_file)) return 2;
     long frame = 0;
+#ifndef CYC_ORACLE
+    double run_start = wall_seconds(), next_frame = run_start, load_wall = 0;
+    long load_frames = 0;
+#endif
     for (;;) {
         if (acccoin && drv.done) break;
         if ((!acccoin || frames_given) && frame >= frames) break;
@@ -831,8 +989,23 @@ int main(int argc, char **argv) {
 #else
         if (disk_event_count) disk_tick(frame);
         observe_frame = frame;
+        double frame_start = wall_seconds();
         cyc_run_frame();
         fds_save_frame(frame + 1);
+        if (cyc_is_fds() && cyc_fds_hle_loading()) {
+            load_frames++;
+            if (!realtime || cyc_host_frame_unpaced()) load_wall += wall_seconds() - frame_start;
+        }
+        if (realtime) {
+            /* The window's pacing: a frame is shown every 1/60.0988 s, except
+             * that fast load runs load frames back to back. */
+            if (cyc_host_frame_unpaced()) next_frame = wall_seconds();
+            else {
+                next_frame += FRAME_SECONDS;
+                wait_until(next_frame);
+                if (cyc_is_fds() && cyc_fds_hle_loading()) load_wall += wall_seconds() - frame_start;
+            }
+        }
         if (frame_log_f && !frame_log_mesen && frame >= log_first && (log_last < 0 || frame <= log_last))
             write_frame_log(frame_log_f, frame);
 #endif
@@ -917,6 +1090,16 @@ int main(int argc, char **argv) {
                "%llu FDS events recorded\n", cyc_fds_side(), cyc_fds_disk_writes(), fds_save.saves,
                fds_save.saves == 1 ? "" : "s", fds_save.path ? " to " : " (no --save-file: in memory only)",
                fds_save.path ? fds_save.path : "", (unsigned long long)cyc_ring_total());
+    if (cyc_is_fds()) {
+        CycFdsHleStatus st;
+        cyc_fds_hle_status(&st);
+        printf("fds hle: %s; %u disk-ID request%s seen, %u auto swap%s, %u disk bump%s, %u load span%s, %ld load "
+               "frames (%.2f s at 60 fps) took %.2f s%s; run %.2f s\n", hle_text, st.requests,
+               st.requests == 1 ? "" : "s", st.swaps, st.swaps == 1 ? "" : "s", st.bumps, st.bumps == 1 ? "" : "s",
+               st.spans, st.spans == 1 ? "" : "s", load_frames,
+               (double)load_frames * FRAME_SECONDS, load_wall, realtime ? " (paced)" : " (unpaced)",
+               wall_seconds() - run_start);
+    }
     if (ring_out) {
         FILE *rf = fopen(ring_out, "w");
         if (!rf) { fprintf(stderr, "cannot write %s\n", ring_out); return 2; }

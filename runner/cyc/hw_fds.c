@@ -68,6 +68,11 @@
  * Every register access, IRQ edge and acknowledge, clocked byte, motor and
  * rewind transition, side change, write run and written block goes to the
  * always-on ring (cyc_ring.h).
+ *
+ * The HLE tier (hw_fds_hle.c) is told of $4032 reads, $4031/$4024 transfers,
+ * bytes clocked with the transfer released, rewinds, ready and host disk
+ * changes, and changes the disk only through fds_drive_eject/insert. With
+ * its plan axes off it only observes, and the drive runs exactly as without it.
  */
 #include "hw_fds.h"
 
@@ -235,21 +240,38 @@ bool cyc_fds_set_side_stream(unsigned side, const uint8_t *bytes, uint32_t len)
  * drive is empty. The drive's lines follow on its next clock. */
 static void write_run_end(void);
 
-bool cyc_fds_eject(void)
+/* source: CYC_FDS_SIDE_HOST (host keys, scripts) or CYC_FDS_SIDE_HLE (the HLE
+ * tier's auto swap, hw_fds_hle.c), as the fds.side event records it. */
+bool fds_drive_eject(unsigned source)
 {
     if (media.side < 0) return false;
     write_run_end();
     media.side = -1;
-    cyc_ring_push(CYC_EV_FDS_SIDE, 0, 0xFF);
+    cyc_ring_push(CYC_EV_FDS_SIDE, (uint16_t)source, 0xFF);
     return true;
+}
+
+bool fds_drive_insert(unsigned side, unsigned source)
+{
+    if (media.side >= 0 || side >= media.count) return false;
+    media.side = (int)side;
+    cyc_ring_push(CYC_EV_FDS_SIDE, (uint16_t)source, side);
+    return true;
+}
+
+/* A host's eject or insert also takes the drive back from the HLE tier. */
+bool cyc_fds_eject(void)
+{
+    if (media.side < 0) return false;
+    fds_hle_host_disk_change();
+    return fds_drive_eject(CYC_FDS_SIDE_HOST);
 }
 
 bool cyc_fds_insert(unsigned side)
 {
     if (media.side >= 0 || side >= media.count) return false;
-    media.side = (int)side;
-    cyc_ring_push(CYC_EV_FDS_SIDE, 0, side);
-    return true;
+    fds_hle_host_disk_change();
+    return fds_drive_insert(side, CYC_FDS_SIDE_HOST);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -265,7 +287,8 @@ void fds_power_on(void)
     fds_audio_set_profile(media.opt.profile);
     fds_audio_power_on();
     hw_cart.mirroring = HW_MIRROR_VERTICAL;    /* FdsLoader.cpp:141 */
-    cyc_ring_push(CYC_EV_FDS_SIDE, 1, media.side < 0 ? 0xFF : (uint32_t)media.side);
+    cyc_ring_push(CYC_EV_FDS_SIDE, CYC_FDS_SIDE_POWER_ON, media.side < 0 ? 0xFF : (uint32_t)media.side);
+    fds_hle_power_on();
 }
 
 static void ack(uint16_t addr, uint8_t sources)
@@ -300,6 +323,7 @@ static void register_write(uint16_t addr, uint8_t value)
         }
         break;
     case 0x4024:
+        fds_hle_data();
         F.write_data = value;
         F.transfer = 0;
         ack(addr, CYC_FDS_IRQ_DISK);
@@ -347,11 +371,13 @@ static bool register_read(uint16_t addr, uint8_t *value)
             ack(addr, CYC_FDS_IRQ_TIMER | CYC_FDS_IRQ_DISK);
             break;
         case 0x4031:
+            fds_hle_data();
             F.transfer = 0;
             ack(addr, CYC_FDS_IRQ_DISK);
             v = F.read_data;
             break;
         case 0x4032: {
+            fds_hle_status_read();
             bool in = media.side >= 0;
             v &= 0xF8;
             v |= !in ? 0x01 : 0;
@@ -481,8 +507,12 @@ static void clock_byte(void)
     uint8_t data = 0;
     uint16_t flags = 0;
     bool need_irq = F.transfer_irq != 0;
-    if (!F.scanning) cyc_ring_push(CYC_EV_FDS_READY, 0, F.position);
+    if (!F.scanning) {
+        cyc_ring_push(CYC_EV_FDS_READY, 0, F.position);
+        fds_hle_ready();
+    }
     F.scanning = 1;
+    if (!F.reset_transfer) fds_hle_transfer();   /* a transfer (or its wait for a mark) is under way */
     if (F.read_mode) {
         write_run_end();
         /* lr:264-285, m2:301-327. */
@@ -600,6 +630,7 @@ void fds_cpu_clock(void)
         F.position = 0;
         F.gap_ended = 0;
         cyc_ring_push(CYC_EV_FDS_REWIND, 0, F.delay);
+        fds_hle_rewind();
         return;
     }
     if (F.delay > 0) {
@@ -620,7 +651,7 @@ uint64_t fds_state_hash(uint64_t acc)
     acc = acc * 131 + (uint64_t)(media.side + 1);
     acc = acc * 131 + (uint64_t)media.opt.profile;
     acc = acc * 131 + (uint64_t)media.opt.write_at;
-    return acc;
+    return fds_hle_state_hash(acc);
 }
 
 /* The disks are memory a program can read back after writing them. */

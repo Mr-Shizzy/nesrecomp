@@ -6,13 +6,21 @@
  *       the interpreter (live; both produce the same machine, cycle for
  *       cycle), F12 = screenshot (cyc_shot_NNNN.png), Esc = quit.
  *       FDS: F1 = eject the disk / insert the selected side, F3 = select the
- *       next side (drive empty), F4 = show or hide the drive bar. nesref's
- *       keys are F1 and F2; F2 is taken here, so the side key is F3.
+ *       next side (drive empty), F4 = show or hide the drive bar, F6 = auto
+ *       swap on/off, F7 = fast load on/off (the HLE tier; the plan may refuse
+ *       an axis the BIOS or disk cannot support, and the bar says so).
+ *       nesref's keys are F1 and F2; F2 is taken here, so the side key is F3.
  * The first connected game controller also works.
  *
  * The drive bar (FDS only) is drawn below the picture, in window rows the
  * emulated picture never covers: which side is in the drive or that it is
- * empty (and the side F1 would insert), the motor, and the disk save's state.
+ * empty (and the side F1 would insert), the motor, the disk save's state, and
+ * the HLE tier's (HLE SWAP FAST / HLE OFF, LOADING while fast load runs a load
+ * unpaced, SWAP TO SIDE x while an auto swap holds the drive empty).
+ *
+ * Fast load: while the drive is loading (cyc_fds_hle_loading), frames run back
+ * to back without pacing and without audio, and the window shows the newest
+ * one about every 1/60 s. The machine runs the same frames either way.
  * It is never part of cyc_frame_argb(), so screenshots, --hash-out and every
  * comparison see the machine's picture only.
  */
@@ -37,7 +45,7 @@
 #define NES_RIGHT  0x01
 
 #define AUDIO_RATE 48000
-#define BAR_ROWS   9      /* logical rows under the 240 of the picture */
+#define BAR_ROWS   15     /* logical rows under the 240 of the picture: two lines */
 
 static uint8_t read_input(SDL_GameController *pad) {
     const Uint8 *k = SDL_GetKeyboardState(NULL);
@@ -100,7 +108,7 @@ static void side_name(char *out, size_t n, unsigned side) {
     snprintf(out, n, "DISK %u SIDE %c", side / 2 + 1, 'A' + (int)(side % 2));
 }
 
-static void draw_drive_bar(SDL_Renderer *ren, unsigned selected) {
+static void draw_drive_bar(SDL_Renderer *ren, unsigned selected, bool loading) {
     SDL_Rect bar = {0, 240, 256, BAR_ROWS};
     SDL_SetRenderDrawColor(ren, 24, 24, 32, 255);
     SDL_RenderFillRect(ren, &bar);
@@ -121,6 +129,17 @@ static void draw_drive_bar(SDL_Renderer *ren, unsigned selected) {
         snprintf(text, sizeof(text), "EMPTY - F1 INSERTS %s", name);
     }
     draw_text(ren, 11, 242, text);
+    CycFdsHleStatus hle;
+    cyc_fds_hle_status(&hle);
+    char htext[64];
+    if (hle.swap_target >= 0) {
+        side_name(name, sizeof(name), (unsigned)hle.swap_target);
+        snprintf(htext, sizeof(htext), "AUTO SWAP TO %s", name);
+    } else {
+        snprintf(htext, sizeof(htext), "%s%s", cyc_host_hle_text(), loading ? " LOADING" : "");
+    }
+    SDL_SetRenderDrawColor(ren, 255, 210, 90, 255);
+    draw_text(ren, 11, 249, htext);
     const char *save = cyc_host_disk_save_status();
     if (save && *save) {
         int w = (int)strlen(save) * 4;
@@ -164,10 +183,10 @@ int cyc_sdl_main(const char *title, int scale) {
     for (int i = 0; i < SDL_NumJoysticks() && !pad; i++)
         if (SDL_IsGameController(i)) pad = SDL_GameControllerOpen(i);
 
-    const double frame_seconds = 1.0 / 60.0988;
+    const double frame_seconds = cyc_host_frame_seconds();
     const Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 next = SDL_GetPerformanceCounter();
-    Uint64 fps_mark = next;
+    Uint64 fps_mark = next, shown = 0;
     uint64_t native_mark = cyc_run_native_cycles;
     uint64_t cycles_mark = cyc_cycle_count();
     int frames = 0, shot = 0;
@@ -202,6 +221,14 @@ int cyc_sdl_main(const char *title, int scale) {
                         fflush(stdout);
                     }
                     break;
+                case SDL_SCANCODE_F6:
+                case SDL_SCANCODE_F7:
+                    if (!fds) break;
+                    printf("[cyc disk] f=%ld %s (%s)\n", frames_done,
+                           cyc_host_hle_toggle(ev.key.keysym.scancode == SDL_SCANCODE_F6 ? 0 : 1),
+                           ev.key.keysym.scancode == SDL_SCANCODE_F6 ? "F6" : "F7");
+                    fflush(stdout);
+                    break;
                 case SDL_SCANCODE_F4:
                     if (!fds) break;
                     bar = !bar;
@@ -226,7 +253,8 @@ int cyc_sdl_main(const char *title, int scale) {
         frames++;
         cyc_host_frame_done(++frames_done);
 
-        const bool fast = SDL_GetKeyboardState(NULL)[SDL_SCANCODE_TAB] != 0;
+        const bool loading = fds && cyc_host_frame_unpaced();
+        const bool fast = SDL_GetKeyboardState(NULL)[SDL_SCANCODE_TAB] != 0 || loading;
         int16_t pcm[4096];
         size_t n;
         while ((n = cyc_audio_read(pcm, 4096)) > 0) {
@@ -235,15 +263,19 @@ int cyc_sdl_main(const char *title, int scale) {
                 SDL_QueueAudio(dev, pcm, (Uint32)(n * sizeof(int16_t)));
         }
 
-        SDL_UpdateTexture(tex, NULL, cyc_frame_argb(), 256 * 4);
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-        SDL_RenderClear(ren);
-        SDL_Rect picture = {0, 0, 256, 240};
-        SDL_RenderCopy(ren, tex, NULL, &picture);
-        if (bar) draw_drive_bar(ren, fds_selected);
-        SDL_RenderPresent(ren);
-
+        /* A fast-loaded frame is shown only if 1/60 s passed since the last one. */
         Uint64 now = SDL_GetPerformanceCounter();
+        if (!loading || now - shown >= (Uint64)(frame_seconds * (double)freq)) {
+            SDL_UpdateTexture(tex, NULL, cyc_frame_argb(), 256 * 4);
+            SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+            SDL_RenderClear(ren);
+            SDL_Rect picture = {0, 0, 256, 240};
+            SDL_RenderCopy(ren, tex, NULL, &picture);
+            if (bar) draw_drive_bar(ren, fds_selected, loading);
+            SDL_RenderPresent(ren);
+            shown = now;
+        }
+        now = SDL_GetPerformanceCounter();
         if (now - fps_mark >= freq) {
             double secs = (double)(now - fps_mark) / (double)freq;
             uint64_t cycles = cyc_cycle_count() - cycles_mark;

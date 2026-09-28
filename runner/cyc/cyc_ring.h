@@ -98,6 +98,23 @@ typedef enum {
      *              wave position steps, addr = mod table steps (<= $FFFF) */
     CYC_EV_FDS_ENV,
     CYC_EV_FDS_AUDIO,
+    /* FDS disk-ID requests and the HLE tier (hw_fds_hle.c). These carry a
+     * length in `repeat`, like WRITE_RUN:
+     *   FDS_IDREQ   the BIOS's disk-ID check ran (always recorded when its
+     *               anchor is known): addr = where the requested ID is, value =
+     *               the sides whose disk header it matches (bit per side),
+     *               length = the side in the drive (0xFF: empty)
+     *   FDS_IDBYTES the 10 ID bytes, right after FDS_IDREQ: value = bytes 0-3,
+     *               length = bytes 4-7, addr = bytes 8-9 (little endian)
+     *   FDS_SPAN    a load span ended (always recorded): value = first frame,
+     *               length = frames, addr = load frames in it (<= $7FFF) |
+     *               $8000 if fast load ran it unpaced
+     *   FDS_HLE     an HLE decision or action: addr = CYC_FDS_HLE_*, value and
+     *               length as listed there */
+    CYC_EV_FDS_IDREQ,
+    CYC_EV_FDS_IDBYTES,
+    CYC_EV_FDS_SPAN,
+    CYC_EV_FDS_HLE,
     CYC_EV_KINDS
 } CycRingKind;
 
@@ -106,6 +123,19 @@ enum {
     CYC_FDS_SAVE_EJECT   = 2,   /* the disk was ejected */
     CYC_FDS_SAVE_EXIT    = 3,   /* the host is exiting */
     CYC_FDS_SAVE_TIMEOUT = 4,   /* dirty for the longest time a save may wait */
+};
+
+/* FDS_HLE codes: value, length */
+enum {
+    CYC_FDS_HLE_CONFIG    = 1,  /* plan applied: auto_swap | fast_load << 1, the ID check anchor */
+    CYC_FDS_HLE_KEEP      = 2,  /* request satisfied by the side in the drive: side, match mask */
+    CYC_FDS_HLE_SWAP      = 3,  /* request for one other side: that side, match mask */
+    CYC_FDS_HLE_AMBIGUOUS = 4,  /* request matches several sides, none in the drive: mask, side in drive */
+    CYC_FDS_HLE_NOMATCH   = 5,  /* request matches no side: 0, side in drive */
+    CYC_FDS_HLE_WAIT      = 6,  /* program waits for an eject (polling): side to put back, poll frames */
+    CYC_FDS_HLE_EJECT     = 7,  /* auto swap ejected: side, frames the drive stays empty */
+    CYC_FDS_HLE_INSERT    = 8,  /* auto swap inserted: side, wait round (0: after a request) */
+    CYC_FDS_HLE_CANCEL    = 9,  /* a host disk change cancelled an auto swap: its side, its step */
 };
 
 enum {

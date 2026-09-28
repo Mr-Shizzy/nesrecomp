@@ -58,7 +58,8 @@ void cyc_ring_push_len(CycRingKind kind, uint16_t addr, uint32_t value, uint32_t
 static bool has_length(unsigned kind)
 {
     return kind == CYC_EV_FDS_WRITE_RUN || kind == CYC_EV_FDS_WRITE_BLOCK || kind == CYC_EV_FDS_SAVE ||
-           kind == CYC_EV_FDS_LOAD;
+           kind == CYC_EV_FDS_LOAD || kind == CYC_EV_FDS_IDREQ || kind == CYC_EV_FDS_IDBYTES ||
+           kind == CYC_EV_FDS_SPAN || kind == CYC_EV_FDS_HLE;
 }
 
 uint64_t cyc_ring_total(void) { return ring_total; }
@@ -88,6 +89,7 @@ const char *cyc_ring_kind_name(unsigned kind)
         "fds.wrun", "fds.wblock", "fds.save", "fds.load",
         "view.valid", "view.reject", "view.invalid", "view.exit", "ram.interp", "view.frame",
         "fds.env", "fds.audio",
+        "fds.idreq", "fds.idbytes", "fds.span", "fds.hle",
     };
     return kind < CYC_EV_KINDS ? NAMES[kind] : "?";
 }
@@ -120,7 +122,8 @@ static void describe(FILE *f, const CycRingEvent *e)
     case CYC_EV_FDS_SIDE:
         if (e->value == 0xFF) fprintf(f, "ejected");
         else fprintf(f, "side %u inserted", e->value);
-        if (e->addr) fprintf(f, " (power-on)");
+        if (e->addr == 1) fprintf(f, " (power-on)");
+        else if (e->addr == 2) fprintf(f, " (hle)");
         break;
     case CYC_EV_FDS_CRC: fprintf(f, "%s acc=%04X", e->addr ? "bad" : "good", e->value & 0xFFFF); break;
     case CYC_EV_FDS_WRITE_RUN:
@@ -147,6 +150,38 @@ static void describe(FILE *f, const CycRingEvent *e)
     case CYC_EV_VIEW_FRAME: fprintf(f, "entries=%u validated=%u", e->value, e->addr); break;
     case CYC_EV_FDS_ENV: fprintf(f, "%s gain=%u", e->addr ? "mod" : "volume", e->value); break;
     case CYC_EV_FDS_AUDIO: fprintf(f, "wave_steps=%u mod_steps=%u", e->value, e->addr); break;
+    case CYC_EV_FDS_IDREQ:
+        fprintf(f, "id@%04X matches=%X drive=", e->addr, e->value);
+        if (e->repeat == 0xFF) fprintf(f, "empty");
+        else fprintf(f, "%u", e->repeat);
+        break;
+    case CYC_EV_FDS_IDBYTES:
+        fprintf(f, "id=");
+        for (unsigned i = 0; i < 10; ++i) {
+            uint32_t word = i < 4 ? e->value : i < 8 ? e->repeat : e->addr;
+            fprintf(f, "%s%02X", i ? " " : "", (word >> (8 * (i & 3))) & 0xFF);
+        }
+        break;
+    case CYC_EV_FDS_SPAN:
+        fprintf(f, "first=%u frames=%u load_frames=%u%s", e->value, e->repeat, e->addr & 0x7FFF,
+                e->addr & 0x8000 ? " fast" : "");
+        break;
+    case CYC_EV_FDS_HLE:
+        switch (e->addr) {
+        case CYC_FDS_HLE_CONFIG:
+            fprintf(f, "config auto_swap=%u fast_load=%u id_check=%04X", e->value & 1, (e->value >> 1) & 1, e->repeat);
+            break;
+        case CYC_FDS_HLE_KEEP: fprintf(f, "keep side=%u matches=%X", e->value, e->repeat); break;
+        case CYC_FDS_HLE_SWAP: fprintf(f, "swap side=%u matches=%X", e->value, e->repeat); break;
+        case CYC_FDS_HLE_AMBIGUOUS: fprintf(f, "ambiguous matches=%X drive=%u", e->value, e->repeat); break;
+        case CYC_FDS_HLE_NOMATCH: fprintf(f, "nomatch drive=%u", e->repeat); break;
+        case CYC_FDS_HLE_WAIT: fprintf(f, "wait put_back=%u poll_frames=%u", e->value, e->repeat); break;
+        case CYC_FDS_HLE_EJECT: fprintf(f, "eject side=%u hold=%u", e->value, e->repeat); break;
+        case CYC_FDS_HLE_INSERT: fprintf(f, "insert side=%u round=%u", e->value, e->repeat); break;
+        case CYC_FDS_HLE_CANCEL: fprintf(f, "cancel side=%u step=%u", e->value, e->repeat); break;
+        default: fprintf(f, "code=%u value=%u length=%u", e->addr, e->value, e->repeat); break;
+        }
+        break;
     default: fprintf(f, "addr=%04X value=%08X", e->addr, e->value); break;
     }
 }
