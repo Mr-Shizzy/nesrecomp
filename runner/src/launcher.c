@@ -21,6 +21,8 @@
 #  include <commdlg.h>
 #  include <io.h>
 #  pragma comment(lib, "comdlg32.lib")
+#else
+#  include <unistd.h>
 #endif
 
 #include "game_extras.h"
@@ -69,6 +71,42 @@ static char s_net_return_error[96];
 
 void nesrecomp_expect_process_exit(void) {
     s_expected_process_exit = 1;
+}
+
+void nesrecomp_return_to_launcher(void) {
+    fprintf(stderr, "[RunnerExit] return to launcher at frame %llu\n",
+            (unsigned long long)g_frame_count);
+    fflush(stderr); fflush(stdout);
+#ifdef _WIN32
+    char exe[MAX_PATH];
+    DWORD n = GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe));
+    if (n > 0 && n < sizeof(exe)) {
+        char cmd[MAX_PATH + 32];
+        snprintf(cmd, sizeof(cmd), "\"%s\" --launcher", exe);
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        memset(&si, 0, sizeof(si));
+        si.cb = sizeof(si);
+        if (CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+        } else {
+            fprintf(stderr, "[Launcher] relaunch failed (%lu)\n", GetLastError());
+        }
+    }
+#else
+    char exe[1024];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n > 0) {
+        exe[n] = '\0';
+        if (fork() == 0) {
+            execl(exe, exe, "--launcher", (char *)NULL);
+            _exit(127);
+        }
+    }
+#endif
+    nesrecomp_expect_process_exit();
+    exit(0);
 }
 
 /* ---- rom.cfg helpers ---- */

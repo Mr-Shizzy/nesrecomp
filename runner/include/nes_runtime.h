@@ -77,6 +77,10 @@ void nes_dump_dispatch_ring(void);
 /* Mark a forthcoming process exit as intentional so the launcher atexit
  * diagnostics do not report the still-active RESET stack as a crash. */
 void nesrecomp_expect_process_exit(void);
+/* Leave the game and reopen the launcher: starts a fresh copy of this exe
+ * with --launcher (so no guest state carries over), then exits. Does not
+ * return. Falls back to a plain exit if the new process cannot start. */
+void nesrecomp_return_to_launcher(void);
 /* Push a context marker into the dispatch ring (kind e.g. 'N'/'n' = NMI
  * enter/exit; tag = vblank depth or other context id). */
 void nes_dring_mark(char kind, uint16_t tag);
