@@ -417,6 +417,16 @@ FdsGame otocky.fds --fds-event 1199:eject --fds-event 1258:insert=B --frames 300
 
 Only the BIOS its `bios/disksys.toml` (or, for a compiled program, the one it
 was compiled from) identifies is accepted: 8192 bytes, CRC32 5E607DCF. The
+host takes the first of these that exists (`cyc_fds_bios.h`): `--fds-bios`,
+the window's config.ini `[FDS] Bios`, `game.toml` `[fds] bios`,
+`bios/disksys.rom` beside the image, `bios/disksys.rom` in the current
+directory. recomp-ui's launcher runs the same lookup for the selected disk:
+when it finds nothing usable it says "FDS BIOS (disksys.rom) required" with a
+Select BIOS... button, checks the chosen file's identity (a wrong one is
+refused with its size and CRC), saves it as `[FDS] Bios`, and keeps PLAY
+disabled until a BIOS is present; Settings, SYSTEM changes or clears it. A
+cartridge never sees any of it. A windowed start without the launcher shows a
+missing BIOS in a message box; headless runs print it. The
 BIOS passes arguments inline after its JSRs (`$E844`, `$E3E7`); discovery
 knows its routines that do (`FDS_BIOS_INLINE_JSR` in `cyc_codegen.c`, and
 `[game] cycle_inline_jsr` for any program), so the BIOS runs 100% native with

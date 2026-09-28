@@ -141,6 +141,10 @@ bool cyc_settings_load(CycSettings *s, const char *path, FILE *log, const CycSet
             else if (game && game->load) game->load(game->ctx, key, val);
             break;
         case SEC_FDS: {
+            if (eq_ci(key, "Bios")) {
+                snprintf(s->fds_bios, sizeof(s->fds_bios), "%s", val);
+                break;
+            }
             unsigned n;
             const NesFdsHleAxis *ax = nes_fds_hle_axes(&n);
             for (unsigned i = 0; i < n; ++i) {
@@ -200,6 +204,8 @@ bool cyc_settings_save(const CycSettings *s, const char *path, const CycSettings
         int8_t a = *nes_fds_hle_ask_axis((NesFdsHleAsk *)&s->fds_hle, &ax[i]);
         fprintf(f, "%s = %s\n", ax[i].key, a > 0 ? "on" : a == 0 ? "off" : "default");
     }
+    fprintf(f, "# the FDS BIOS file (disksys.rom); empty: game.toml's, then bios/ beside the disk, then bios/ here\n"
+               "Bios = %s\n", s->fds_bios);
     char text[96];
     for (int p = 0; p < CYC_INPUT_PLAYERS; ++p) {
         fprintf(f, "[Keyboard.Player%d]\n", p + 1);

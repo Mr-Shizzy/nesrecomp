@@ -69,8 +69,10 @@
  *
  *   Famicom Disk System (<exe> <image.fds|.qd>, or no image for a program
  *   compiled with game.toml [fds] image):
- *     --fds-bios FILE      the RAM Adapter BIOS; default game.toml [fds] bios,
- *                          else bios/disksys.rom beside the image or here.
+ *     --fds-bios FILE      the RAM Adapter BIOS; default the window's config.ini
+ *                          [FDS] Bios (the launcher's Select BIOS...), else
+ *                          game.toml [fds] bios, else bios/disksys.rom beside
+ *                          the image or here (cyc_fds_bios.h).
  *                          Only the image bios/disksys.toml (or the compiled
  *                          program) identifies is accepted: 8192 bytes, CRC32.
  *     --fds-boot-disk S    side in the drive at power-on: none, or a side (0 =
@@ -144,6 +146,7 @@
 #include "../../common/nes_fds.h"
 #include "../../common/nes_fds_hle.h"
 #include "cyc_disk_action.h"
+#include "cyc_fds_bios.h"
 #include "cyc_overlay.h"
 
 #ifndef CYC_ORACLE
@@ -453,49 +456,6 @@ static void disk_tick(long frame) {
                    ok ? "" : " (refused: drive not empty or no such side)");
         }
     }
-}
-
-/* The BIOS identity: the one a compiled program was built from, else the one
- * the BIOS's own .toml records (bios/disksys.toml: size, crc32), else the
- * known disksys.rom (common/nes_fds.h). */
-static uint32_t bios_expected_crc(const char *bios_path, uint32_t *size) {
-    *size = NES_FDS_BIOS_BYTES;
-    if (cyc_native_fds_bios_crc32) return cyc_native_fds_bios_crc32;
-    char toml[1024];
-    snprintf(toml, sizeof(toml), "%s", bios_path);
-    char *dot = strrchr(toml, '.'), *slash = strrchr(toml, '/'), *bslash = strrchr(toml, '\\');
-    if (dot && dot > slash && dot > bslash) *dot = 0;
-    strncat(toml, ".toml", sizeof(toml) - strlen(toml) - 1);
-    FILE *f = fopen(toml, "r");
-    uint32_t crc = NES_FDS_BIOS_CRC32;
-    if (f) {
-        char line[256];
-        unsigned v;
-        while (fgets(line, sizeof(line), f)) {
-            if (sscanf(line, " crc32 = \"0x%x\"", &v) == 1 || sscanf(line, " crc32 = 0x%x", &v) == 1) crc = v;
-            else if (sscanf(line, " size = %u", &v) == 1) *size = v;
-        }
-        fclose(f);
-    }
-    return crc;
-}
-
-static uint8_t *load_bios(const char *explicit_path, const char *image_path, size_t *size, char *used,
-                          size_t used_len) {
-    char beside[1024];
-    const char *slash = strrchr(image_path, '/'), *bslash = strrchr(image_path, '\\');
-    const char *sep = slash > bslash ? slash : bslash;
-    snprintf(beside, sizeof(beside), "%.*sbios/disksys.rom", sep ? (int)(sep - image_path + 1) : 0, image_path);
-    const char *candidates[] = { explicit_path, explicit_path ? NULL : cyc_native_fds_bios_path,
-                                 explicit_path ? NULL : beside, explicit_path ? NULL : "bios/disksys.rom" };
-    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
-        if (!candidates[i]) continue;
-        uint8_t *data = read_file(candidates[i], size);
-        if (!data) continue;
-        snprintf(used, used_len, "%s", candidates[i]);
-        return data;
-    }
-    return NULL;
 }
 
 /* ---- the FDS HLE tier: requests, capability facts, the plan ---- */
@@ -863,6 +823,7 @@ int main(int argc, char **argv) {
     long present_every = 0;
     bool frame_log_mesen = false, no_save = false, realtime = false;
     NesFdsHleAsk saved_hle = NES_FDS_HLE_ASK_NONE;
+    const char *saved_bios = NULL;     /* the window's config.ini [FDS] Bios */
     long ring_first = 0, ring_last = -1, log_first = 0, log_last = -1;
     CycFdsOptions fds_opt;
     cyc_fds_default_options(&fds_opt);
@@ -994,7 +955,7 @@ int main(int argc, char **argv) {
     if (!rom_path) rom_path = cyc_native_fds_image_path;   /* game.toml [fds] image */
 #if defined(CYC_WITH_SDL)
     /* The window: its settings, and recomp-ui's launcher where the build has it. */
-    if (!headless && cyc_sdl_prelaunch(&rom_path, &saved_hle)) return 0;
+    if (!headless && cyc_sdl_prelaunch(&rom_path, fds_bios, &saved_hle, &saved_bios)) return 0;
 #endif
 #endif
     if (!rom_path) {
@@ -1032,20 +993,41 @@ int main(int argc, char **argv) {
         return 2;
 #else
         if (acccoin || spam_page >= 0) { fprintf(stderr, "--acccoin/--spam need a cartridge\n"); return 2; }
-        size_t bios_size = 0;
-        char bios_path[1024];
-        uint8_t *bios = load_bios(fds_bios, rom_path, &bios_size, bios_path, sizeof(bios_path));
-        if (!bios) {
-            fprintf(stderr, "%s: no FDS BIOS (give --fds-bios FILE, or put disksys.rom in bios/)\n", rom_path);
+        CycFdsBiosLookup lookup = { fds_bios, saved_bios, cyc_native_fds_bios_path, rom_path,
+                                    cyc_native_fds_bios_crc32 };
+        CycFdsBiosResult found;
+        if (cyc_fds_bios_locate(&lookup, true, &found) != CYC_FDS_BIOS_OK) {
+            char msg[1600];
+            /* Where the player puts it right: the window's config.ini
+             * [FDS] Bios (what the launcher's Select BIOS... saves). */
+            const char *fix = headless
+                ? "give --fds-bios FILE, or put disksys.rom in bios/ beside the disk (the window "
+                  "also reads [FDS] Bios in its config.ini; headless runs do not)"
+                : "choose it with Select BIOS... in the launcher, set [FDS] Bios = <file> in config.ini "
+                  "beside the program, give --fds-bios FILE, or put disksys.rom in bios/ beside the disk";
+            if (fds_bios) fix = "give --fds-bios the RAM Adapter BIOS (disksys.rom)";
+            if (found.status == CYC_FDS_BIOS_WRONG)
+                snprintf(msg, sizeof(msg),
+                         "%s (%s) is not the FDS BIOS (disksys.rom): %zu bytes, CRC32 %08X; expected %u "
+                         "bytes, CRC32 %08X.\nTo use the right file, %s.",
+                         found.path, found.source, found.size, (unsigned)found.crc,
+                         (unsigned)found.want_size, (unsigned)found.want_crc, fix);
+            else if (found.source)
+                snprintf(msg, sizeof(msg), "Cannot read the FDS BIOS %s (--fds-bios).", found.path);
+            else
+                snprintf(msg, sizeof(msg),
+                         "%s needs the Famicom Disk System BIOS (disksys.rom), and none was found.\n"
+                         "To provide it, %s.", rom_path, fix);
+            fprintf(stderr, "%s\n", msg);
+#if defined(CYC_WITH_SDL)
+            if (!headless) cyc_sdl_error_box("FDS BIOS required", msg);
+#endif
             return 2;
         }
-        uint32_t want_size, want_crc = bios_expected_crc(bios_path, &want_size);
-        uint32_t crc = nes_crc32(0, bios, bios_size);
-        if (bios_size != want_size || bios_size != NES_FDS_BIOS_BYTES || crc != want_crc) {
-            fprintf(stderr, "%s is not the expected FDS BIOS (%zu bytes, CRC32 %08X; expected %u bytes, CRC32 %08X)\n",
-                    bios_path, bios_size, crc, want_size, want_crc);
-            return 2;
-        }
+        uint8_t *bios = found.data;
+        size_t bios_size = found.size;
+        const char *bios_path = found.path;
+        uint32_t crc = found.crc;
         fds_opt.qd = qd;
         if (!cyc_load_fds(bios, bios_size, image, size, &fds_opt)) {
             fprintf(stderr, "cannot load disk image %s\n", rom_path);

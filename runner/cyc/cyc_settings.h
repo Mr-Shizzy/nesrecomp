@@ -9,7 +9,9 @@
  *
  *   [Audio]    Enabled
  *   [FDS]      one key per HLE axis (common/nes_fds_hle.h nes_fds_hle_axes():
- *              AutoSwap, FastLoad, ...): on, off or default (game.toml decides)
+ *              AutoSwap, FastLoad, ...): on, off or default (game.toml decides);
+ *              Bios = the FDS BIOS file the player chose (the launcher's
+ *              Select BIOS...), empty to look for one (cyc_fds_bios.h)
  *   [Keyboard.PlayerN] / [Gamepad.PlayerN]   a = Z ... (cyc_input.h names)
  *   [Keyboard.Shortcuts] / [Gamepad.Shortcuts]  disk = D, menu = Escape ...
  *   [Game]     ViewMode (a game's view modes, cyc_host_extras.h), then the
@@ -38,6 +40,7 @@ typedef struct CycSettings {
     int  skip_launcher;     /* bool */
     int  view_mode;         /* RECOMP_RUNTIME_UI_VIEW_* of a game that has view modes; 0 native */
     NesFdsHleAsk fds_hle;   /* the player's saved HLE choices (the plan's "settings" source) */
+    char fds_bios[512];     /* [FDS] Bios: the player's FDS BIOS file; "" looks for one */
     CycBindings  bind;
 } CycSettings;
 

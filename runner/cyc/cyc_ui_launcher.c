@@ -49,6 +49,7 @@ static void to_launcher(const CycSettings *s, RecompLauncherCSettings *io, const
     io->enable_audio = s->audio_enabled;
     io->volume = s->volume;
     io->skip_launcher = s->skip_launcher;
+    snprintf(io->bios_path, sizeof(io->bios_path), "%s", s->fds_bios);
     for (int p = 0; p < CYC_INPUT_PLAYERS; ++p) {
         io->player_src[p] = s->bind.source[p];
         io->deadzone[p] = s->bind.deadzone[p];
@@ -73,6 +74,7 @@ static void from_launcher(const RecompLauncherCSettings *io, CycSettings *s, con
     s->audio_enabled = io->enable_audio != 0;
     s->volume = io->volume < 0 ? 0 : io->volume > 100 ? 100 : io->volume;
     s->skip_launcher = io->skip_launcher != 0;
+    snprintf(s->fds_bios, sizeof(s->fds_bios), "%s", io->bios_path);
     for (int p = 0; p < CYC_INPUT_PLAYERS; ++p) {
         s->bind.source[p] = io->player_src[p] < 0 ? 0 : io->player_src[p] > 2 ? 2 : io->player_src[p];
         s->bind.deadzone[p] = io->deadzone[p] < 0 ? 0 : io->deadzone[p] > 100 ? 100 : io->deadzone[p];
@@ -86,6 +88,38 @@ static void from_launcher(const RecompLauncherCSettings *io, CycSettings *s, con
         s->bind.shortcut[shortcuts[i]].key = io->assist_key_bind[i];
         s->bind.shortcut[shortcuts[i]].pad = io->assist_pad_bind[i];
     }
+}
+
+/* recomp-ui's BIOS verdict for the image the launcher has selected: the host's
+ * own lookup (cyc_fds_bios.h) with the player's pick as the saved path, so the
+ * launcher shows exactly what a start would use. A cartridge needs none. */
+int cyc_ui_bios_verify(void *ctx, const char *bios_path, const char *rom_path, RecompLauncherCBiosVerify *out)
+{
+    const CycFdsBiosLookup *base = (const CycFdsBiosLookup *)ctx;
+    memset(out, 0, sizeof(*out));
+    if (!base) return 0;
+    if (!base->compiled_crc && !cyc_fds_image_file(rom_path)) {
+        out->ok = 1;
+        out->not_needed = 1;
+        return 1;
+    }
+    CycFdsBiosResult r;
+    if (base->explicit_path && *base->explicit_path) {
+        /* --fds-bios wins this run; a pick is still checked, and saved. */
+        if (bios_path && *bios_path && cyc_fds_bios_check(bios_path, base->compiled_crc, false, &r) != CYC_FDS_BIOS_OK) {
+            snprintf(out->detail, sizeof(out->detail), "%s", r.detail);
+            return 1;
+        }
+        out->ok = cyc_fds_bios_locate(base, false, &r) == CYC_FDS_BIOS_OK;
+        snprintf(out->detail, sizeof(out->detail), "%s (--fds-bios, this run)", r.detail);
+        return 1;
+    }
+    CycFdsBiosLookup in = *base;
+    in.saved_path = bios_path;
+    in.image_path = rom_path;
+    out->ok = cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_OK;
+    snprintf(out->detail, sizeof(out->detail), "%s", r.detail);
+    return 1;
 }
 
 static int hex_nibble(char c)
@@ -105,8 +139,10 @@ static const char *stem_of(const char *path, char *out, size_t n)
 }
 
 int cyc_ui_launcher(CycSettings *settings, const char *settings_path, const CycHostExtras *extras,
-                    const char **rom_path, bool fds)
+                    const char **rom_path, bool fds, const CycFdsBiosLookup *bios)
 {
+    static CycFdsBiosLookup bios_lookup;
+    static const char *const BIOS_PATTERNS[] = { "*.rom", "*.bin" };
     static RecompLauncherCSettings io, defaults;
     static RecompLauncherCGameInfo gi;
     static char out_rom[1024], name[256];
@@ -164,6 +200,23 @@ int cyc_ui_launcher(CycSettings *settings, const char *settings_path, const CycH
         gi.rom_patterns = FDS_PATTERNS;
         gi.num_rom_patterns = 2;
         gi.rom_filter_desc = "Famicom Disk System image (.fds, .qd)";
+    }
+    /* The FDS BIOS: the SYSTEM card and a "required" notice for a disk image
+     * the lookup finds none for; a cartridge's verdict is "not needed". The
+     * pick comes back in io.bios_path and is saved in config.ini by the host,
+     * so the launcher writes no bios.cfg / rom.cfg sidecars. */
+    if (bios) {
+        bios_lookup = *bios;
+        bios_lookup.saved_path = NULL;
+        bios_lookup.image_path = NULL;
+        gi.has_bios = 1;
+        gi.bios_name = "FDS BIOS (disksys.rom)";
+        gi.bios_patterns = BIOS_PATTERNS;
+        gi.num_bios_patterns = 2;
+        gi.bios_filter_desc = "Famicom Disk System BIOS (disksys.rom)";
+        gi.bios_verify_for_rom = cyc_ui_bios_verify;
+        gi.bios_verify_ctx = &bios_lookup;
+        gi.host_persists_paths = 1;
     }
 #ifdef CYC_LAUNCHER_ROM_SHA256
     /* The image this program was compiled from, hashed the way the launcher

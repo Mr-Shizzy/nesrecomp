@@ -40,6 +40,7 @@
 
 #include "cyc_core.h"
 #include "cyc_disk_action.h"
+#include "cyc_fds_bios.h"
 #include "cyc_host.h"
 #include "cyc_host_extras.h"
 #include "cyc_input.h"
@@ -115,28 +116,11 @@ static void save_settings(void)
 /* A disk image, from the compiled program or the file itself. */
 static bool looks_fds(const char *path)
 {
-    if (cyc_native_fds_bios_crc32) return true;
-    if (!path) return false;
-    FILE *f = fopen(path, "rb");
-    if (!f) return false;
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    bool fds = false;
-    uint8_t *buf = n > 0 ? (uint8_t *)malloc((size_t)n) : NULL;
-    if (buf && fread(buf, 1, (size_t)n, f) == (size_t)n) {
-        NesCartInfo cart;
-        NesFdsImage img;
-        const char *ext = strrchr(path, '.');
-        bool qd = ext && (!strcmp(ext, ".qd") || !strcmp(ext, ".QD"));
-        fds = !nes_cart_image(buf, (size_t)n, &cart) && nes_fds_image(buf, (size_t)n, qd ? NES_FDS_QD : NES_FDS_NONE, &img);
-    }
-    free(buf);
-    fclose(f);
-    return fds;
+    return cyc_native_fds_bios_crc32 || cyc_fds_image_file(path);
 }
 
-int cyc_sdl_prelaunch(const char **rom_path, NesFdsHleAsk *saved_hle)
+int cyc_sdl_prelaunch(const char **rom_path, const char *cli_bios, NesFdsHleAsk *saved_hle,
+                      const char **saved_bios)
 {
     s_extras = cyc_host_extras();
     if (!s_set_path[0]) snprintf(s_set_path, sizeof(s_set_path), "%s", cyc_settings_default_path());
@@ -146,15 +130,32 @@ int cyc_sdl_prelaunch(const char **rom_path, NesFdsHleAsk *saved_hle)
 #ifdef CYC_WITH_RECOMP_UI
     const char *no = getenv("NESRECOMP_NO_LAUNCHER");
     if (!(no && *no && *no != '0') && !s_set.skip_launcher) {
-        int r = cyc_ui_launcher(&s_set, s_set_path, s_extras, rom_path, s_fds);
+        /* The launcher's BIOS state runs the host's own lookup (cyc_fds_bios.h);
+         * its pick comes back in s_set.fds_bios. */
+        const CycFdsBiosLookup bios = { cli_bios, NULL, cyc_native_fds_bios_path, NULL,
+                                        cyc_native_fds_bios_crc32 };
+        int r = cyc_ui_launcher(&s_set, s_set_path, s_extras, rom_path, s_fds, &bios);
         save_settings();
         if (r == 1) return 1;
         s_fds = looks_fds(*rom_path);
     }
+#else
+    (void)cli_bios;
 #endif
     if (s_extras && s_extras->set_view_mode && s_set.view_mode) s_extras->set_view_mode(s_extras->ctx, s_set.view_mode);
     *saved_hle = s_set.fds_hle;
+    *saved_bios = s_set.fds_bios[0] ? s_set.fds_bios : NULL;
     return 0;
+}
+
+bool cyc_sdl_error_box(const char *title, const char *text)
+{
+    /* Never on a hidden or offscreen window (the native box would still reach
+     * the desktop). */
+    const char *drv = getenv("SDL_VIDEODRIVER");
+    if (s_hidden || (drv && (!strcmp(drv, "dummy") || !strcmp(drv, "offscreen")))) return false;
+    /* SDL_ShowSimpleMessageBox needs no SDL_Init. */
+    return SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, text, NULL) == 0;
 }
 
 /* ---- the window ---- */

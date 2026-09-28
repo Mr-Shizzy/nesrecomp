@@ -20,6 +20,7 @@
  */
 #pragma once
 #include "cyc_host_extras.h"
+#include "cyc_fds_bios.h"
 #include <stdbool.h>
 #include <stdint.h>
 #ifdef __cplusplus
@@ -46,9 +47,19 @@ typedef struct {
 
 /* The launcher, before the image loads. `settings` is edited in place; on
  * launch *rom_path may name another image. 0: launch, 1: the player quit,
- * 2: no launcher could open (go on as without it). */
+ * 2: no launcher could open (go on as without it).
+ * `bios` (NULL: none) is the host's FDS BIOS lookup without its saved and
+ * image paths (--fds-bios, game.toml's, the compiled CRC): the launcher runs
+ * it for the selected image and the player's pick (settings->fds_bios), shows
+ * "FDS BIOS required" with Select BIOS... when it finds nothing usable for a
+ * disk image, and keeps Start disabled until it does. */
 int  cyc_ui_launcher(struct CycSettings *settings, const char *settings_path, const CycHostExtras *extras,
-                     const char **rom_path, bool fds);
+                     const char **rom_path, bool fds, const CycFdsBiosLookup *bios);
+/* The launcher's BIOS verdict (recomp-ui GameInfo.bios_verify_for_rom), ctx
+ * the lookup above. */
+struct RecompLauncherCBiosVerify;
+int  cyc_ui_bios_verify(void *ctx, const char *bios_path, const char *rom_path,
+                        struct RecompLauncherCBiosVerify *out);
 
 /* The runtime menu. */
 bool cyc_ui_init(SDL_Window *win, SDL_Renderer *ren, const CycUiHost *host);

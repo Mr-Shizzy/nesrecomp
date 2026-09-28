@@ -39,6 +39,7 @@ set(NESRECOMP_CYC_SOURCES
     ${NESRECOMP_CYC_DIR}/cyc_png.c
     ${NESRECOMP_CYC_DIR}/cyc_disk_action.c
     ${NESRECOMP_CYC_DIR}/cyc_overlay.c
+    ${NESRECOMP_CYC_DIR}/cyc_fds_bios.c
 )
 set(NESRECOMP_CYC_INCLUDE_DIRS ${NESRECOMP_CYC_DIR})
 option(NESRECOMP_DEV_UI "Window developer surface: FDS drive bar, dev keys (F1-F4, F6+), coverage title" OFF)

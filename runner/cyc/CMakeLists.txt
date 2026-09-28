@@ -116,7 +116,8 @@ if(SDL2_FOUND)
         set(window_ui --recomp-ui)
         # The host's side of the launcher against a scripted launcher: what it
         # hands over, and every edit coming back into config.ini.
-        add_executable(cyc_ui_launcher_test ui_launcher_test.c cyc_ui_launcher.c cyc_settings.c cyc_input.c)
+        add_executable(cyc_ui_launcher_test ui_launcher_test.c cyc_ui_launcher.c cyc_settings.c cyc_input.c
+            cyc_fds_bios.c)
         target_include_directories(cyc_ui_launcher_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS}
             "${NESRECOMP_RECOMP_UI}/src" "${NESRECOMP_RECOMP_UI}/src/common")
         target_link_libraries(cyc_ui_launcher_test PRIVATE SDL2::SDL2)
