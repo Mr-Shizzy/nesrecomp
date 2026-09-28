@@ -54,22 +54,30 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     for flag in ('rom', 'recompiler', 'out'):
         ap.add_argument('--' + flag, type=Path, required=True)
-    for flag in ('game', 'seeds', 'fds_bios'):
+    for flag in ('game', 'seeds', 'captures', 'fds_bios'):
         ap.add_argument('--' + flag.replace('_', '-'), dest=flag, type=Path)
     args = ap.parse_args()
     rom, compiler, out = (p.resolve() for p in (args.rom, args.recompiler, args.out))
     dependencies = [rom, compiler]
     game = args.game.resolve() if args.game else None
     seeds = args.seeds.resolve() if args.seeds else None
+    captures = args.captures.resolve() if args.captures else None
     if game:
         dependencies.append(game)
         config = tomllib.loads(game.read_text(encoding='utf-8'))
         configured_seed = config.get('game', {}).get('cycle_seed_file')
         if seeds is None and configured_seed:
             seeds = (game.parent / configured_seed).resolve()
+        configured_captures = config.get('game', {}).get('cycle_capture_file')
+        if captures is None and configured_captures:
+            captures = (game.parent / configured_captures).resolve()
     if seeds:
         # A typo must not silently turn a profiled build into interpreter-only.
         dependencies.append(seeds)
+    if captures:
+        # The RAM capture file (the host's --capture-log) is a build input
+        # like the seed file: its content decides which RAM views compile.
+        dependencies.append(captures)
     # A Famicom Disk System title compiles the RAM Adapter BIOS; the image is
     # the disk. The BIOS comes from --fds-bios, game.toml [fds] bios, or
     # bios/disksys.rom beside the image, and must match its identity.
@@ -98,6 +106,8 @@ def main():
                    '--cycle-accurate', '--output-prefix', 'game']
         if seeds:
             command += ['--cycle-seed-file', str(seeds)]
+        if captures:
+            command += ['--cycle-capture-file', str(captures)]
         if fds:
             command += ['--fds-bios', str(bios)]
         run = subprocess.run(command, cwd=folder, capture_output=True, text=True,
