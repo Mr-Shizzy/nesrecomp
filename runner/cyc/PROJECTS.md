@@ -45,7 +45,8 @@ endif()
 ```
 
 Set `NESRECOMP_ROOT` before this block. The function also accepts `HEADLESS`,
-`RECOMPILER /path/to/NESRecomp` and `SEED_FILE /path/to/seeds.txt`. Relative
+`RECOMPILER /path/to/NESRecomp`, `SEED_FILE /path/to/seeds.txt` and
+`CAPTURE_FILE /path/to/captures.txt`. Relative
 paths are relative to the calling CMake source directory; a seed path inside
 `game.toml` is relative to that configuration file. `GAME_CONFIG` is optional.
 Existing legacy-generated C and `extras.c` are not cycle-backend inputs.
@@ -74,11 +75,17 @@ Unseen code runs through the cycle interpreter. Profile a route with
 `NESRECOMP_CYCLE_SEEDS` (or `SEED_FILE`) to the resulting file. This overrides
 `[game].cycle_seed_file`. It is a build input, not a save or RAM image.
 
-CMake reconfigures when the ROM, configuration, seed file, host compiler or
+Code in RAM that no compiled view covered (copied or generated code, disk code
+reached only through indirect jumps, code the program rewrites) is captured the
+same way: `nes_game ROM --frames 3000 --input route.txt --capture-log
+captures.txt`, then `NESRECOMP_CYCLE_CAPTURES` (or `CAPTURE_FILE`), which
+overrides `[game].cycle_capture_file`. See [Code in RAM](README.md#code-in-ram).
+
+CMake reconfigures when the ROM, configuration, seed or capture file, host compiler or
 code-generator sources change. Each input revision gets its own generated
 directory, preventing obsolete bank translation units from entering the
 target. Prior revisions remain in the build directory and can be discarded
-with that build directory. A missing configured seed file is an error.
+with that build directory. A missing configured seed or capture file is an error.
 Generation logs and the selected source list are under `cycle-<target>`.
 
 `tools/cyc/test_cyc_project.py` checks the integration with an original ROM,

@@ -138,8 +138,9 @@ control leaves compiled code.
 
 ### The interpreter
 
-Code in RAM, open bus execution, instructions that wrap past `$FFFF`, and
-addresses discovery did not reach run on `cpu6502_interp.c`. It is the output
+Code in RAM that no compiled view covers (see [Code in RAM](#code-in-ram)),
+open bus execution, instructions that wrap past `$FFFF`, and addresses
+discovery did not reach run on `cpu6502_interp.c`. It is the output
 of the same template functions with the operand bytes read at run time instead
 of folded:
 
@@ -212,27 +213,146 @@ NESRecomp AccuracyCoin.nes --game game.toml                              # regen
 A frame ends at the first instruction boundary at or after the PPU reports
 VBlank, in recompiled, interpreted and oracle runs alike.
 
+### Code in RAM
+
+A Famicom Disk System game is code in RAM: the BIOS loads its files from the
+disk into PRG RAM (`$6000-$DFFF`) with ordinary CPU stores, often several
+different files at the same address over a session. The disk image is a build
+input, though, so the recompiler knows every byte those files can put there.
+It compiles code in RAM from **images** of RAM:
+
+- every PRG file of every side of the disk at its load address, hidden files
+  and files that overlap each other included (a file's part below `$0800` is a
+  CPU RAM image);
+- every snapshot a run captured (below), for code no file holds as it ran:
+  routines the program copies or generates, and disk code whose compiled view
+  was not valid when it ran.
+
+An image is discovered like ROM, from the game's vectors (`$DFF6/$DFF8/$DFFA`
+NMI as `$0100` selects, `$DFFC` reset, `$DFFE` IRQ), JMP/JSR targets (a target
+that leaves one image seeds every image covering it, since any of them may be
+resident then; one in the BIOS seeds the BIOS), and captured instructions. It
+is then cut into **views**: the instructions that local control flow (fall-
+through, branches, JMP, JSR returns, not calls) connects inside one 1KB chunk.
+A view folds **only its own instructions' bytes** — its *dependency* — and
+nothing else: dummy reads of the next byte, pointer reads and all data are read
+at run time. Views equal in instructions and bytes (the same code in two files)
+merge. Each compiles to one C function in `<prefix>_cyc_rNN.c`, with its
+dependency as `(address, length)` runs and the bytes they must hold
+(`CycRamView`, `cyc_recomp.h`); `<prefix>_cyc_views.txt` names the image each
+came from.
+
+At run time (`cyc_ramview.c`) a view is entered only while RAM holds its
+dependency:
+
+- dispatch at a RAM address looks up the views with an instruction starting
+  there; a view already known to be valid is entered at once, an unknown one is
+  compared with RAM first (matching makes it valid, differing makes it
+  invalid), and if none holds, the interpreter runs the instruction — correct
+  by construction;
+- a **write watch** marks every RAM byte some view folds (`hw_code_watch`). All
+  RAM stores go through `hw_bus_write` and `fds_cpu_write` (the DMAs only
+  read), and a store that changes a watched byte demotes every view folding it
+  to unknown. A store to a byte no view folds — a variable next to code — costs
+  one table load and changes nothing, so code and data can share a page;
+- **a store that can reach a byte some view folds ends the block** if it
+  invalidated a view: compiled RAM code tests `cyc_ram_code_dirty` after every
+  store whose address range can reach the program's folded bytes (the
+  compiler knows them all; stores to the stack page or to variables no view
+  folds carry no test) and returns to the scheduler, which validates the next
+  instruction afresh. This is the RAM form of "a write that can reach a bank
+  register ends the block". An instruction's operands are fetched before its
+  stores (a JSR pushes between its operand fetches, so the stack page is never
+  compiled), and interrupts and DMA never write RAM, so no folded instruction
+  runs after its bytes change.
+
+Code that rewrites itself is compiled from the evidence a run records. The
+capture keeps the values stores wrote over folded bytes that no compiled view
+holds there. A value that a disk file holds there is a file loading over
+another, which content-keyed views already handle. Any other value is the
+program rewriting its code: an instruction whose **operand** bytes are rewritten
+(or that ran with operands no file has there) is compiled to read them at run
+time — the interpreter's template with its address and opcode constant, which
+returns to the scheduler when done — so its view never depends on them; an
+instruction whose **opcode** is rewritten is compiled alone, one view per
+content, so the code around it keeps a valid view whichever instruction it
+holds.
+
+**The capture loop** (psxrecomp's overlay model). The interpreter records the
+RAM code it ran with no valid view: each instruction as it ran (address and
+bytes), and per 1KB chunk a snapshot taken when such code ran, one per distinct
+code layout; the watch adds the rewritten bytes. `--capture-log FILE` writes it
+(merged across runs), and `[game] cycle_capture_file` (or
+`NESRecomp --cycle-capture-file`, `CAPTURE_FILE`/`NESRECOMP_CYCLE_CAPTURES` in
+a [project build](PROJECTS.md)) feeds it back as a build input, like the seed
+file:
+
+```bash
+FdsGame game.fds --frames 3000 --input route.txt --capture-log captures.txt
+NESRecomp game.fds --game game.toml --cycle-capture-file captures.txt
+```
+
+A captured instruction seeds every disk file that holds it as it ran, and each
+snapshot is compiled from what ran in it only (its data is not decoded), so a
+capture never adds guesses. CPU RAM `$0000-$07FF` (not the stack page) works
+the same way for any board; PRG RAM views need the FDS's unbanked RAM.
+
+Measured (alignment 0; each row also native = `--interp-only` = `cyc_interp`
+on `--hash-out` at all four alignments; "after" = compiled with the capture of
+one run of the same route; the 7 cycles left are the power-on reset):
+
+| Program, route | Frames | Native before (disk files only) | Native after one capture | RAM views |
+|----------------|--------|--------------------------------|--------------------------|-----------|
+| SMB2J, boot to title | 800 | 97.5% | 100.0% | 290 |
+| Otocky, side B at 1258 | 3000 | 100.0% | 100.0% (no capture needed) | 207 |
+| Nazo no Murasame-jou, title, menu, name entry | 6000 | 87.2% | 100.0% | 263 |
+| Esper Dream, title, side B, name entry | 7200 | 99.1% | 100.0% | 727 |
+| Dead Zone, title, menu, name entry | 6000 | 100.0% (716 instructions interpreted) | 100.0% | 479 |
+| AccuracyCoin (CPU RAM) | 4,324 | 100.0% (29,273 cycles interpreted) | 100.0% (2,129) | 280 |
+
+Before RAM views the FDS rows were 10.3% (SMB2J) to 68.1% of their cycles on
+the interpreter. AccuracyCoin with its captured RAM code still passes 144/144
+and matches the oracle on every frame at all four alignments. Speed is the
+hardware model's either way: SMB2J 3,000 frames went from 315 to 326 fps native
+(311 to 314 `--interp-only`), Otocky from 343 to 364 (334 to 337). The write
+watch costs nothing measurable. `tools/cyc/test_cyc_ramviews.py` (CTest
+`cyc_ramview_test`) checks a synthetic disk whose code rewrites itself every
+way above (operands, the next opcode, overlays over each other, a copy over its
+own tail, an NMI patching the loop it interrupts, stores through every
+addressing mode, a variable beside code), before and after a capture.
+
 ### Reading a coverage number
 
-A run that is not 100% native says where the rest of its cycles went:
+A run says where its cycles went:
 
 ```
-mode=native frames=20000 cycles=595608176 native_cycles=337726733 (56.7%)
-  interpreted: ROM 0 (0.0%, add to cycle_seed_file)  RAM 321881443 (54.2%, written at run time, not compilable)
+mode=native frames=800 cycles=23822067 native_cycles=23223334 (97.5%)
+  native: ROM 21372061 (89.7%)  RAM views 1851273 (7.8%)
+  interpreted: ROM 0 (0.0%, add to cycle_seed_file)  RAM 0 (0.0%, CPU RAM code no view covers: --capture-log)  PRG RAM 598726 (2.5%, disk code no view covers: --capture-log)
+  ram views: 24 compiled (24 usable here), 2541 entries, 14 validated, 0 rejected, 0 invalidated by stores, 0 block exits after code stores, 189922 RAM instructions interpreted
 ```
 
-The two are acted on differently. ROM cycles are entry points discovery did not
-reach: `--miss-log` lists them and seeding them compiles them, so that number
-should reach 0. RAM cycles are instructions the program wrote at run time —
-code that is not in the ROM image, and that a static recompiler therefore
-cannot compile at any effort. `--miss-log` also lists the RAM addresses that
-started an instruction, as comments (the recompiler skips them), with the
-number of distinct opcode bytes ever seen at each: 1 means only operands change
-there, more means the byte is an opcode on one pass and an operand on another.
-Mapperless (Demo), an NROM demo whose effects run from patched zero-page
-routines, is 100% of its ROM cycles native and 56.7% overall for that reason —
-over 45,000 frames, 364 of its 870 RAM instruction addresses saw more than one
-opcode, so there is no fixed instruction stream there to compile.
+(SMB2J's boot, compiled from its disk alone.) The interpreted cycles are acted
+on by where they started. ROM cycles are entry points discovery did not reach:
+`--miss-log` lists them and seeding them compiles them. RAM cycles (CPU RAM,
+and the FDS's PRG RAM) are code that no compiled view held as it ran: disk code
+reached only through RTS or JMP-indirect dispatch, code the program copied or
+generated, code whose view a store had just made stale. `--capture-log` records
+it and compiling with that file compiles it (see [Code in RAM](#code-in-ram)),
+so both numbers should reach 0: the same SMB2J boot after one capture run is
+100.0% native (7 cycles are the power-on reset sequence), 10.3% of it RAM views.
+The `ram views` line counts entries into views, views compared with RAM
+(validated or rejected), views a store invalidated, and blocks that returned
+after such a store; the event ring has each of these (`view.*`,
+`ram.interp`, and a per-frame `view.frame`).
+
+`--miss-log` still lists the RAM addresses that started an instruction on the
+interpreter, as comments, with the number of distinct opcode bytes seen at
+each: 1 means only operands change there, more means the byte is an opcode on
+one pass and an operand on another. Mapperless (Demo), an NROM demo whose
+effects run from patched zero-page routines, is 100% of its ROM cycles native
+and 56.7% overall without a capture file — over 45,000 frames, 364 of its 870
+RAM instruction addresses saw more than one opcode.
 
 **What the percentage is and is not.** It says how much of the program's work
 was performed by compiled code rather than interpreted — provenance, not
@@ -299,9 +419,9 @@ was compiled from) identifies is accepted: 8192 bytes, CRC32 5E607DCF. The
 BIOS passes arguments inline after its JSRs (`$E844`, `$E3E7`); discovery
 knows its routines that do (`FDS_BIOS_INLINE_JSR` in `cyc_codegen.c`, and
 `[game] cycle_inline_jsr` for any program), so the BIOS runs 100% native with
-no seed file. Code the BIOS loads from the disk into PRG RAM runs on the
-interpreter; the run summary counts it as "PRG RAM" and `--miss-log` lists
-its instruction starts. Disk events (`--fds-event`, or `F DISK_EJECT`,
+no seed file. Code the BIOS loads from the disk into PRG RAM runs as compiled
+RAM views ([Code in RAM](#code-in-ram)); what no view covers runs on the
+interpreter, counted as "PRG RAM" and recorded by `--capture-log`. Disk events (`--fds-event`, or `F DISK_EJECT`,
 `F DISK_SELECT SIDE`, `F DISK_INSERT [SIDE]` lines in an `--input` file) apply
 before frame F runs, where nesref applies its script's disk commands; the SDL
 window has F1 (eject / insert) and F3 (next side).
@@ -334,8 +454,10 @@ left on the stack by an NMI: at matched frame points the two CPU cycle counts
 differ by -5 to +3 cycles (+2 in 518 of 770 frames), so the snapshot or the
 NMI lands one instruction apart (in the title's 6-cycle idle loop the pushed
 return address alternates between $605B and $605D). Drive byte clocks keep
-that same +2 offset from Mesen's counter. In the SMB2J boot the BIOS is 89.7%
-of the CPU cycles, all native; the rest (10.3%) is disk-loaded code.
+that same +2 offset from Mesen's counter. In the SMB2J boot the BIOS is 89.7% of
+the CPU cycles and disk-loaded code the other 10.3%, all native once compiled
+with one capture ([Code in RAM](#code-in-ram)); the gate counts above are the
+same with and without RAM views.
 
 ### Timing model (`hw_internal.h`, `hw_machine.c`)
 
@@ -814,11 +936,12 @@ describes trace equality, while the printed test scores describe accuracy.
 - Four-screen boards (iNES flag 6 bit 3), including mapper-206 Gauntlet, are
   rejected because cartridge nametable RAM is not implemented.
 - A separate host from the main runner (`runner/src`).
-- Code the program writes at run time runs on the interpreter, not as compiled
-  code, and no amount of seeding changes that: the instructions are not in the
-  ROM to compile. Correctness is unaffected — the interpreter comes from the
-  same templates — but a program built around self-modifying code will not
-  reach a high native share. Mapperless (Demo) is the worked example.
+- Code in RAM is compiled only from images the compiler has seen: disk files,
+  and snapshots a capture run recorded. Code a run has not yet executed with
+  no view (a new route, new generated code) runs on the interpreter until it is
+  captured; correctness is unaffected either way. Cartridge work RAM
+  (`$6000-$7FFF`, banked on several boards) has no views; CPU RAM and the FDS
+  PRG RAM do.
 - Speed: a headless AccuracyCoin run takes about 9.6 s (~450 fps, ~7.5× real
   time) on a Ryzen 7 5700; 3,000 frames of its rendering menu take 11.8 s
   (~250 fps). SMB3's 3,000-frame playthrough takes 14.1 s (~213 fps, ~3.5×
