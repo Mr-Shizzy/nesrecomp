@@ -20,7 +20,7 @@ identical the same way, compile the self-modified operands to be read at run
 time, and leave no RAM instruction to the interpreter.
 
 python tools/cyc/test_cyc_ramviews.py --recompiler build/compiler/NESRecomp.exe \\
-    --interp build/cyc/cyc_interp.exe --out build/cyc-ramviews [--cmake ... --generator ... --make-program ...]
+    --interp build/cyc/cyc_interp.exe --out build/cyc-ramviews [--toolchain build/cyc/nested_build.json]
     [--source RUNNER_CYC_DIR]   # the runtime sources (default: this checkout's runner/cyc)
 """
 import argparse
@@ -29,6 +29,9 @@ import re
 import shutil
 import subprocess
 import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import nested_build                        # noqa: E402
 
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 FRAMES = 40
@@ -87,20 +90,8 @@ def build(args, out, name, captures, source):
         'target_include_directories(ramview PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})',
         'target_link_libraries(ramview PRIVATE ${NESRECOMP_CYC_LIBRARIES})',
         'target_compile_definitions(ramview PRIVATE _CRT_SECURE_NO_WARNINGS)']) + '\n')
-    command = [args.cmake, '-S', folder, '-B', folder / 'build', f'-DCMAKE_BUILD_TYPE={args.config}']
-    if args.generator:
-        command += ['-G', args.generator]
-    if args.make_program:
-        command += [f'-DCMAKE_MAKE_PROGRAM={args.make_program}']
-    if args.c_compiler:
-        command += [f'-DCMAKE_C_COMPILER={args.c_compiler}']
-    run(command, folder, folder / 'configure.log')
-    run([args.cmake, '--build', folder / 'build', '--config', args.config, '--parallel', '8'], folder, folder / 'build.log')
-    suffix = '.exe' if NO_WINDOW else ''
-    for exe in (folder / 'build' / args.config / ('ramview' + suffix), folder / 'build' / ('ramview' + suffix)):
-        if exe.exists():
-            return exe, folder
-    raise AssertionError(f'{name}: no executable built')
+    args.toolchain_.build(folder, folder / 'build', folder)
+    return args.toolchain_.executable(folder / 'build', 'ramview'), folder
 
 
 def check_pass(name, exe, folder, args, out, expect):
@@ -142,14 +133,10 @@ def main():
     ap.add_argument('--recompiler', required=True, type=Path)
     ap.add_argument('--interp', required=True, type=Path)
     ap.add_argument('--out', required=True, type=Path)
-    ap.add_argument('--cmake', default='cmake')
-    ap.add_argument('--generator')
-    ap.add_argument('--make-program')
-    ap.add_argument('--c-compiler')
-    ap.add_argument('--config', default='Release')
+    nested_build.add_arguments(ap)
     ap.add_argument('--source', type=Path, help='runner/cyc sources to build (default: this checkout)')
     args = ap.parse_args()
-    args.config = args.config or 'Release'
+    args.toolchain_ = nested_build.Toolchain.from_args(args)
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     here = Path(__file__).resolve().parent

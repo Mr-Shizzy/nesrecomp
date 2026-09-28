@@ -50,6 +50,13 @@
  *     --shot-every N       also save every Nth frame, as FILE with the frame
  *                          number before its extension (shot.png -> shot_00120.png)
  *     --wav-out FILE       record the audio output (48 kHz mono)
+ *     --console MODEL      the analog output stage the audio goes through
+ *                          (cyc_core.h cyc_set_console): nes (front-loader:
+ *                          90 Hz + 440 Hz high-pass, 14 kHz low-pass), famicom
+ *                          (37 Hz high-pass) or default: famicom for boards
+ *                          made only for the Famicom with expansion audio (FDS,
+ *                          Namco 163, VRC6, VRC7), nes otherwise. A compiled
+ *                          program's default is game.toml [game] console.
  *     --frame-log FILE     binary per-frame snapshot of CPU RAM, CIRAM, palette,
  *                          OAM, cartridge/PRG RAM, CHR RAM, the picture's
  *                          color indices and the FDS sound unit's state
@@ -658,6 +665,8 @@ int main(int argc, char **argv) {
     const char *miss_log = NULL, *capture_log = NULL, *view_list = NULL;
 #endif
     int align = 0, scale = 3;
+    CycConsole console = CYC_CONSOLE_DEFAULT;
+    bool console_given = false;
     long frames = 600, trace_frame = -1, state_frame = -1;
     int spam_page = -1, spam_row = 0;
     const char *input_file = NULL;
@@ -707,6 +716,14 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--state-frame") && i + 1 < argc) state_frame = atol(argv[++i]), headless = true;
         else if (!strcmp(argv[i], "--state-out") && i + 1 < argc) state_out = argv[++i], headless = true;
         else if (!strcmp(argv[i], "--wav-out") && i + 1 < argc) wav_out = argv[++i], headless = true;
+        else if (!strcmp(argv[i], "--console") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "nes")) console = CYC_CONSOLE_NES;
+            else if (!strcmp(v, "famicom")) console = CYC_CONSOLE_FAMICOM;
+            else if (!strcmp(v, "default")) console = CYC_CONSOLE_DEFAULT;
+            else { fprintf(stderr, "--console: nes, famicom or default\n"); return 2; }
+            console_given = true;
+        }
         else if (!strcmp(argv[i], "--mem-frame") && i + 1 < argc) mem_frame = atol(argv[++i]), headless = true;
         else if (!strcmp(argv[i], "--mem-out") && i + 1 < argc) mem_out = argv[++i], headless = true;
 #ifndef CYC_ORACLE
@@ -786,6 +803,7 @@ int main(int argc, char **argv) {
                         "       [--trace-frame N --trace-out FILE] [--state-frame N --state-out FILE]\n"
                         "       [--miss-log FILE] [--capture-log FILE] [--ram-view-list FILE]\n"
                         "       [--screenshot FILE [--shot-every N]] [--wav-out FILE]\n"
+                        "       [--console nes|famicom|default]\n"
                         "       [--frame-log FILE [--frame-log-frames A:B]] [--ring-out FILE [--ring-frames A:B]]\n"
                         "       FDS: [--fds-bios FILE] [--fds-boot-disk none|SIDE] [--fds-event F:ACTION]\n"
                         "            [--fds-profile mesen|mesen2|hardware] [--fds-crc computed|mesen]\n"
@@ -904,6 +922,12 @@ int main(int argc, char **argv) {
     if (barcode && (barcode_frame<0 || !cyc_scan_barcode(barcode,barcode_speed))) {
         fprintf(stderr,"barcode requires Datach, 8/12/13 digits with valid checksum, and a positive module duration\n"); return 2;
     }
+#ifndef CYC_ORACLE
+    if (!console_given) console = (CycConsole)cyc_native_console;   /* game.toml [game] console */
+#else
+    (void)console_given;
+#endif
+    cyc_set_console(console);
     cyc_power_on((uint8_t)align);
 #ifndef CYC_ORACLE
     cyc_run_power_on();
@@ -960,6 +984,8 @@ int main(int argc, char **argv) {
             fprintf(stderr, "%s has no audio output\n", cyc_hw_name());
         } else if ((wav_f = fopen(wav_out, "wb")) != NULL) {
             wav_header(wav_f, WAV_RATE, 0);
+            printf("audio: %d Hz, %s output stage%s\n", WAV_RATE, cyc_console_name(cyc_console()),
+                   console == CYC_CONSOLE_DEFAULT ? " (the board's default)" : "");
         }
     }
 

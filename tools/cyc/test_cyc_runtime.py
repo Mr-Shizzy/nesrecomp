@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 
 from cyc_verify import first_difference
+import nested_build
 from mapper_fixtures import mapper_fixtures
 from mapper_ppu_fixtures import ppu_fixtures
 from cart_variant_fixtures import variant_fixtures
@@ -83,12 +84,11 @@ def main():
     ap.add_argument('--interp', required=True, type=Path)
     ap.add_argument('--oracle', required=True, type=Path)
     ap.add_argument('--out', required=True, type=Path)
-    ap.add_argument('--cmake', default='cmake')
-    ap.add_argument('--generator')
-    ap.add_argument('--config', default='Release')
+    nested_build.add_arguments(ap)
     ap.add_argument('--build-timeout', type=int, default=900)
     ap.add_argument('--case-prefix', default='', help='Run only fixtures with this name prefix')
     args = ap.parse_args()
+    tc = nested_build.Toolchain.from_args(args)
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     compiler, interp, oracle = (p.resolve() for p in (args.recompiler, args.interp, args.oracle))
@@ -126,12 +126,7 @@ def main():
                   f'target_link_libraries({name} PRIVATE ${{NESRECOMP_CYC_LIBRARIES}})',
                   f'target_compile_definitions({name} PRIVATE _CRT_SECURE_NO_WARNINGS)']
     (out / 'CMakeLists.txt').write_text('\n'.join(cmake))
-    command = [args.cmake, '-S', out, '-B', out / 'build', f'-DCMAKE_BUILD_TYPE={args.config}']
-    if args.generator:
-        command += ['-G', args.generator]
-    run(command, out, out / 'configure.log', timeout=args.build_timeout)
-    run([args.cmake, '--build', out / 'build', '--config', args.config, '--parallel', '4'],
-        out, out / 'build.log', timeout=args.build_timeout)
+    tc.build(out, out / 'build', out, timeout=args.build_timeout, parallel=4)
     for name, _, _, expected in cases:
         final_only = expected.startswith('final:')
         expected = expected.removeprefix('final:')
@@ -141,10 +136,7 @@ def main():
         expected = expected.removeprefix('fallback:')
         frames = 6 if final_only else 3
         case = out / name
-        suffix = '.exe' if hasattr(subprocess, 'CREATE_NO_WINDOW') else ''
-        native = out / 'build' / args.config / (name + suffix)
-        if not native.exists():
-            native = out / 'build' / (name + suffix)
+        native = tc.executable(out / 'build', name)
         for align in range(4):
             hashes = {}
             for mode, exe, extra in [('native', native, []), ('interp', native, ['--interp-only']),

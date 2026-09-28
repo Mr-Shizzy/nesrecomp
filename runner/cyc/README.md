@@ -541,7 +541,15 @@ Output: Mesen mixes the 6-bit output unfiltered at 20 per step against
 at 1/5000 of that scale, so the FDS is 20/5000 per step, in phase with the
 2A03 (full volume = 1.69 full pulses). The `hardware` profile uses the
 nesdev level (2.4 pulses) and its ~2 kHz one-pole low-pass instead; that
-column is a judgment call, not oracle-verified. Neither Mesen models the
+column is a judgment call, not oracle-verified. That low-pass is the RAM
+Adapter's own: nesdev's FDS audio page gives it for the FDS signal ("This
+output signal is affected by a filter"), lidnariq derived it (1.36-1.75 kHz)
+from the adapter board's resistors and capacitors (nesdev forum t=10233),
+rainwarrior fitted ~2 kHz to Famicom + FDS recordings, and NSFPlay applies it
+(2000 Hz) to the FDS channel alone. So it filters the FDS sound before the
+adapter mixes it with the 2A03's and is not part of the console output stage;
+the FDS defaults to the `famicom` output stage (APU section below) in every
+profile. Neither Mesen models the
 newer nesdev findings ($4083.7 speeding the envelopes up, $4087.6, 16-cycle
 wave/mod ticks, $4091), and no profile does.
 
@@ -568,8 +576,8 @@ Checks:
 - `tools/cyc/fds_audio_gates.py` (owner files, not CI): a route on a cyc build
   and on nesref, compared by model replay, by the FdsAudio snapshot in
   Mesen's savestates frame by frame, and in PCM with the A/B analyzer
-  (`tools/nes_audio_ab.py`), also with the runtime's output stage applied to
-  nesref's PCM so synthesis and output stage separate.
+  (`tools/nes_audio_ab.py`), also with the output stage cyc used (`--console`)
+  applied to nesref's PCM so synthesis and output stage separate.
 
 #### The HLE tier (`hw_fds_hle.c`, `common/nes_fds_hle.h`)
 
@@ -709,9 +717,39 @@ is checked against the oracle. The tone generators (pulse duty and sweep,
 envelopes, triangle linear counter, noise LFSR, DMC output unit) and the mixer
 follow the nesdev descriptions, run only when audio is enabled, and are
 checked against NES_MiSTer's APU. Audio is 16-bit mono at the host's rate
-(`cyc_audio_enable`/`cyc_audio_read`), with the console's 90 Hz and 440 Hz
-high-pass and 14 kHz low-pass stages; the SDL host plays it and
-`--wav-out FILE` records it.
+(`cyc_audio_enable`/`cyc_audio_read`) through a console output stage; the SDL
+host plays it and `--wav-out FILE` records it.
+
+The output stage has two models (`cyc_set_console`, `--console`, game.toml
+`[game] console = "nes" | "famicom"`):
+
+- `nes`: the front-loader's 90 Hz and 440 Hz first-order high-pass and 14 kHz
+  low-pass (nesdev APU Mixer: blargg's measurements of the RCA output, matched
+  by lidnariq to its 150 ohm / 10 uF output coupling and the 47 kohm / 220 pF
+  around the inverter amplifier). Discretized as RC sections at the output
+  rate, so at 48 kHz the low-pass is -5.2 dB at 14 kHz rather than -3 dB.
+- `famicom`: a 37 Hz first-order high-pass, the only stage nesdev's APU Mixer
+  page gives for the Famicom ("followed by the unknown (and varying)
+  properties of the RF modulator and demodulator"). Like `nes`, it stops at
+  the console's audio output; the RF modulator and the TV's demodulator and
+  FM de-emphasis are left out, as the TV behind the NES's RCA jack is. A
+  judgment call, not oracle-verified: Mesen applies no output stage.
+
+The default follows the board: `famicom` for boards made only for the Famicom
+that carry expansion audio (the Disk System, Namco 163, VRC6, VRC7: the NES
+cartridge slot has no audio return, so their sound was only heard on a
+Famicom), `nes` for the rest, including MMC5 and FME-7/5B, which also have NES
+boards. The cartridge's audio is mixed before the stage (on the Famicom the
+2A03's audio leaves on cartridge pin 46 and returns mixed on pin 45). The FDS
+RAM Adapter's ~2 kHz low-pass is the adapter's, on the 2C33's sound only, not
+the console's; it stays with `--fds-profile hardware`.
+
+`cyc_console_audio_test` checks each model's response to sines and a step
+against its RC sections and the board defaults; `cyc_console_audio_pcm`
+(`tools/cyc/test_cyc_console_audio.py`) checks the rendered defaults, pins
+the nes and famicom renders of synthetic programs by SHA-256 (the nes ones are
+those of the build before the models existed) and compares their spectra with
+the models. `tools/cyc/console_output.py` is the models in Python.
 
 ## Verification
 
@@ -1056,6 +1094,16 @@ after changing compilers.
 
 ## Open questions
 
+- **The Famicom's audio past its 37 Hz high-pass.** The `famicom` output
+  stage stops at the console's audio output. A stock HVC-001 is heard through
+  its RF modulator and a TV, whose FM de-emphasis is a ~2.1 kHz first-order
+  low-pass unless the modulator pre-emphasizes (lidnariq, nesdev forum
+  t=13419; the NES modulator appears not to), and the AV Famicom (HVC-101)
+  has its own audio circuit; neither is measured or modelled. Which board a
+  Famicom-only game ran on is decided by mapper number, so a Japanese title
+  on a board that also had NES releases (MMC5, FME-7/5B, and every board
+  without expansion audio) defaults to `nes`: the header does not say which
+  console a cartridge was sold for.
 - **`$2001` landing inside a tile prefetch, and the Mapperless sprite column.**
   The two picture differences from Mesen still open (see
   [Against Mesen's picture](#against-mesens-picture)). Both involve `$2001`

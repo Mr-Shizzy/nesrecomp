@@ -18,6 +18,7 @@
  */
 #include "hw_internal.h"
 
+#include "cyc_core.h"
 #include "cyc_trace.h"
 #include "hw.h"
 
@@ -110,15 +111,67 @@ static const uint16_t noise_period_table[16] = {
 #define AUDIO_RING 32768u
 static struct {
     bool     on;
+    int      console;              /* CYC_CONSOLE_NES or CYC_CONSOLE_FAMICOM, while on */
     double   cycles_per_sample, phase;
     double   acc;
     uint32_t count;
     double   hp90_prev_in, hp90_prev_out, hp440_prev_in, hp440_prev_out, lp_out;
     double   hp90_a, hp440_a, lp_a;
+    double   hp37_prev_in, hp37_prev_out, hp37_a;
     int16_t  ring[AUDIO_RING];
     uint32_t head, tail;
     float    pulse_mix[31], tnd_mix[203];
 } audio;
+
+static int console_request = CYC_CONSOLE_DEFAULT;
+
+int apu_console(void)
+{
+    if (console_request != CYC_CONSOLE_DEFAULT) return console_request;
+    return hw_cart_famicom_only() ? CYC_CONSOLE_FAMICOM : CYC_CONSOLE_NES;
+}
+
+void apu_set_console(int console)
+{
+    console_request = console;
+    if (audio.on) audio.console = apu_console();
+}
+
+/*
+ * The console's analog output stage, after the mixer (which includes the
+ * cartridge's audio: on the Famicom the 2A03's audio leaves on cartridge pin
+ * 46 and returns, mixed with the cartridge's, on pin 45, ahead of this stage).
+ * Each stage is a first-order RC section discretized at the output rate,
+ * a = RC / (RC + dt) for a high-pass, dt / (RC + dt) for a low-pass.
+ *
+ *   NES      two high-pass filters (90 Hz, 440 Hz) and a 14 kHz low-pass
+ *            (nesdev wiki, APU Mixer: blargg's measurements of a front-loader's
+ *            RCA output, matched to its 150 ohm / 10 uF output coupling and the
+ *            47 kohm / 220 pF around the inverter amplifier by lidnariq).
+ *   FAMICOM  one 37 Hz high-pass (nesdev wiki, APU Mixer: "The Famicom
+ *            hardware instead ONLY specifies a first-order high-pass filter at
+ *            37 Hz, followed by the unknown (and varying) properties of the RF
+ *            modulator and demodulator"). The model stops where the NES model
+ *            does, at the console's audio output: the RF modulator, the TV's
+ *            demodulator and its FM de-emphasis (a ~2.1 kHz first-order
+ *            low-pass when the modulator has no pre-emphasis) are receiver
+ *            properties, as the TV behind the NES's RCA jack is. Judgment call,
+ *            not oracle-verified (Mesen applies no output stage at all).
+ *
+ * The FDS RAM Adapter's ~2 kHz low-pass is not part of either: it filters only
+ * the 2C33's sound before the adapter mixes it with the 2A03's (hw_fds_audio.c,
+ * the hardware profile).
+ */
+static void audio_stage_setup(int sample_rate)
+{
+    double dt = 1.0 / sample_rate;
+    double rc90 = 1.0 / (2 * 3.14159265358979 * 90), rc440 = 1.0 / (2 * 3.14159265358979 * 440),
+           rc14k = 1.0 / (2 * 3.14159265358979 * 14000), rc37 = 1.0 / (2 * 3.14159265358979 * 37);
+    audio.hp90_a = rc90 / (rc90 + dt);
+    audio.hp440_a = rc440 / (rc440 + dt);
+    audio.lp_a = dt / (rc14k + dt);
+    audio.hp37_a = rc37 / (rc37 + dt);
+}
 
 void apu_audio_enable(bool on, int sample_rate)
 {
@@ -128,14 +181,8 @@ void apu_audio_enable(bool on, int sample_rate)
     audio.cycles_per_sample = cpu_rate / sample_rate;
     audio.phase = audio.acc = 0;
     audio.count = 0;
-    /* The console's output stage: two high-pass filters (90 Hz, 440 Hz) and a
-     * 14 kHz low-pass (nesdev wiki, APU Mixer). */
-    double dt = 1.0 / sample_rate;
-    double rc90 = 1.0 / (2 * 3.14159265358979 * 90), rc440 = 1.0 / (2 * 3.14159265358979 * 440),
-           rc14k = 1.0 / (2 * 3.14159265358979 * 14000);
-    audio.hp90_a = rc90 / (rc90 + dt);
-    audio.hp440_a = rc440 / (rc440 + dt);
-    audio.lp_a = dt / (rc14k + dt);
+    audio.console = apu_console();
+    audio_stage_setup(sample_rate);
     for (int i = 0; i < 31; i++) audio.pulse_mix[i] = i ? (float)(95.52 / (8128.0 / i + 100)) : 0;
     for (int i = 0; i < 203; i++) audio.tnd_mix[i] = i ? (float)(163.67 / (24329.0 / i + 100)) : 0;
 }
@@ -152,6 +199,8 @@ size_t apu_audio_read(int16_t *out, size_t max)
 
 static void audio_emit(double level)
 {
+    /* Both models run on every sample, so switching between them (at once,
+     * cyc_set_console) continues from the signal's history, not a stale one. */
     double hp = audio.hp90_a * (audio.hp90_prev_out + level - audio.hp90_prev_in);
     audio.hp90_prev_in = level;
     audio.hp90_prev_out = hp;
@@ -159,7 +208,10 @@ static void audio_emit(double level)
     audio.hp440_prev_in = hp;
     audio.hp440_prev_out = hp2;
     audio.lp_out += audio.lp_a * (hp2 - audio.lp_out);
-    double s = audio.lp_out * 30000.0;
+    double fam = audio.hp37_a * (audio.hp37_prev_out + level - audio.hp37_prev_in);
+    audio.hp37_prev_in = level;
+    audio.hp37_prev_out = fam;
+    double s = (audio.console == CYC_CONSOLE_FAMICOM ? fam : audio.lp_out) * 30000.0;
     if (s > 32767) s = 32767;
     if (s < -32768) s = -32768;
     uint32_t next = (audio.head + 1) % AUDIO_RING;
@@ -167,6 +219,8 @@ static void audio_emit(double level)
     audio.ring[audio.head] = (int16_t)s;
     audio.head = next;
 }
+
+void apu_debug_emit(double level) { audio_emit(level); }
 
 /* The sweep's target period. Pulse 1 negates by ones' complement, pulse 2 by
  * two's complement; a negated target below 0 never mutes the channel. */

@@ -108,6 +108,18 @@ static bool game_config_load_toml(GameConfig *cfg, const char *path) {
         if (sf.ok) { strncpy(cfg->symbol_file, sf.u.s, sizeof(cfg->symbol_file) - 1); free(sf.u.s); }
         toml_datum_t fds = toml_bool_in(game, "fds");
         if (fds.ok) cfg->fds = fds.u.b;
+        toml_datum_t con = toml_string_in(game, "console");
+        if (con.ok) {
+            if (!strcmp(con.u.s, "nes")) cfg->console = 1;
+            else if (!strcmp(con.u.s, "famicom")) cfg->console = 2;
+            else if (!strcmp(con.u.s, "default")) cfg->console = 0;
+            else {
+                /* Refused by the cycle code generator (cyc_codegen_emit). */
+                fprintf(stderr, "[GameConfig] [game] console = \"%s\": expected nes, famicom or default\n", con.u.s);
+                cfg->console = 0xFF;
+            }
+            free(con.u.s);
+        }
         toml_array_t *inl = toml_array_in(game, "cycle_inline_jsr");
         for (int i = 0; inl && i < toml_array_nelem(inl) && cfg->cycle_inline_jsr_count < 64; i++) {
             toml_datum_t d = toml_string_at(inl, i);

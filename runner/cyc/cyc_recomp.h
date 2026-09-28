@@ -32,6 +32,9 @@ extern const char    *cyc_native_fds_image_path;
 /* game.toml [fds] hle: the HLE axes the program asks for by default (a list
  * common/nes_fds_hle.h parses), or NULL. */
 extern const char    *cyc_native_fds_hle;
+/* game.toml [game] console: the host's default output stage, a CycConsole
+ * (0 = the board's default, 1 = nes, 2 = famicom); --console overrides it. */
+extern const uint8_t  cyc_native_console;
 bool cyc_native_has(uint16_t addr);
 void cyc_native_run(void);
 

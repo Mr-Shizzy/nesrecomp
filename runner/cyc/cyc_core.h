@@ -159,6 +159,20 @@ const uint16_t *cyc_frame_index(void);
  * if the machine has no audio output. */
 bool   cyc_audio_enable(int sample_rate);
 size_t cyc_audio_read(int16_t *out, size_t max);
+/* Which console's analog output stage shapes the audio (hw_apu.c):
+ *   NES      the front-loader's 90 Hz and 440 Hz high-pass and 14 kHz
+ *            low-pass (nesdev APU Mixer);
+ *   FAMICOM  the Famicom's 37 Hz high-pass (nesdev APU Mixer), the only stage
+ *            the Famicom's audio path specifies before its RF modulator.
+ * DEFAULT picks by board: FAMICOM for boards that only ever existed for the
+ * Famicom and carry expansion audio (the Disk System, Namco 163, VRC6,
+ * VRC7), NES for everything else. Takes effect at cyc_audio_enable, or at
+ * once while audio is on; cyc_console() is the model in effect (or that
+ * cyc_audio_enable would pick for the loaded board). No effect on the CPU. */
+typedef enum { CYC_CONSOLE_DEFAULT, CYC_CONSOLE_NES, CYC_CONSOLE_FAMICOM } CycConsole;
+void       cyc_set_console(CycConsole console);
+CycConsole cyc_console(void);
+const char *cyc_console_name(CycConsole console);
 
 /* ---- comparison ---- */
 

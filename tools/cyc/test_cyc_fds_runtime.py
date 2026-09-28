@@ -22,6 +22,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import nested_build  # noqa: E402
+
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
@@ -63,10 +66,9 @@ def main():
     ap.add_argument('--recompiler', required=True, type=Path)
     ap.add_argument('--interp', required=True, type=Path)
     ap.add_argument('--out', required=True, type=Path)
-    ap.add_argument('--cmake', default='cmake')
-    ap.add_argument('--generator')
-    ap.add_argument('--config', default='Release')
+    nested_build.add_arguments(ap)
     args = ap.parse_args()
+    tc = nested_build.Toolchain.from_args(args)
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     here = Path(__file__).resolve().parent
@@ -87,15 +89,8 @@ def main():
         'target_include_directories(fdsboard PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})',
         'target_link_libraries(fdsboard PRIVATE ${NESRECOMP_CYC_LIBRARIES})',
         'target_compile_definitions(fdsboard PRIVATE _CRT_SECURE_NO_WARNINGS)']) + '\n')
-    command = [args.cmake, '-S', out, '-B', out / 'build', f'-DCMAKE_BUILD_TYPE={args.config}']
-    if args.generator:
-        command += ['-G', args.generator]
-    run(command, out, out / 'configure.log', timeout=900)
-    run([args.cmake, '--build', out / 'build', '--config', args.config, '--parallel', '4'], out, out / 'build.log', timeout=900)
-    suffix = '.exe' if NO_WINDOW else ''
-    native = out / 'build' / args.config / ('fdsboard' + suffix)
-    if not native.exists():
-        native = out / 'build' / ('fdsboard' + suffix)
+    tc.build(out, out / 'build', out, timeout=900, parallel=4)
+    native = tc.executable(out / 'build', 'fdsboard')
 
     # Identity: a BIOS whose CRC32 its .toml does not name is refused.
     wrong = out / 'wrong'
@@ -148,14 +143,8 @@ def main():
     shutil.rmtree(sv / 'generated', ignore_errors=True)
     run([args.recompiler.resolve(), '--game', 'game.toml'], sv, sv / 'codegen.log')
     (sv / 'CMakeLists.txt').write_text((out / 'CMakeLists.txt').read_text().replace('fdsboard', 'fdssave'))
-    command = [args.cmake, '-S', sv, '-B', sv / 'build', f'-DCMAKE_BUILD_TYPE={args.config}']
-    if args.generator:
-        command += ['-G', args.generator]
-    run(command, sv, sv / 'configure.log', timeout=900)
-    run([args.cmake, '--build', sv / 'build', '--config', args.config, '--parallel', '4'], sv, sv / 'build.log', timeout=900)
-    saver = sv / 'build' / args.config / ('fdssave' + suffix)
-    if not saver.exists():
-        saver = sv / 'build' / ('fdssave' + suffix)
+    tc.build(sv, sv / 'build', sv, timeout=900, parallel=4)
+    saver = tc.executable(sv / 'build', 'fdssave')
     for mode, extra in (('native', ''), ('interp', '--interp-only')):
         p = run([sys.executable, here / 'test_cyc_fds_saves.py', '--host', saver, '--out', sv / f'suite_{mode}',
                  f'--host-args={extra}'], sv, sv / f'suite_{mode}.log', timeout=1800)

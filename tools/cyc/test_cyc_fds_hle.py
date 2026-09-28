@@ -31,7 +31,7 @@ standalone cyc_interp:
                than paced
 
 python tools/cyc/test_cyc_fds_hle.py --recompiler build/compiler/NESRecomp.exe \\
-    --interp build/cyc/cyc_interp.exe --out build/cyc-fds-hle [--cmake ... --generator ... --make-program ...]
+    --interp build/cyc/cyc_interp.exe --out build/cyc-fds-hle [--toolchain build/cyc/nested_build.json]
     [--no-native]   (cyc_interp only: the quick form the mutation checks use)
 """
 import argparse
@@ -45,6 +45,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import fds_hle_fixtures as fx      # noqa: E402
+import nested_build                # noqa: E402
 
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 FRAMES = 900
@@ -119,21 +120,8 @@ def build(args, out, name, hle):
         f'target_include_directories({name} PRIVATE ${{NESRECOMP_CYC_INCLUDE_DIRS}})',
         f'target_link_libraries({name} PRIVATE ${{NESRECOMP_CYC_LIBRARIES}})',
         f'target_compile_definitions({name} PRIVATE _CRT_SECURE_NO_WARNINGS)']) + '\n')
-    command = [args.cmake, '-S', folder, '-B', folder / 'build', f'-DCMAKE_BUILD_TYPE={args.config}']
-    if args.generator:
-        command += ['-G', args.generator]
-    if args.make_program:
-        command += [f'-DCMAKE_MAKE_PROGRAM={args.make_program}']
-    if args.c_compiler:
-        command += [f'-DCMAKE_C_COMPILER={args.c_compiler}']
-    run(command, folder, folder / 'configure.log')
-    run([args.cmake, '--build', folder / 'build', '--config', args.config, '--parallel', '8'], folder,
-        folder / 'build.log')
-    suffix = '.exe' if NO_WINDOW else ''
-    for exe in (folder / 'build' / args.config / (name + suffix), folder / 'build' / (name + suffix)):
-        if exe.exists():
-            return exe, folder
-    raise AssertionError(f'{name}: no executable built')
+    args.toolchain_.build(folder, folder / 'build', folder)
+    return args.toolchain_.executable(folder / 'build', name), folder
 
 
 class Run:
@@ -230,14 +218,11 @@ def main():
     ap.add_argument('--recompiler', type=Path, required=True)
     ap.add_argument('--interp', type=Path, required=True)
     ap.add_argument('--out', type=Path, required=True)
-    ap.add_argument('--cmake', default='cmake')
-    ap.add_argument('--generator')
-    ap.add_argument('--make-program')
-    ap.add_argument('--c-compiler')
-    ap.add_argument('--config', default='Release')
+    nested_build.add_arguments(ap)
     ap.add_argument('--no-native', action='store_true', help='cyc_interp only (the quick form for mutation checks)')
     ap.add_argument('--align', type=int, nargs='*', default=[0, 1, 2, 3])
     args = ap.parse_args()
+    args.toolchain_ = nested_build.Toolchain.from_args(args)
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     fxdir = out / 'fx'

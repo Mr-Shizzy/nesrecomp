@@ -14,6 +14,7 @@ def main():
     ap.add_argument('--mmc5-fixtures',type=Path,help='MMC5 fixture directory')
     ap.add_argument('--s5b-fixtures',type=Path,help='Sunsoft 5B fixture directory (s5b_ prefix)')
     ap.add_argument('--n163-fixtures',type=Path,help='Namco 163 fixture directory (n163_ prefix)')
+    ap.add_argument('--console',choices=('nes','famicom'),help='output stage (default: the board default: famicom for VRC6, VRC7 and N163)')
     args=ap.parse_args();measurements=[];cases=[]
     if args.fixtures:
         for mapper in (24,26):
@@ -41,7 +42,7 @@ def main():
                 rendered=[]
                 for mode,extra in (('native',[]),('interp',['--interp-only'])):
                     wav=case/f'pcm_a{align}_{mode}.wav'
-                    p=subprocess.run([str(exe),str(case/(name+'.nes')),'--frames','90','--align',str(align),'--wav-out',str(wav)]+extra,
+                    p=subprocess.run([str(exe),str(case/(name+'.nes')),'--frames','90','--align',str(align),'--wav-out',str(wav)]+extra+(['--console',args.console] if args.console else []),
                         capture_output=True,text=True,timeout=60,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
                     (wav.with_suffix('.log')).write_text(p.stdout+p.stderr)
                     assert p.returncode==0,(name,mode,p.stderr)

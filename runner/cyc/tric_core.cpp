@@ -9814,6 +9814,13 @@ const uint32_t *cyc_frame_argb(void) { return cyc_framebuffer; }
 const uint16_t *cyc_frame_index(void) { return cyc_frame_index_buffer; }
 bool cyc_audio_enable(int) { return false; }
 size_t cyc_audio_read(int16_t *, size_t) { return 0; }
+// No audio output, so no output stage: the console model is accepted and ignored.
+void cyc_set_console(CycConsole) {}
+CycConsole cyc_console(void) { return CYC_CONSOLE_DEFAULT; }
+const char *cyc_console_name(CycConsole console)
+{
+    return console == CYC_CONSOLE_NES ? "nes" : console == CYC_CONSOLE_FAMICOM ? "famicom" : "default";
+}
 
 // TriCNES's internal hardware state (PPU/APU internals, interrupt lines, DMA
 // latches, clocks), so that a change to how the hardware is clocked is checked

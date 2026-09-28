@@ -474,6 +474,15 @@ bool cyc_audio_enable(int sample_rate)
 
 size_t cyc_audio_read(int16_t *out, size_t max) { return apu_audio_read(out, max); }
 
+void cyc_set_console(CycConsole console) { apu_set_console((int)console); }
+
+CycConsole cyc_console(void) { return (CycConsole)apu_console(); }
+
+const char *cyc_console_name(CycConsole console)
+{
+    return console == CYC_CONSOLE_NES ? "nes" : console == CYC_CONSOLE_FAMICOM ? "famicom" : "default";
+}
+
 /* ------------------------------------------------------------------------- */
 /* Comparison                                                                */
 /* ------------------------------------------------------------------------- */

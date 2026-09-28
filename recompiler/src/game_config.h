@@ -375,6 +375,10 @@ typedef struct {
     /* [fds] hle = "auto-swap,fast-load": the HLE axes the program asks for by
      * default (common/nes_fds_hle.h); empty = none. */
     char             fds_hle[128];
+    /* [game] console = "nes" | "famicom" | "default": the audio output stage
+     * the cycle host uses by default (runner/cyc cyc_set_console); 0 = the
+     * board's default, 1 = nes, 2 = famicom. */
+    uint8_t          console;
     /* [game] cycle_inline_jsr = ["E7BB:2", ...]: subroutines that take N
      * bytes of inline arguments after the JSR and return past them, so the
      * cycle-accurate discovery continues at JSR + 3 + N. */

@@ -1342,6 +1342,17 @@ double hw_cart_audio_level(void)
     return vrc6_board() ? -(double)vrc6_audio_dac() * (0.1488 / 15.0) : 0;
 }
 
+bool hw_cart_famicom_only(void)
+{
+    /* Boards whose expansion audio exists only on Famicom hardware: the RAM
+     * Adapter (20), Namco 163/129 (19), VRC6 (24, 26), VRC7 (85). None was
+     * sold for the NES, and the NES cartridge slot has no audio return, so
+     * their sound is only heard through a Famicom. MMC5 (5) and FME-7/5B
+     * (69) also have NES boards (NES-ETROM, NES FME-7 titles) and stay NES. */
+    int m = hw_cart.mapper;
+    return m == 20 || m == 19 || m == 24 || m == 26 || m == 85;
+}
+
 /* Comparison                                                                */
 /* ------------------------------------------------------------------------- */
 

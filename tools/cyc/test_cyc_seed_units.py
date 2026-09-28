@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 from cyc_verify import first_difference
 from fineprg_fixtures import fineprg_fixtures
+import nested_build
 
 
 def run(command, cwd, log):
@@ -22,9 +23,9 @@ def main():
     ap.add_argument('--recompiler',required=True,type=Path)
     ap.add_argument('--interp',required=True,type=Path)
     ap.add_argument('--out',required=True,type=Path)
-    ap.add_argument('--cmake',default='cmake')
-    ap.add_argument('--generator')
+    nested_build.add_arguments(ap)
     args=ap.parse_args()
+    tc=nested_build.Toolchain.from_args(args)
     out=args.out.resolve();out.mkdir(parents=True,exist_ok=True)
     compiler,interp=args.recompiler.resolve(),args.interp.resolve()
     case=next(c for c in fineprg_fixtures() if c[0]=='fine31_slot1')
@@ -50,11 +51,8 @@ add_executable(seed31 ${{NESRECOMP_CYC_SOURCES}} ${{GEN}})
 target_include_directories(seed31 PRIVATE ${{NESRECOMP_CYC_INCLUDE_DIRS}})
 target_link_libraries(seed31 PRIVATE ${{NESRECOMP_CYC_LIBRARIES}})
 ''')
-    command=[args.cmake,'-S',out,'-B',out/'build','-DCMAKE_BUILD_TYPE=Release']
-    if args.generator:command+=['-G',args.generator]
-    run(command,out,out/'configure.log')
-    run([args.cmake,'--build',out/'build','--config','Release','--parallel','4'],out,out/'build.log')
-    native=out/'build/Release/seed31.exe' if hasattr(subprocess,'CREATE_NO_WINDOW') else out/'build/seed31'
+    tc.build(out,out/'build',out,timeout=900,parallel=4)
+    native=tc.executable(out/'build','seed31')
     stdout=run([native,rom,'--frames',3,'--hash-out',out/'native.txt'],out,out/'native.log')
     assert '(100.0%)' in stdout
     assert first_difference(out/'interp.txt',out/'native.txt',True) is None
