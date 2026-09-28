@@ -276,7 +276,10 @@ static uint8_t rb_sample_local_pad(void) {
     {
         const uint8_t *keys = SDL_GetKeyboardState(NULL);
         if (src == 1) pad |= keybinds_read_player(keys, 1);
-        if (src == 2) pad |= controller_read_player(1);
+        /* Two-seat builds route the first pad to seat 1, so a keyboard P1
+         * also takes it (keyboard + gamepad merged, as the README promises). */
+        if (src == 2 || (src == 1 && NESRECOMP_INPUT_SEATS == 2))
+            pad |= controller_read_player(1);
     }
     return pad;
 }
@@ -1264,8 +1267,11 @@ void nes_vblank_callback(void) {
         /* P1 may use keyboard or gamepad. P2 is an explicitly assigned gamepad
          * (or a netplay peer), never a second hidden keyboard layout. */
         int s1 = g_nes_config.player_src[0], s2 = g_nes_config.player_src[1];
+        /* Two-seat builds route the first pad to seat 1, so a keyboard P1
+         * also takes it (keyboard + gamepad merged, as the README promises). */
+        int p1_pad = s1 == 2 || (s1 == 1 && NESRECOMP_INPUT_SEATS == 2);
         uint8_t btn = (uint8_t)((s1 == 1 ? keybinds_read_player(keys, 1) : 0) |
-                                (s1 == 2 ? controller_read_player(1)      : 0));
+                                (p1_pad  ? controller_read_player(1)      : 0));
 
         /* Recording: capture combined input before script override */
         record_tick(g_frame_count, btn, turbo_active());
