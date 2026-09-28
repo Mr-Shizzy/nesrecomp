@@ -7,6 +7,9 @@
 const char    *cyc_native_program_name = NULL;  /* no PRG ROM check */
 const uint32_t cyc_native_prg_hash = 0;
 const uint32_t cyc_native_cart_hash = 0;
+const uint32_t cyc_native_fds_bios_crc32 = 0;
+const char    *cyc_native_fds_bios_path = NULL;
+const char    *cyc_native_fds_image_path = NULL;
 
 bool cyc_native_has(uint16_t addr) {
     (void)addr;

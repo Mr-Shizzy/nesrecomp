@@ -45,6 +45,33 @@
  *     --shot-every N       also save every Nth frame, as FILE with the frame
  *                          number before its extension (shot.png -> shot_00120.png)
  *     --wav-out FILE       record the audio output (48 kHz mono)
+ *     --frame-log FILE     binary per-frame snapshot of CPU RAM, CIRAM, palette,
+ *                          OAM, cartridge/PRG RAM, CHR RAM and the picture's
+ *                          color indices (format: write_frame_log below)
+ *     --frame-log-frames A:B  only frames A..B
+ *     --frame-log-at WHEN  vblank (default: at the frame's end) or mesen (at
+ *                          scanline 240 dot 0, where Mesen/nesref end a frame)
+ *     --ring-out FILE      the always-on event ring (cyc_ring.h) at exit
+ *     --ring-frames A:B    only events of frames A..B
+ *
+ *   Famicom Disk System (<exe> <image.fds|.qd>, or no image for a program
+ *   compiled with game.toml [fds] image):
+ *     --fds-bios FILE      the RAM Adapter BIOS; default game.toml [fds] bios,
+ *                          else bios/disksys.rom beside the image or here.
+ *                          Only the image bios/disksys.toml (or the compiled
+ *                          program) identifies is accepted: 8192 bytes, CRC32.
+ *     --fds-boot-disk S    side in the drive at power-on: none, or a side (0 =
+ *                          disk 1 side A, 1 = 1B, ...; A, B, 1A, 2B also work).
+ *                          Default 0; nesref's default is none.
+ *     --fds-event F:ACTION eject, insert[=SIDE] or select=SIDE before frame F
+ *                          (nesref DISK_EJECT / DISK_INSERT / DISK_SELECT at
+ *                          f=F). --input files take `F DISK_EJECT`,
+ *                          `F DISK_INSERT [SIDE]` and `F DISK_SELECT SIDE`.
+ *     --fds-profile P      mesen (default, nesref's core), mesen2, hardware
+ *     --fds-crc MODE       computed (real CRC-16 in the side streams, default)
+ *                          or mesen (Mesen's constant $4D $62)
+ *     --fds-crc-check      report CRC mismatches in $4030.4 in any profile
+ *     --fds-write-protect  the disk's write-protect tab is broken off
  *
  * Without CYC_WITH_SDL the host is always headless.
  */
@@ -52,7 +79,9 @@
 #include "cyc_core.h"
 #include "../../common/nes_cart.h"
 #include "cyc_png.h"
+#include "cyc_ring.h"
 #include "cyc_trace.h"
+#include "../../common/nes_fds.h"
 
 #ifndef CYC_ORACLE
 #include "cyc_recomp.h"
@@ -137,23 +166,24 @@ static void write_miss_log(const char *path) {
             cyc_run_miss_decode((unsigned)i, &bank, &addr);
             fprintf(mf, "4k:%02X:%04X %u\n", bank, addr, cyc_run_miss[i]);
         }
-        /* RAM instruction starts, as comments: the recompiler skips them, since
-         * code the program writes at run time is not in the ROM image to
-         * compile. They are here to explain a coverage gap seeds cannot close. */
+        /* RAM instruction starts (CPU RAM, and cartridge RAM such as the FDS's
+         * PRG RAM), as comments: the recompiler skips them, since code the
+         * program writes at run time is not in the ROM image to compile. They
+         * are here to explain a coverage gap seeds cannot close. */
         if (cyc_run_ram_miss) {
             unsigned ram_addrs = 0;
-            for (int a = 0; a < 0x2000; a++) ram_addrs += cyc_run_ram_miss[a] != 0;
+            for (int a = 0; a < 0x10000; a++) ram_addrs += cyc_run_ram_miss[a] != 0;
             if (ram_addrs) {
                 unsigned stable = 0, varied = 0;
                 fprintf(mf, "#\n# %u RAM addresses also started an instruction this run (not seedable).\n"
                             "# 'opcodes' is how many distinct opcode bytes ever began an instruction\n"
                             "# there; 1 means only operands change at that address.\n"
                             "# address count opcodes\n", ram_addrs);
-                for (int a = 0; a < 0x2000; a++) {
+                for (int a = 0; a < 0x10000; a++) {
                     if (!cyc_run_ram_miss[a]) continue;
                     unsigned ops = 0;
                     if (cyc_run_ram_opcodes) {
-                        const uint8_t *set = cyc_run_ram_opcodes + (a & 0x7FF) * 32;
+                        const uint8_t *set = cyc_run_ram_opcodes + (size_t)a * 32;
                         for (int b = 0; b < 32; b++)
                             for (int k = 0; k < 8; k++) ops += (set[b] >> k) & 1;
                     }
@@ -181,6 +211,62 @@ typedef struct {
 static InputStep *input_steps;
 static int        input_count, input_next;
 static uint8_t    input_held[2];
+
+/* ---- FDS disk events: nesref's DISK_EJECT / DISK_SELECT / DISK_INSERT ----
+ * Applied between frames, before frame F runs (after F frames), which is
+ * where nesref applies them ("f=F", after F retro_runs). */
+typedef struct {
+    long frame;
+    char action;   /* 'E'ject, 'S'elect, 'I'nsert */
+    int  side;     /* -1: the selected side */
+} DiskEvent;
+
+static DiskEvent *disk_events;
+static int        disk_event_count, disk_event_next;
+static unsigned   disk_selected;
+
+/* A side: an index (0 = disk 1 side A), or A, B, 1A, 1B, 2A, ... as nesref. */
+static int parse_side(const char *s) {
+    if (!s || !*s) return -1;
+    if (s[0] >= '1' && s[0] <= '9' && (s[1] == 'A' || s[1] == 'a' || s[1] == 'B' || s[1] == 'b') && !s[2])
+        return (s[0] - '1') * 2 + (s[1] == 'B' || s[1] == 'b');
+    if ((s[0] == 'A' || s[0] == 'a') && !s[1]) return 0;
+    if ((s[0] == 'B' || s[0] == 'b') && !s[1]) return 1;
+    char *end;
+    long v = strtol(s, &end, 10);
+    return end != s && !*end && v >= 0 && v < 256 ? (int)v : -1;
+}
+
+static bool add_disk_event(long frame, const char *action, const char *arg) {
+    DiskEvent e = { frame, 0, -1 };
+    if (!strcmp(action, "eject") || !strcmp(action, "DISK_EJECT")) e.action = 'E';
+    else if (!strcmp(action, "insert") || !strcmp(action, "DISK_INSERT")) e.action = 'I';
+    else if (!strcmp(action, "select") || !strcmp(action, "DISK_SELECT")) e.action = 'S';
+    else return false;
+    if (arg && *arg && (e.side = parse_side(arg)) < 0) return false;
+    if (e.action == 'S' && e.side < 0) return false;
+    DiskEvent *grown = (DiskEvent *)realloc(disk_events, sizeof(DiskEvent) * (size_t)(disk_event_count + 1));
+    if (!grown) return false;
+    disk_events = grown;
+    /* Frame order; events of one frame keep their order. */
+    int i = disk_event_count++;
+    while (i > 0 && disk_events[i - 1].frame > frame) { disk_events[i] = disk_events[i - 1]; --i; }
+    disk_events[i] = e;
+    return true;
+}
+
+static bool parse_disk_event_arg(const char *spec) {
+    char buf[64], *colon, *eq;
+    snprintf(buf, sizeof(buf), "%s", spec);
+    if (!(colon = strchr(buf, ':'))) return false;
+    *colon = 0;
+    char *end;
+    long frame = strtol(buf, &end, 10);
+    if (end == buf || *end || frame < 0) return false;
+    char *action = colon + 1;
+    if ((eq = strchr(action, '='))) *eq++ = 0;
+    return add_disk_event(frame, action, eq);
+}
 
 static bool name_is(const char *s, size_t n, const char *name) {
     size_t i = 0;
@@ -231,6 +317,15 @@ static bool load_input(const char *path) {
         if (end == p) continue;
         p = end;
         while (*p == ' ' || *p == '\t') p++;
+        if (!strncmp(p, "DISK_", 5)) {
+            char action[32] = "", arg[32] = "";
+            if (sscanf(p, "%31s %31s", action, arg) < 1 || !add_disk_event(frame, action, arg)) {
+                fprintf(stderr, "%s: bad disk command: %s", path, p);
+                fclose(f);
+                return false;
+            }
+            continue;
+        }
         uint8_t port = 0;
         if (p[0] == '2' && p[1] == ':') port = 1, p += 2;
         else if (p[0] == '1' && p[1] == ':') p += 2;
@@ -244,7 +339,7 @@ static bool load_input(const char *path) {
         input_count++;
     }
     fclose(f);
-    printf("input: %d steps from %s\n", input_count, path);
+    printf("input: %d steps, %d disk events from %s\n", input_count, disk_event_count, path);
     return true;
 }
 
@@ -255,6 +350,115 @@ static void input_tick(long frame) {
     }
     cyc_set_controller(0, input_held[0]);
     cyc_set_controller(1, input_held[1]);
+}
+
+#ifndef CYC_ORACLE
+static void disk_tick(long frame) {
+    while (disk_event_next < disk_event_count && disk_events[disk_event_next].frame <= frame) {
+        const DiskEvent *e = &disk_events[disk_event_next++];
+        bool ok;
+        if (e->action == 'E') {
+            int side = cyc_fds_side();
+            ok = cyc_fds_eject();
+            if (ok) disk_selected = (unsigned)side;
+            printf("[cyc disk] f=%ld eject%s\n", frame, ok ? "" : " (drive already empty)");
+        } else if (e->action == 'S') {
+            ok = cyc_fds_side() < 0 && (unsigned)e->side < cyc_fds_side_count();
+            if (ok) disk_selected = (unsigned)e->side;
+            printf("[cyc disk] f=%ld select side %d%s\n", frame, e->side,
+                   ok ? "" : " (refused: drive not empty or no such side)");
+        } else {
+            unsigned side = e->side >= 0 ? (unsigned)e->side : disk_selected;
+            ok = cyc_fds_insert(side);
+            if (ok) disk_selected = side;
+            printf("[cyc disk] f=%ld insert side %u%s\n", frame, side,
+                   ok ? "" : " (refused: drive not empty or no such side)");
+        }
+    }
+}
+
+/* The BIOS identity: the one a compiled program was built from, else the one
+ * the BIOS's own .toml records (bios/disksys.toml: size, crc32), else the
+ * known disksys.rom (common/nes_fds.h). */
+static uint32_t bios_expected_crc(const char *bios_path, uint32_t *size) {
+    *size = NES_FDS_BIOS_BYTES;
+    if (cyc_native_fds_bios_crc32) return cyc_native_fds_bios_crc32;
+    char toml[1024];
+    snprintf(toml, sizeof(toml), "%s", bios_path);
+    char *dot = strrchr(toml, '.'), *slash = strrchr(toml, '/'), *bslash = strrchr(toml, '\\');
+    if (dot && dot > slash && dot > bslash) *dot = 0;
+    strncat(toml, ".toml", sizeof(toml) - strlen(toml) - 1);
+    FILE *f = fopen(toml, "r");
+    uint32_t crc = NES_FDS_BIOS_CRC32;
+    if (f) {
+        char line[256];
+        unsigned v;
+        while (fgets(line, sizeof(line), f)) {
+            if (sscanf(line, " crc32 = \"0x%x\"", &v) == 1 || sscanf(line, " crc32 = 0x%x", &v) == 1) crc = v;
+            else if (sscanf(line, " size = %u", &v) == 1) *size = v;
+        }
+        fclose(f);
+    }
+    return crc;
+}
+
+static uint8_t *load_bios(const char *explicit_path, const char *image_path, size_t *size, char *used,
+                          size_t used_len) {
+    char beside[1024];
+    const char *slash = strrchr(image_path, '/'), *bslash = strrchr(image_path, '\\');
+    const char *sep = slash > bslash ? slash : bslash;
+    snprintf(beside, sizeof(beside), "%.*sbios/disksys.rom", sep ? (int)(sep - image_path + 1) : 0, image_path);
+    const char *candidates[] = { explicit_path, explicit_path ? NULL : cyc_native_fds_bios_path,
+                                 explicit_path ? NULL : beside, explicit_path ? NULL : "bios/disksys.rom" };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+        if (!candidates[i]) continue;
+        uint8_t *data = read_file(candidates[i], size);
+        if (!data) continue;
+        snprintf(used, used_len, "%s", candidates[i]);
+        return data;
+    }
+    return NULL;
+}
+
+/* --frame-log: "CYCFRAME" + u32 version (1), then per frame
+ *   u32 frame, u32 cycles low, u32 cycles high, u32 lengths[5] (CPU RAM,
+ *   CIRAM, cartridge RAM, CHR RAM, picture bytes), u8 palette[32], u8 oam[256],
+ *   then the five blobs; the picture is 256x240 little-endian u16 color
+ *   indices (color | emphasis << 6). */
+static void write_frame_log(FILE *f, long frame) {
+    size_t ciram_len, cart_len, chr_len;
+    const uint8_t *ciram = cyc_ppu_ciram(&ciram_len), *cart = cyc_cart_ram(&cart_len), *chr = cyc_chr_ram(&chr_len);
+    uint64_t cycles = cyc_cycle_count();
+    uint32_t head[8] = { (uint32_t)frame, (uint32_t)cycles, (uint32_t)(cycles >> 32), 0x800,
+                         (uint32_t)ciram_len, (uint32_t)cart_len, (uint32_t)chr_len, 256 * 240 * 2 };
+    fwrite(head, sizeof(head), 1, f);
+    fwrite(cyc_ppu_palette(), 1, 32, f);
+    fwrite(cyc_ppu_oam(), 1, 256, f);
+    fwrite(cyc_cpu_ram(), 1, 0x800, f);
+    fwrite(ciram, 1, ciram_len, f);
+    if (cart_len) fwrite(cart, 1, cart_len, f);
+    if (chr_len) fwrite(chr, 1, chr_len, f);
+    fwrite(cyc_frame_index(), 2, 256 * 240, f);
+}
+#endif
+
+#ifndef CYC_ORACLE
+/* --frame-log-at mesen: the record is taken at Mesen's frame end instead. */
+static FILE *observe_log;
+static long  observe_frame, observe_first, observe_last;
+static void observe_frame_log(void) {
+    if (observe_frame >= observe_first && (observe_last < 0 || observe_frame <= observe_last))
+        write_frame_log(observe_log, observe_frame);
+}
+#endif
+
+static bool parse_range(const char *s, long *a, long *b) {
+    char *end;
+    *a = strtol(s, &end, 10);
+    if (end == s || *end != ':') return false;
+    const char *t = end + 1;
+    *b = strtol(t, &end, 10);
+    return end != t && !*end && *a >= 0 && *b >= *a;
 }
 
 static void write_hash_line(FILE *f, long frame) {
@@ -310,6 +514,14 @@ int main(int argc, char **argv) {
     unsigned spam_seed = 1;
     bool spam_dpad = true;
     bool acccoin = false, headless = false, frames_given = false;
+#ifndef CYC_ORACLE
+    const char *ring_out = NULL, *frame_log = NULL, *fds_bios = NULL;
+    bool frame_log_mesen = false;
+    long ring_first = 0, ring_last = -1, log_first = 0, log_last = -1;
+    CycFdsOptions fds_opt;
+    cyc_fds_default_options(&fds_opt);
+    cyc_ring_dump_at_exit_from_env();
+#endif
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--spam") && i + 2 < argc) {
             spam_page = atoi(argv[++i]);
@@ -348,6 +560,47 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--mem-out") && i + 1 < argc) mem_out = argv[++i], headless = true;
 #ifndef CYC_ORACLE
         else if (!strcmp(argv[i], "--interp-only")) cyc_run_native = false;
+        else if (!strcmp(argv[i], "--ring-out") && i + 1 < argc) ring_out = argv[++i], headless = true;
+        else if (!strcmp(argv[i], "--frame-log") && i + 1 < argc) frame_log = argv[++i], headless = true;
+        else if (!strcmp(argv[i], "--frame-log-at") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "mesen")) frame_log_mesen = true;
+            else if (strcmp(v, "vblank")) { fprintf(stderr, "--frame-log-at: vblank or mesen\n"); return 2; }
+        }
+        else if ((!strcmp(argv[i], "--ring-frames") || !strcmp(argv[i], "--frame-log-frames")) && i + 1 < argc) {
+            bool ring = argv[i][2] == 'r';
+            if (!parse_range(argv[++i], ring ? &ring_first : &log_first, ring ? &ring_last : &log_last)) {
+                fprintf(stderr, "%s: expected FIRST:LAST\n", argv[i - 1]);
+                return 2;
+            }
+        }
+        else if (!strcmp(argv[i], "--fds-bios") && i + 1 < argc) fds_bios = argv[++i];
+        else if (!strcmp(argv[i], "--fds-boot-disk") && i + 1 < argc) {
+            const char *v = argv[++i];
+            fds_opt.boot_side = !strcmp(v, "none") ? -1 : parse_side(v);
+            if (fds_opt.boot_side < 0 && strcmp(v, "none")) { fprintf(stderr, "--fds-boot-disk: none or a side\n"); return 2; }
+        }
+        else if (!strcmp(argv[i], "--fds-event") && i + 1 < argc) {
+            if (!parse_disk_event_arg(argv[++i])) {
+                fprintf(stderr, "--fds-event: FRAME:eject, FRAME:insert[=SIDE] or FRAME:select=SIDE\n");
+                return 2;
+            }
+        }
+        else if (!strcmp(argv[i], "--fds-profile") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "mesen")) fds_opt.profile = CYC_FDS_PROFILE_MESEN;
+            else if (!strcmp(v, "mesen2")) fds_opt.profile = CYC_FDS_PROFILE_MESEN2;
+            else if (!strcmp(v, "hardware")) fds_opt.profile = CYC_FDS_PROFILE_HARDWARE;
+            else { fprintf(stderr, "--fds-profile: mesen, mesen2 or hardware\n"); return 2; }
+        }
+        else if (!strcmp(argv[i], "--fds-crc") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "computed")) fds_opt.stream_crc = CYC_FDS_CRC_COMPUTED;
+            else if (!strcmp(v, "mesen")) fds_opt.stream_crc = CYC_FDS_CRC_MESEN;
+            else { fprintf(stderr, "--fds-crc: computed or mesen\n"); return 2; }
+        }
+        else if (!strcmp(argv[i], "--fds-crc-check")) fds_opt.crc_check = true;
+        else if (!strcmp(argv[i], "--fds-write-protect")) fds_opt.write_protect = true;
         else if (!strcmp(argv[i], "--miss-log") && i + 1 < argc) miss_log = argv[++i], headless = true;
 #endif
         else if (argv[i][0] != '-' && !rom_path) rom_path = argv[i];
@@ -356,22 +609,66 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
+#ifndef CYC_ORACLE
+    if (!rom_path) rom_path = cyc_native_fds_image_path;   /* game.toml [fds] image */
+#endif
     if (!rom_path) {
-        fprintf(stderr, "usage: %s <rom.nes> [--interp-only] [--align N] [--scale N]\n"
+        fprintf(stderr, "usage: %s <rom.nes | disk.fds> [--interp-only] [--align N] [--scale N]\n"
                         "       [--save-file FILE] (raw battery RAM/EEPROM, loaded and atomically saved)\n"
                         "       [--datach-save-file FILE] (shared internal EEPROM)\n"
                         "       [--barcode DIGITS --barcode-frame N --barcode-module-cycles N]\n"
                         "       headless: [--frames N] [--acccoin] [--hash-out FILE]\n"
                         "       [--spam PAGE ROW] [--spam-seed N] [--spam-no-dpad] [--input FILE]\n"
                         "       [--trace-frame N --trace-out FILE] [--state-frame N --state-out FILE]\n"
-                        "       [--miss-log FILE] [--screenshot FILE [--shot-every N]] [--wav-out FILE]\n",
+                        "       [--miss-log FILE] [--screenshot FILE [--shot-every N]] [--wav-out FILE]\n"
+                        "       [--frame-log FILE [--frame-log-frames A:B]] [--ring-out FILE [--ring-frames A:B]]\n"
+                        "       FDS: [--fds-bios FILE] [--fds-boot-disk none|SIDE] [--fds-event F:ACTION]\n"
+                        "            [--fds-profile mesen|mesen2|hardware] [--fds-crc computed|mesen]\n"
+                        "            [--fds-crc-check] [--fds-write-protect]\n",
                 argv[0]);
         return 2;
     }
     size_t size;
     uint8_t *image = read_file(rom_path, &size);
     NesCartInfo cart_info;
-    if (!image || !nes_cart_image(image, size, &cart_info) || !cyc_load_ines(image, size)) {
+    NesFdsImage fds_image;
+    const char *ext = strrchr(rom_path, '.');
+    bool qd = ext && (!strcmp(ext, ".qd") || !strcmp(ext, ".QD"));
+    bool fds = image && !nes_cart_image(image, size, &cart_info) &&
+               nes_fds_image(image, size, qd ? NES_FDS_QD : NES_FDS_NONE, &fds_image);
+    if (fds) {
+#ifdef CYC_ORACLE
+        fprintf(stderr, "%s is a Famicom Disk System image; the TriCNES oracle has no RAM Adapter "
+                        "(the FDS oracle is nesref)\n", rom_path);
+        return 2;
+#else
+        if (acccoin || spam_page >= 0) { fprintf(stderr, "--acccoin/--spam need a cartridge\n"); return 2; }
+        size_t bios_size = 0;
+        char bios_path[1024];
+        uint8_t *bios = load_bios(fds_bios, rom_path, &bios_size, bios_path, sizeof(bios_path));
+        if (!bios) {
+            fprintf(stderr, "%s: no FDS BIOS (give --fds-bios FILE, or put disksys.rom in bios/)\n", rom_path);
+            return 2;
+        }
+        uint32_t want_size, want_crc = bios_expected_crc(bios_path, &want_size);
+        uint32_t crc = nes_crc32(0, bios, bios_size);
+        if (bios_size != want_size || bios_size != NES_FDS_BIOS_BYTES || crc != want_crc) {
+            fprintf(stderr, "%s is not the expected FDS BIOS (%zu bytes, CRC32 %08X; expected %u bytes, CRC32 %08X)\n",
+                    bios_path, bios_size, crc, want_size, want_crc);
+            return 2;
+        }
+        fds_opt.qd = qd;
+        if (!cyc_load_fds(bios, bios_size, image, size, &fds_opt)) {
+            fprintf(stderr, "cannot load disk image %s\n", rom_path);
+            return 2;
+        }
+        free(bios);
+        nes_fds_cart_info(&cart_info);
+        printf("fds: %s, %u side%s, BIOS %s (CRC32 %08X), drive %s\n", rom_path, cyc_fds_side_count(),
+               cyc_fds_side_count() == 1 ? "" : "s", bios_path, crc,
+               cyc_fds_side() < 0 ? "empty" : "loaded");
+#endif
+    } else if (!image || !nes_cart_image(image, size, &cart_info) || !cyc_load_ines(image, size)) {
         fprintf(stderr, "cannot load %s (invalid or unsupported cartridge; see runner/cyc/MAPPERS.md)\n", rom_path);
         return 2;
     }
@@ -420,8 +717,22 @@ int main(int argc, char **argv) {
 #ifndef CYC_ORACLE
     if (miss_log) {
         cyc_run_miss = (uint32_t *)calloc(cyc_run_miss_slots(), sizeof(uint32_t));
-        cyc_run_ram_miss = (uint32_t *)calloc(0x2000, sizeof(uint32_t));
-        cyc_run_ram_opcodes = (uint8_t *)calloc(0x800 * 32, 1);
+        cyc_run_ram_miss = (uint32_t *)calloc(0x10000, sizeof(uint32_t));
+        cyc_run_ram_opcodes = (uint8_t *)calloc((size_t)0x10000 * 32, 1);
+    }
+    FILE *frame_log_f = NULL;
+    if (frame_log) {
+        if (!(frame_log_f = fopen(frame_log, "wb"))) { fprintf(stderr, "cannot write %s\n", frame_log); return 2; }
+        uint32_t version = 1;
+        fwrite("CYCFRAME", 1, 8, frame_log_f);
+        fwrite(&version, 4, 1, frame_log_f);
+        if (frame_log_mesen) {
+            observe_log = frame_log_f;
+            observe_first = log_first;
+            observe_last = log_last;
+            hw_observe_line = 240;
+            cyc_run_observer = observe_frame_log;
+        }
     }
 #endif
     enum { WAV_RATE = 48000 };
@@ -455,7 +766,11 @@ int main(int argc, char **argv) {
 #ifdef CYC_ORACLE
         cyc_oracle_run_frame();
 #else
+        if (disk_event_count) disk_tick(frame);
+        observe_frame = frame;
         cyc_run_frame();
+        if (frame_log_f && !frame_log_mesen && frame >= log_first && (log_last < 0 || frame <= log_last))
+            write_frame_log(frame_log_f, frame);
 #endif
         if (hash_f) write_hash_line(hash_f, frame);
         if (wav_f) {
@@ -509,11 +824,26 @@ int main(int argc, char **argv) {
                "  RAM %llu (%.1f%%, written at run time, not compilable)",
                (unsigned long long)cyc_run_interp_rom_cycles, (double)cyc_run_interp_rom_cycles * pct,
                (unsigned long long)cyc_run_interp_ram_cycles, (double)cyc_run_interp_ram_cycles * pct);
+        if (cyc_run_interp_prg_ram_cycles)
+            printf(cyc_is_fds() ? "  PRG RAM %llu (%.1f%%, loaded from disk)"
+                                : "  $6000+ %llu (%.1f%%, cartridge RAM, or ROM below $8000)",
+                   (unsigned long long)cyc_run_interp_prg_ram_cycles, (double)cyc_run_interp_prg_ram_cycles * pct);
         if (cyc_run_interp_other_cycles)
-            printf("  $2000-$7FFF %llu (%.1f%%)", (unsigned long long)cyc_run_interp_other_cycles,
+            printf("  $2000-$5FFF %llu (%.1f%%)", (unsigned long long)cyc_run_interp_other_cycles,
                    (double)cyc_run_interp_other_cycles * pct);
         printf("\n");
     }
+    if (cyc_is_fds())
+        printf("fds: side %d in the drive at exit, %u disk bytes written (in memory only), "
+               "%llu FDS events recorded\n", cyc_fds_side(), cyc_fds_disk_writes(),
+               (unsigned long long)cyc_ring_total());
+    if (ring_out) {
+        FILE *rf = fopen(ring_out, "w");
+        if (!rf) { fprintf(stderr, "cannot write %s\n", ring_out); return 2; }
+        cyc_ring_dump(rf, (uint32_t)ring_first, ring_last < 0 ? UINT32_MAX : (uint32_t)ring_last);
+        fclose(rf);
+    }
+    if (frame_log_f) fclose(frame_log_f);
     if (cyc_run_miss) write_miss_log(miss_log);
 #endif
 

@@ -119,6 +119,27 @@ typedef struct {
     uint32_t lfsr;
 } Hw5B;
 
+/* The FDS RAM Adapter's registers and the drive's head/transfer state
+ * (hw_fds.c). The disk sides themselves live in hw_fds.c: they are media,
+ * kept across power cycles. */
+typedef struct {
+    uint16_t irq_reload, irq_counter;
+    uint8_t  irq_enabled, irq_repeat;          /* $4022 */
+    uint8_t  disk_regs, sound_regs;            /* $4023 */
+    uint8_t  write_data;                       /* $4024 */
+    uint8_t  ctrl;                             /* $4025 as written */
+    uint8_t  motor_on, reset_transfer, read_mode, crc_control, crc_enable, transfer_irq;
+    uint8_t  ext_out;                          /* $4026 */
+    uint8_t  timer_irq, disk_irq;              /* /IRQ sources */
+    uint8_t  transfer, read_data, bad_crc;     /* $4030/$4031 */
+    uint8_t  end_of_head, gap_ended, scanning, prev_crc_control, at_end;
+    uint16_t crc;
+    uint32_t delay, position;
+    /* The sound unit's register side (its synthesis is phase 5). */
+    uint8_t  wave[64], wave_write, vol_gain, mod_gain;
+    uint8_t  sound_reg[0x0B];                  /* $4080-$408A as written */
+} HwFds;
+
 typedef struct {
     uint8_t *prg;
     uint32_t prg_len;
@@ -149,6 +170,7 @@ typedef struct {
     uint8_t  mirroring;         /* HwMirroring, as the cartridge drives CIRAM A10 */
     uint8_t  watch_ppu_addr;    /* the mapper needs every PPU address (MMC3) */
     uint8_t  watch_cpu;
+    uint8_t  clock_late;        /* the board is clocked before the CPU's access (FDS) */
 
     /* Work RAM at $6000-$7FFF. Boards without it leave the bus open there. */
     uint8_t  wram[0x20000];
@@ -174,6 +196,7 @@ typedef struct {
         int16_t irq_prescaler;
         uint8_t irq_mode;
         Mmc5State mmc5;
+        HwFds fds;
         HwVrc6Audio vrc6_audio;
         HwNamco namco;
         HwJaleco jaleco;

@@ -54,6 +54,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "nes_cart.h"
+
 #define NES_FDS_SIDE_BYTES      65500u
 #define NES_FDS_QD_SIDE_BYTES   65536u
 #define NES_FDS_HEADER_BYTES    16u
@@ -381,6 +383,36 @@ static inline bool nes_fds_side(const NesFdsImage *img, unsigned side, NesFdsSid
     s->end_pos = w.pos;
     if (!s->end_code) s->end_code = w.pos < img->side_bytes ? nes_fds_byte(img, side, w.pos, true) : 0;
     return !(s->flags & NES_FDS_SIDE_DEFECTS);
+}
+
+/* ---- The RAM Adapter as a cartridge ---------------------------------------
+ * The RAM Adapter is iNES mapper 20: 32 KiB of PRG RAM at $6000-$DFFF, the
+ * 8 KiB BIOS ROM at $E000-$FFFF and 8 KiB of CHR RAM, nametable arrangement
+ * from $4025 (Mesen FdsLoader.cpp:141 powers it on vertical). The compiler
+ * (which compiles the BIOS) and the runtime describe it with the same
+ * NesCartInfo, so nes_cart_identity() ties a generated program to the board.
+ * The only BIOS with a recorded identity is the Japanese RAM Adapter's
+ * disksys.rom (bios/disksys.toml in the FDS game repositories). */
+#define NES_FDS_MAPPER        20u
+#define NES_FDS_BIOS_BYTES    8192u
+#define NES_FDS_BIOS_CRC32    0x5E607DCFu
+#define NES_FDS_PRG_RAM_BYTES 32768u
+#define NES_FDS_CHR_RAM_BYTES 8192u
+
+static inline void nes_fds_cart_info(NesCartInfo *c)
+{
+    memset(c, 0, sizeof(*c));
+    c->mapper = NES_FDS_MAPPER;
+    c->prg_size = NES_FDS_BIOS_BYTES;
+    c->prg_ram = NES_FDS_PRG_RAM_BYTES;
+    c->chr_ram = NES_FDS_CHR_RAM_BYTES;
+    c->vertical = 1;
+}
+
+/* A BIOS image is accepted only with the expected size and CRC32. */
+static inline bool nes_fds_bios_matches(const uint8_t *bios, size_t size, uint32_t expected_crc32)
+{
+    return bios && size == NES_FDS_BIOS_BYTES && nes_crc32(0, bios, size) == expected_crc32;
 }
 
 static inline const char *nes_fds_file_type_name(uint8_t type)

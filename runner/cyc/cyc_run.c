@@ -3,6 +3,7 @@
 
 #include "cyc_core.h"
 #include "cyc_recomp.h"
+#include "cyc_ring.h"
 #include "hw_internal.h"
 
 bool      cyc_run_native = true;
@@ -12,7 +13,13 @@ uint32_t *cyc_run_ram_miss;
 uint8_t  *cyc_run_ram_opcodes;
 uint64_t  cyc_run_interp_rom_cycles;
 uint64_t  cyc_run_interp_ram_cycles;
+uint64_t  cyc_run_interp_prg_ram_cycles;
 uint64_t  cyc_run_interp_other_cycles;
+
+/* An instruction start from $6000 up that no compiled view covers:
+ * cartridge RAM (the FDS PRG RAM, MMC5 RAM windows) or ROM mapped below
+ * $8000 (mapper 40), which the compiler's window does not reach. */
+static bool is_prg_ram(uint16_t pc) { return pc >= 0x6000 && !hw_prg_is_rom(pc); }
 
 /* A miss is recorded per (bank, slot, offset in slot): the recompiler needs to
  * know which bank was mapped when the instruction ran, because that is what it
@@ -35,9 +42,27 @@ void cyc_run_power_on(void) {
     cpu_power_on();
 }
 
+void (*cyc_run_observer)(void);
+
+static void run_until_stop(void);
+
 void cyc_run_frame(void) {
-    hw_frame_done = false;
+    hw_frame_done = hw_frame_end_hit = false;
     if (cpu.power_on) cpu_power_on_sequence();
+    for (;;) {
+        run_until_stop();
+        if (!hw_observe_hit) break;
+        /* An observation point: look, then go on unless the frame also
+         * ended (an OAM DMA can carry the CPU from scanline 240 into VBlank). */
+        hw_observe_hit = false;
+        if (cyc_run_observer) cyc_run_observer();
+        if (hw_frame_end_hit) break;
+        hw_frame_done = false;
+    }
+    cyc_ring_frame++;
+}
+
+static void run_until_stop(void) {
     while (!hw_frame_done) {
         if (cpu.jammed) {
             cpu_jam_cycle();
@@ -49,17 +74,17 @@ void cyc_run_frame(void) {
             uint16_t pc = cpu.pc;
             uint64_t before = cyc_cycle_count();
             if (cyc_run_miss && hw_prg_is_rom(pc)) cyc_run_miss[cyc_run_miss_index(pc)]++;
-            else if (cyc_run_ram_miss && pc < 0x2000) {
+            else if (cyc_run_ram_miss && (pc < 0x2000 || is_prg_ram(pc))) {
                 cyc_run_ram_miss[pc]++;
-                if (cyc_run_ram_opcodes) {
-                    uint8_t op = cyc_cpu_ram()[pc & 0x7FF];
-                    cyc_run_ram_opcodes[(pc & 0x7FF) * 32 + (op >> 3)] |= (uint8_t)(1u << (op & 7));
-                }
+                uint8_t op;
+                if (cyc_run_ram_opcodes && cyc_debug_peek(pc, &op))
+                    cyc_run_ram_opcodes[(size_t)pc * 32 + (op >> 3)] |= (uint8_t)(1u << (op & 7));
             }
             cpu_interp_step();
             uint64_t took = cyc_cycle_count() - before;
             if (pc < 0x2000) cyc_run_interp_ram_cycles += took;
             else if (hw_prg_is_rom(pc)) cyc_run_interp_rom_cycles += took;
+            else if (is_prg_ram(pc)) cyc_run_interp_prg_ram_cycles += took;
             else cyc_run_interp_other_cycles += took;
         }
     }

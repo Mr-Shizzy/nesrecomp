@@ -7,6 +7,8 @@ project(nesrecomp_cyc C CXX)
 #   cyc_helper_test  exhaustive check of the cpu6502.h operation helpers
 #   cyc_fds_disk_test  FDS media parser/stream contracts (common/nes_fds.h) over
 #                    fixtures written by tools/cyc/fds_fixtures.py
+#   cyc_fds_board_test FDS RAM Adapter/drive contracts and a synthetic BIOS
+#                    (tools/cyc/fds_board_fixtures.py) on the whole machine
 # Game projects use runner/cyc/cyc.cmake instead.
 
 set(CMAKE_C_STANDARD 11)
@@ -28,7 +30,7 @@ target_include_directories(cyc_helper_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS}
 enable_testing()
 add_test(NAME cyc_helper_test COMMAND cyc_helper_test)
 
-add_executable(cyc_mapper_test mapper_test.c hw_mapper.c cyc_trace.c vendor/emu2413/emu2413.c)
+add_executable(cyc_mapper_test mapper_test.c hw_mapper.c hw_fds.c cyc_ring.c cyc_trace.c vendor/emu2413/emu2413.c)
 target_link_libraries(cyc_mapper_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
 target_include_directories(cyc_mapper_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 add_test(NAME cyc_mapper_test COMMAND cyc_mapper_test)
@@ -49,3 +51,20 @@ add_test(NAME cyc_fds_fixtures
 set_tests_properties(cyc_fds_fixtures PROPERTIES FIXTURES_SETUP fds_fixtures)
 add_test(NAME cyc_fds_disk_test COMMAND cyc_fds_disk_test ${NESRECOMP_FDS_FIXTURES})
 set_tests_properties(cyc_fds_disk_test PROPERTIES FIXTURES_REQUIRED fds_fixtures)
+
+# FDS RAM Adapter and drive: register/IRQ/drive contracts, then a synthetic
+# BIOS (tools/cyc/fds_board_fixtures.py) run on the whole machine.
+add_executable(cyc_fds_board_test fds_board_test.c cpu6502.c cpu6502_interp.c hw_machine.c hw_mapper.c hw_fds.c
+    vendor/emu2413/emu2413.c hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_native_none.c)
+target_include_directories(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
+target_link_libraries(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
+if(MSVC)
+    target_compile_definitions(cyc_fds_board_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+set(NESRECOMP_FDS_BOARD_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/fds_board_fixtures)
+add_test(NAME cyc_fds_board_fixtures
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/cyc/fds_board_fixtures.py
+            --out ${NESRECOMP_FDS_BOARD_FIXTURES})
+set_tests_properties(cyc_fds_board_fixtures PROPERTIES FIXTURES_SETUP fds_board_fixtures)
+add_test(NAME cyc_fds_board_test COMMAND cyc_fds_board_test ${NESRECOMP_FDS_BOARD_FIXTURES})
+set_tests_properties(cyc_fds_board_test PROPERTIES FIXTURES_REQUIRED fds_board_fixtures)

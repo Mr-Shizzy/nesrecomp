@@ -17,11 +17,13 @@ set(NESRECOMP_CYC_SOURCES
     ${NESRECOMP_CYC_DIR}/cpu6502_interp.c
     ${NESRECOMP_CYC_DIR}/hw_machine.c
     ${NESRECOMP_CYC_DIR}/hw_mapper.c
+    ${NESRECOMP_CYC_DIR}/hw_fds.c
     ${NESRECOMP_CYC_DIR}/vendor/emu2413/emu2413.c
     ${NESRECOMP_CYC_DIR}/hw_ppu.c
     ${NESRECOMP_CYC_DIR}/hw_apu.c
     ${NESRECOMP_CYC_DIR}/hw_palette.c
     ${NESRECOMP_CYC_DIR}/cyc_trace.c
+    ${NESRECOMP_CYC_DIR}/cyc_ring.c
     ${NESRECOMP_CYC_DIR}/cyc_run.c
     ${NESRECOMP_CYC_DIR}/cyc_host.c
     ${NESRECOMP_CYC_DIR}/cyc_accuracycoin.c

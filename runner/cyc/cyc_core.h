@@ -23,6 +23,48 @@ extern "C" {
 
 /* Load an iNES/NES 2.0 image. Returns false on unsupported input; see MAPPERS.md. */
 bool cyc_load_ines(const uint8_t *image, size_t size);
+/* ---- Famicom Disk System (hw_fds.c) ----
+ *
+ * The RAM Adapter is loaded from its BIOS and a disk image instead of an iNES
+ * file. cyc_load_fds() accepts any 8 KiB BIOS; hosts check its identity
+ * (common/nes_fds.h, bios/disksys.toml) before calling it. The drive profile
+ * picks whose model of the drive runs (hw_fds.c lists the differences):
+ * MESEN is the nesref oracle's (libretro/Mesen) and the default. stream_crc picks the CRC
+ * bytes the side streams carry: the real CRC-16 (default) or Mesen's constant
+ * $4D $62; crc_check makes $4030.4 report a mismatch in any profile. */
+typedef enum { CYC_FDS_PROFILE_MESEN, CYC_FDS_PROFILE_MESEN2, CYC_FDS_PROFILE_HARDWARE } CycFdsProfile;
+typedef enum { CYC_FDS_CRC_COMPUTED, CYC_FDS_CRC_MESEN } CycFdsStreamCrc;
+typedef struct {
+    CycFdsProfile   profile;
+    CycFdsStreamCrc stream_crc;
+    bool crc_check;
+    bool write_protect;    /* the disk's write-protect tab is broken off */
+    bool qd;               /* the image is .qd (Mesen2 decides by extension) */
+    int  boot_side;        /* side in the drive at power-on; -1 = empty drive */
+} CycFdsOptions;
+void cyc_fds_default_options(CycFdsOptions *o);
+bool cyc_load_fds(const uint8_t *bios, size_t bios_size, const uint8_t *image, size_t image_size,
+                  const CycFdsOptions *options);
+bool     cyc_is_fds(void);
+unsigned cyc_fds_side_count(void);
+/* The side in the drive, or -1 for an empty drive. */
+int      cyc_fds_side(void);
+/* Eject (false if the drive is already empty) and insert (false unless the
+ * drive is empty and the side exists). Take effect on the drive's next cycle;
+ * hosts call them between frames, where nesref applies its disk events. */
+bool     cyc_fds_eject(void);
+bool     cyc_fds_insert(unsigned side);
+/* The byte stream the drive clocks for a side, as disk writes left it. */
+const uint8_t *cyc_fds_side_stream(unsigned side, uint32_t *len);
+uint32_t cyc_fds_disk_writes(void);
+/* PRG RAM ($6000-$DFFF on the FDS) or cartridge work RAM, for host dumps. */
+const uint8_t *cyc_cart_ram(size_t *len);
+/* The PPU's memories and CHR RAM, for host dumps (NULL / 0 where absent). */
+const uint8_t *cyc_ppu_ciram(size_t *len);
+const uint8_t *cyc_ppu_palette(void);
+const uint8_t *cyc_ppu_oam(void);
+const uint8_t *cyc_chr_ram(size_t *len);
+
 /* What CPU RAM holds at power-on. The console leaves no defined state; the
  * default is the pattern AccuracyCoin's power-on page reports from the
  * reference console. Zeros/ones match what other emulators power up with, so
@@ -52,6 +94,9 @@ bool cyc_nvram_import(unsigned region, const void *buffer, size_t size);
 
 /* The 2KB of CPU RAM. */
 const uint8_t *cyc_cpu_ram(void);
+/* The byte a CPU read of addr would return from RAM or ROM, without the
+ * read's side effects. False for addresses that are I/O or open bus. */
+bool cyc_debug_peek(uint16_t addr, uint8_t *value);
 /* Buttons for controller port 0 or 1 (A B Select Start Up Down Left Right,
  * MSB first), latched by the console when it strobes the port. */
 void cyc_set_controller(int port, uint8_t buttons);

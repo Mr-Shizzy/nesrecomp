@@ -54,6 +54,19 @@ void cpu_nmi_input(bool asserted);
 /* Set by the PPU when it enters VBlank; the scheduler ends a frame at the
  * next instruction boundary and clears it. */
 extern bool hw_frame_done;
+/* An observation point inside the frame: when hw_observe_line >= 0 the PPU
+ * also stops the scheduler at dot 0 of that scanline (setting hw_frame_done
+ * and hw_observe_hit), so a host can look at the machine at the first
+ * instruction boundary after it and then let the frame continue. Line 240 is
+ * where Mesen ends a frame (libretro/Mesen PPU.cpp Exec, Console.cpp
+ * RunSingleFrame), one scanline before VBlank. It changes nothing the machine
+ * does. */
+extern int  hw_observe_line;
+extern bool hw_observe_hit;
+/* Set with hw_frame_done when the PPU enters VBlank (the frame's real end),
+ * so a stop that was both an observation point and the frame end is not
+ * mistaken for an observation alone. */
+extern bool hw_frame_end_hit;
 
 /* Legacy 8 KiB identity, retained for older generated programs. It cannot
  * distinguish independently mapped 4 KiB halves; new dispatch uses bank4. */

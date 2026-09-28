@@ -81,6 +81,9 @@ void hw_cart_ppu_data_read(void);
 void hw_cart_ppu_rd(bool reading);
 /* Once per completed CPU cycle, including cycles stolen by DMA. */
 void hw_cart_cpu_clock(void);
+/* Once per CPU cycle at tick 11, after the IRQ sample and before the next
+ * access (hw_cart.clock_late boards: the FDS, clocked as Mesen does). */
+void hw_cart_cpu_clock_late(void);
 
 /* The mapper's /IRQ output, ORed into the CPU's IRQ input with the 2A03's
  * own frame and DMC interrupts. */

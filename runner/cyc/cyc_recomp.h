@@ -22,5 +22,12 @@ typedef struct {
 extern const char    *cyc_native_program_name;
 extern const uint32_t cyc_native_prg_hash;
 extern const uint32_t cyc_native_cart_hash;
+/* FDS programs (mapper 20): the BIOS CRC32 the compiler verified against
+ * bios/disksys.toml, and game.toml's [fds] bios and image, resolved to
+ * absolute paths at compile time as the host's defaults. 0 / NULL for
+ * cartridges. */
+extern const uint32_t cyc_native_fds_bios_crc32;
+extern const char    *cyc_native_fds_bios_path;
+extern const char    *cyc_native_fds_image_path;
 bool cyc_native_has(uint16_t addr);
 void cyc_native_run(void);

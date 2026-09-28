@@ -187,6 +187,10 @@ static inline bool nes_cart_variant_supported(const NesCartInfo *c)
     if (c->chr_size && (c->chr_ram || c->chr_nvram)) return false;
     if (!c->chr_size && !c->chr_ram && !c->chr_nvram) return false;
     switch (c->mapper) {
+    /* The FDS RAM Adapter (common/nes_fds.h): only the board the runtime
+     * builds from a BIOS and a disk; an iNES header cannot describe a disk. */
+    case 20: return !c->submapper && !c->nes2 && !c->four_screen && !c->battery && !c->trainer &&
+        c->prg_size == 8192 && c->chr_ram == 8192 && !c->chr_size && c->prg_ram == 32768 && !c->prg_nvram;
     case 40: return !c->submapper && c->prg_size==65536 && c->chr_size<=8192 &&
         !c->prg_ram && !c->prg_nvram && !c->four_screen;
     case 5: {

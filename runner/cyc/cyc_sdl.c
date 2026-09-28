@@ -5,6 +5,8 @@
  *       Tab (hold) = fast forward, F2 = switch between recompiled code and
  *       the interpreter (live; both produce the same machine, cycle for
  *       cycle), F12 = screenshot (cyc_shot_NNNN.png), Esc = quit.
+ *       FDS: F1 = eject the disk / insert the selected side, F3 = select the
+ *       next side (drive empty), as nesref's F1/F2.
  * The first connected game controller also works.
  */
 #define SDL_MAIN_HANDLED
@@ -94,6 +96,7 @@ int cyc_sdl_main(const char *title, int scale) {
     uint64_t native_mark = cyc_run_native_cycles;
     uint64_t cycles_mark = cyc_cycle_count();
     int frames = 0, shot = 0;
+    unsigned fds_selected = cyc_fds_side() > 0 ? (unsigned)cyc_fds_side() : 0;
     bool running = true;
 
     while (running) {
@@ -104,6 +107,25 @@ int cyc_sdl_main(const char *title, int scale) {
                 switch (ev.key.keysym.scancode) {
                 case SDL_SCANCODE_ESCAPE: running = false; break;
                 case SDL_SCANCODE_F2: cyc_run_native = !cyc_run_native; break;
+                case SDL_SCANCODE_F1:
+                    if (!cyc_is_fds()) break;
+                    if (cyc_fds_side() >= 0) {
+                        fds_selected = (unsigned)cyc_fds_side();
+                        cyc_fds_eject();
+                        printf("fds: disk ejected
+");
+                    } else if (cyc_fds_insert(fds_selected)) {
+                        printf("fds: side %u inserted
+", fds_selected);
+                    }
+                    break;
+                case SDL_SCANCODE_F3:
+                    if (cyc_is_fds() && cyc_fds_side() < 0 && cyc_fds_side_count()) {
+                        fds_selected = (fds_selected + 1) % cyc_fds_side_count();
+                        printf("fds: side %u selected
+", fds_selected);
+                    }
+                    break;
                 case SDL_SCANCODE_F12: {
                     char name[64];
                     snprintf(name, sizeof(name), "cyc_shot_%04d.png", shot++);

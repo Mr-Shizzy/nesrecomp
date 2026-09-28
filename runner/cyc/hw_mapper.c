@@ -14,6 +14,7 @@
 #include "hw_internal.h"
 
 #include "cyc_trace.h"
+#include "hw_fds.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -604,6 +605,24 @@ static uint16_t txsrom_ciram_a10(uint16_t addr)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Mapper 20: the FDS RAM Adapter (hw_fds.c)                                 */
+/* ------------------------------------------------------------------------- */
+/* nesdev wiki, Family Computer Disk System; libretro/Mesen FDS.cpp:10-22. $8000-$DFFF
+ * is PRG RAM, tagged so the native dispatch never treats it as ROM (the
+ * same tag MMC5's RAM windows use); $E000-$FFFF is the 8 KiB BIOS, the whole
+ * of hw_cart.prg, fixed like an NROM bank. $6000-$7FFF is the first 8 KiB of
+ * the same RAM, read through hw_cart_cpu_read. */
+static void fds_reset(void)
+{
+    for (unsigned slot = 0; slot < 6; ++slot)
+        hw_cart.prg_off[slot] = MMC5_PRG_RAM | (0x2000u + slot * 0x1000u);
+    map_prg4(6, 0);
+    map_prg4(7, 1);
+    map_chr8(0);
+    fds_power_on();
+}
+
+/* ------------------------------------------------------------------------- */
 /* Dispatch                                                                  */
 /* ------------------------------------------------------------------------- */
 
@@ -702,6 +721,7 @@ static const struct {
     uint8_t     watch_ppu_addr;
     uint8_t     wram;            /* boards for this mapper carry work RAM */
 } MAPPERS[] = {
+    { 20, "FDS RAM Adapter", 0, 1 },
     { 5, "MMC5", 0, 1 },
     { 69, "Sunsoft FME-7 / 5B", 0, 1 },
     { 19, "Namco 163", 0, 0 },
@@ -845,7 +865,9 @@ void hw_cart_power_on(void)
     memset(&hw_cart.barcode,0,sizeof(hw_cart.barcode));
     vrc7_sound_reset(true);
     s5b_reset();
+    hw_cart.clock_late = hw_cart.mapper == 20;
     switch (hw_cart.mapper) {
+    case 20: fds_reset(); break;
     case 5: mmc5_reset(); break;
     case 69: fme7_apply(); break;
     case 19: case 210: hw_cart.m.namco.channel = 7; namco_apply(); break;
@@ -909,6 +931,7 @@ void hw_cart_power_on(void)
 
 void hw_cart_cpu_write(uint16_t addr, uint8_t value)
 {
+    if (hw_cart.mapper==20) { fds_cpu_write(addr,value); return; }
     /* NTDEC 2722: decoded A15:A13, no bus conflicts. The enable write
      * starts the counter; only $8000 clears it and acknowledges IRQ. */
     if (hw_cart.mapper==40) {
@@ -1187,6 +1210,7 @@ void hw_cart_cpu_write(uint16_t addr, uint8_t value)
 
 bool hw_cart_cpu_read(uint16_t addr, uint8_t *value)
 {
+    if (hw_cart.mapper==20) return fds_cpu_read(addr,value);
     if (hw_cart.mapper==40 && addr>=0x6000 && addr<0x8000) {
         *value=hw_cart.prg[((12u&(hw_cart.prg_slots-1))*4096)+(addr&8191)]; return true;
     }
@@ -1227,11 +1251,17 @@ void hw_cart_ppu_addr_watched(uint16_t vbus)
 }
 
 bool hw_cart_irq(void) {
+    if (hw_cart.mapper==20) return fds_irq();
     if (hw_cart.mapper==5) {
         const Mmc5State *m=&hw_cart.m.mmc5;
         return (m->irq_enable && m->irq_pending) || m->timer_irq || (m->pcm_irq && (m->pcm_control&128));
     }
     return hw_cart.m.irq_out != 0;
+}
+
+void hw_cart_cpu_clock_late(void)
+{
+    if (hw_cart.mapper==20) fds_cpu_clock();
 }
 
 void hw_cart_cpu_clock(void)
@@ -1365,6 +1395,7 @@ uint64_t hw_cart_state_hash(uint64_t h)
         for (unsigned i=0;i<sizeof(Mmc5State);++i) acc=acc*131+bytes[i];
     }
     if (hw_cart.mapper==85) acc=vrc7_sound_hash(acc);
+    if (hw_cart.mapper==20) acc=fds_state_hash(acc);
     if (hw_cart.mapper==19 || hw_cart.mapper==210) {
         const uint8_t *b=(const uint8_t *)&hw_cart.m.namco;
         for (unsigned i=0;i<sizeof(HwNamco);++i) acc=acc*131+b[i];
@@ -1401,6 +1432,7 @@ uint64_t hw_cart_state_hash(uint64_t h)
 void hw_cart_state_dump(void *file)
 {
     FILE *f = (FILE *)file;
+    if (hw_cart.mapper==20) fds_state_dump(file);
     if (hw_cart.mapper==69) {
         const HwFme7 *m=&hw_cart.m.fme7; const Hw5B *s=&hw_cart.m.s5b;
         fprintf(f,"cart.fme7.command %X\ncart.fme7.prg %02X %02X %02X %02X\ncart.fme7.mirror %u\n"
