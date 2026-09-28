@@ -5,6 +5,8 @@ project(nesrecomp_cyc C CXX)
 #   cyc_oracle       TriCNES's complete machine (the reference)
 #   cyc_interp       NESRecomp's CPU on the interpreter alone, for any NROM ROM
 #   cyc_helper_test  exhaustive check of the cpu6502.h operation helpers
+#   cyc_fds_disk_test  FDS media parser/stream contracts (common/nes_fds.h) over
+#                    fixtures written by tools/cyc/fds_fixtures.py
 # Game projects use runner/cyc/cyc.cmake instead.
 
 set(CMAKE_C_STANDARD 11)
@@ -33,3 +35,17 @@ add_test(NAME cyc_mapper_test COMMAND cyc_mapper_test)
 
 add_executable(cyc_cart_header_test cart_header_test.c)
 add_test(NAME cyc_cart_header_test COMMAND cyc_cart_header_test)
+
+# FDS media: the fixture generator runs first (FIXTURES_SETUP), then the test.
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+add_executable(cyc_fds_disk_test fds_disk_test.c)
+if(MSVC)
+    target_compile_definitions(cyc_fds_disk_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+set(NESRECOMP_FDS_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/fds_fixtures)
+add_test(NAME cyc_fds_fixtures
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/cyc/fds_fixtures.py
+            --out ${NESRECOMP_FDS_FIXTURES})
+set_tests_properties(cyc_fds_fixtures PROPERTIES FIXTURES_SETUP fds_fixtures)
+add_test(NAME cyc_fds_disk_test COMMAND cyc_fds_disk_test ${NESRECOMP_FDS_FIXTURES})
+set_tests_properties(cyc_fds_disk_test PROPERTIES FIXTURES_REQUIRED fds_fixtures)
