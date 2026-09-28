@@ -24,7 +24,7 @@ cyc_interp at all four CPU/PPU alignments:
          hardware profile.
 
 python tools/cyc/test_cyc_fds_audio.py --recompiler build/compiler/NESRecomp.exe \\
-    --interp build/cyc/cyc_interp.exe --out build/cyc-fds-audio [--cmake ... --generator ... --make-program ...]
+    --interp build/cyc/cyc_interp.exe --out build/cyc-fds-audio [--toolchain build/cyc/nested_build.json]
 """
 import argparse
 import math
@@ -39,6 +39,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import fds_audio_fixtures as fixtures      # noqa: E402
 import fds_audio_model as model            # noqa: E402
+import nested_build                        # noqa: E402
 
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 SOUND_FRAMES, PCM_FRAMES = 240, 1100
@@ -68,20 +69,8 @@ def build(args, out, name, source):
         f'target_include_directories({name} PRIVATE ${{NESRECOMP_CYC_INCLUDE_DIRS}})',
         f'target_link_libraries({name} PRIVATE ${{NESRECOMP_CYC_LIBRARIES}})',
         f'target_compile_definitions({name} PRIVATE _CRT_SECURE_NO_WARNINGS)']) + '\n')
-    command = [args.cmake, '-S', folder, '-B', folder / 'build', f'-DCMAKE_BUILD_TYPE={args.config}']
-    if args.generator:
-        command += ['-G', args.generator]
-    if args.make_program:
-        command += [f'-DCMAKE_MAKE_PROGRAM={args.make_program}']
-    if args.c_compiler:
-        command += [f'-DCMAKE_C_COMPILER={args.c_compiler}']
-    run(command, folder, folder / 'configure.log')
-    run([args.cmake, '--build', folder / 'build', '--config', args.config, '--parallel', '8'], folder, folder / 'build.log')
-    suffix = '.exe' if NO_WINDOW else ''
-    for exe in (folder / 'build' / args.config / (name + suffix), folder / 'build' / (name + suffix)):
-        if exe.exists():
-            return exe, folder
-    raise AssertionError(f'{name}: no executable built')
+    args.toolchain_.build(folder, folder / 'build', folder)
+    return args.toolchain_.executable(folder / 'build', name), folder
 
 
 def ring_audio_counts(ring_path):
@@ -207,13 +196,10 @@ def main():
     ap.add_argument('--recompiler', required=True, type=Path)
     ap.add_argument('--interp', required=True, type=Path)
     ap.add_argument('--out', required=True, type=Path)
-    ap.add_argument('--cmake', default='cmake')
-    ap.add_argument('--generator')
-    ap.add_argument('--make-program')
-    ap.add_argument('--c-compiler')
-    ap.add_argument('--config', default='Release')
+    nested_build.add_arguments(ap)
     ap.add_argument('--source', type=Path, help='runner/cyc sources to build (default: this checkout)')
     args = ap.parse_args()
+    args.toolchain_ = nested_build.Toolchain.from_args(args)
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     source = (args.source or HERE.parents[1] / 'runner' / 'cyc').resolve()

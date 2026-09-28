@@ -15,6 +15,8 @@ project(nesrecomp_cyc C CXX)
 #                    recompiler and a synthetic self-modifying FDS program)
 #   cyc_fds_audio_test the FDS sound unit against an independent model and in
 #                    rendered PCM (builds synthetic FDS sound programs)
+# Tests that build a generated program use this build's toolchain
+# (nested_build.json below, tools/cyc/nested_build.py).
 # Game projects use runner/cyc/cyc.cmake instead.
 
 set(CMAKE_C_STANDARD 11)
@@ -75,20 +77,87 @@ set_tests_properties(cyc_fds_board_fixtures PROPERTIES FIXTURES_SETUP fds_board_
 add_test(NAME cyc_fds_board_test COMMAND cyc_fds_board_test ${NESRECOMP_FDS_BOARD_FIXTURES})
 set_tests_properties(cyc_fds_board_test PROPERTIES FIXTURES_REQUIRED fds_board_fixtures)
 
+
 # Compiled views of code in RAM (FDS disk files, captured code): a synthetic
 # FDS program whose RAM code rewrites itself every way a view can go stale
 # (tools/cyc/fds_ramview_fixtures.py), compiled from its disk, then again with
 # the capture of a run; native, --interp-only and cyc_interp must match on
 # every cycle at all four alignments. Needs the recompiler, built here.
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../recompiler ${CMAKE_CURRENT_BINARY_DIR}/recompiler)
-set(NESRECOMP_RAMVIEW_BUILD --cmake ${CMAKE_COMMAND} --generator ${CMAKE_GENERATOR} --c-compiler ${CMAKE_C_COMPILER})
-if(NOT CMAKE_CONFIGURATION_TYPES AND CMAKE_MAKE_PROGRAM)
-    list(APPEND NESRECOMP_RAMVIEW_BUILD --make-program ${CMAKE_MAKE_PROGRAM})
+
+# Tests that compile a generated program build it with this build's toolchain,
+# recorded here (tools/cyc/nested_build.py): cmake, generator, make program,
+# compiler and tools, and for MSVC with a single-configuration generator the
+# compiler environment this was configured in, so a plain ctest needs no
+# developer prompt. The CTest commands only name this file.
+function(nesrecomp_json_string out value)
+    string(REPLACE "\\" "\\\\" value "${value}")
+    string(REPLACE "\"" "\\\"" value "${value}")
+    set(${out} "\"${value}\"" PARENT_SCOPE)
+endfunction()
+set(NESRECOMP_NESTED_BUILD ${CMAKE_CURRENT_BINARY_DIR}/nested_build.json)
+set(nested_fields "")
+foreach(pair "cmake=${CMAKE_COMMAND}" "generator=${CMAKE_GENERATOR}" "platform=${CMAKE_GENERATOR_PLATFORM}"
+             "toolset=${CMAKE_GENERATOR_TOOLSET}" "instance=${CMAKE_GENERATOR_INSTANCE}")
+    string(FIND "${pair}" "=" eq)
+    string(SUBSTRING "${pair}" 0 ${eq} key)
+    math(EXPR eq "${eq} + 1")
+    string(SUBSTRING "${pair}" ${eq} -1 value)
+    nesrecomp_json_string(value "${value}")
+    string(APPEND nested_fields "  \"${key}\": ${value},\n")
+endforeach()
+if(CMAKE_CONFIGURATION_TYPES)
+    string(APPEND nested_fields "  \"multi_config\": true\n")
+else()
+    nesrecomp_json_string(make "${CMAKE_MAKE_PROGRAM}")
+    nesrecomp_json_string(cc "${CMAKE_C_COMPILER}")
+    string(APPEND nested_fields "  \"multi_config\": false,\n  \"make_program\": ${make},\n  \"c_compiler\": ${cc},\n")
+    set(tools "")
+    set(path_dirs "")
+    foreach(pair "linker=${CMAKE_LINKER}" "rc=${CMAKE_RC_COMPILER}" "mt=${CMAKE_MT}" "ar=${CMAKE_AR}")
+        string(FIND "${pair}" "=" eq)
+        string(SUBSTRING "${pair}" 0 ${eq} key)
+        math(EXPR eq "${eq} + 1")
+        string(SUBSTRING "${pair}" ${eq} -1 value)
+        if(value)
+            nesrecomp_json_string(json "${value}")
+            list(APPEND tools "\"${key}\": ${json}")
+        endif()
+    endforeach()
+    list(JOIN tools ", " tools)
+    string(APPEND nested_fields "  \"tools\": {${tools}},\n")
+    set(env "")
+    if(MSVC)
+        foreach(tool "${CMAKE_C_COMPILER}" "${CMAKE_LINKER}" "${CMAKE_RC_COMPILER}" "${CMAKE_MT}")
+            if(tool)
+                get_filename_component(dir "${tool}" DIRECTORY)
+                file(TO_NATIVE_PATH "${dir}" dir)
+                nesrecomp_json_string(dir "${dir}")
+                list(APPEND path_dirs "${dir}")
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES path_dirs)
+        # Built as a string: the values are ;-separated and must not become CMake lists.
+        foreach(var INCLUDE LIB LIBPATH)
+            if(DEFINED ENV{${var}})
+                nesrecomp_json_string(json "$ENV{${var}}")
+                if(env)
+                    string(APPEND env ", ")
+                endif()
+                string(APPEND env "\"${var}\": ${json}")
+            endif()
+        endforeach()
+    endif()
+    list(JOIN path_dirs ", " path_dirs)
+    string(APPEND nested_fields "  \"env\": {${env}},\n  \"path\": [${path_dirs}]\n")
 endif()
+file(WRITE ${NESRECOMP_NESTED_BUILD} "{\n${nested_fields}}\n")
+set(NESRECOMP_NESTED_BUILD_ARGS --toolchain ${NESRECOMP_NESTED_BUILD} --config "$<CONFIG>")
+
 add_test(NAME cyc_ramview_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/cyc/test_cyc_ramviews.py
             --recompiler $<TARGET_FILE:NESRecomp> --interp $<TARGET_FILE:cyc_interp>
-            --out ${CMAKE_CURRENT_BINARY_DIR}/ramview_test ${NESRECOMP_RAMVIEW_BUILD} --config "$<CONFIG>")
+            --out ${CMAKE_CURRENT_BINARY_DIR}/ramview_test ${NESRECOMP_NESTED_BUILD_ARGS})
 set_tests_properties(cyc_ramview_test PROPERTIES TIMEOUT 1800)
 
 # FDS disk saves across processes: a synthetic program that saves to its disk
@@ -109,5 +178,5 @@ set_tests_properties(cyc_fds_saves PROPERTIES TIMEOUT 900)
 add_test(NAME cyc_fds_audio_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/cyc/test_cyc_fds_audio.py
             --recompiler $<TARGET_FILE:NESRecomp> --interp $<TARGET_FILE:cyc_interp>
-            --out ${CMAKE_CURRENT_BINARY_DIR}/fds_audio_test ${NESRECOMP_RAMVIEW_BUILD} --config "$<CONFIG>")
+            --out ${CMAKE_CURRENT_BINARY_DIR}/fds_audio_test ${NESRECOMP_NESTED_BUILD_ARGS})
 set_tests_properties(cyc_fds_audio_test PROPERTIES TIMEOUT 1800)

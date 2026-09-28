@@ -15,6 +15,7 @@ import re
 import subprocess
 from types import SimpleNamespace
 from cyc_verify import first_difference, run_error
+import nested_build
 
 def command(argv,log,cwd=None,timeout=300):
     p=subprocess.run([str(a) for a in argv],cwd=cwd,capture_output=True,text=True,
@@ -29,8 +30,7 @@ def main():
     ap.add_argument('--frames',type=int,default=600)
     ap.add_argument('--input',type=Path)
     ap.add_argument('--mapper',type=int,action='append')
-    ap.add_argument('--cmake',default='cmake')
-    ap.add_argument('--generator')
+    nested_build.add_arguments(ap)
     ap.add_argument('--jobs',type=int,default=4)
     ap.add_argument('--build-timeout',type=int,default=1800)
     ap.add_argument('--resume',action='store_true',help='Reuse completed runs only when their inputs, executable and outputs still match')
@@ -103,15 +103,11 @@ def main():
             f'target_compile_definitions({name} PRIVATE _CRT_SECURE_NO_WARNINGS)',
             f'target_link_libraries({name} PRIVATE ${{NESRECOMP_CYC_LIBRARIES}})']
     (out/'CMakeLists.txt').write_text('\n'.join(cmake)+'\n',newline='\n')
-    configure=[args.cmake,'-S',out,'-B',out/'build','-DCMAKE_BUILD_TYPE=Release']
-    if args.generator:configure+=['-G',args.generator]
-    command(configure,out/'configure.log',timeout=args.build_timeout)
-    command([args.cmake,'--build',out/'build','--config','Release','--parallel',args.jobs],out/'build.log',timeout=args.build_timeout)
+    tc=nested_build.Toolchain.from_args(args)
+    tc.build(out,out/'build',out,timeout=args.build_timeout,parallel=args.jobs)
     summary=[]
     for c in cases:
-        suffix='.exe' if hasattr(subprocess,'CREATE_NO_WINDOW') else ''
-        exe=out/'build'/'Release'/(c['name']+suffix)
-        if not exe.exists():exe=out/'build'/(c['name']+suffix)
+        exe=tc.executable(out/'build',c['name'])
         exe_digests[str(exe)]=digest(exe)
         def compiled(task):
             a,mode=task;output=execute(c,a,mode,exe,['--interp-only'] if mode=='embedded' else [])
