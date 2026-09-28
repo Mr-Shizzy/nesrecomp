@@ -22,7 +22,7 @@ models; it does not independently establish the mapper specification.
 
 | ID | Board / reference | Behavior and limits |
 |---:|---|---|
-| 20 | [FDS RAM Adapter](https://www.nesdev.org/wiki/Family_Computer_Disk_System) | Loaded from a BIOS and a disk image (`cyc_load_fds`), never from an iNES header. 32 KiB PRG RAM at $6000-$DFFF, the 8 KiB BIOS fixed at $E000-$FFFF, 8 KiB CHR RAM, CIRAM A10 from $4025.3. Timer IRQ ($4020-$4022), I/O enables ($4023), the disk drive ($4024-$4026, $4030-$4033) clocked every CPU cycle, and the sound unit's register side; its synthesis is not modeled yet. See [the FDS section](#fds-ram-adapter-mapper-20). |
+| 20 | [FDS RAM Adapter](https://www.nesdev.org/wiki/Family_Computer_Disk_System) | Loaded from a BIOS and a disk image (`cyc_load_fds`), never from an iNES header. 32 KiB PRG RAM at $6000-$DFFF, the 8 KiB BIOS fixed at $E000-$FFFF, 8 KiB CHR RAM, CIRAM A10 from $4025.3. Timer IRQ ($4020-$4022), I/O enables ($4023), the disk drive ($4024-$4026, $4030-$4033) clocked every CPU cycle, and the sound unit (`hw_fds_audio.c`: wavetable, envelopes, modulator, mixed at Mesen's level). Code the BIOS loads into PRG RAM runs as compiled RAM views. See [the FDS section](#fds-ram-adapter-mapper-20). |
 | 118 | [TxSROM](https://www.nesdev.org/wiki/TxSROM) | MMC3 banking and A12 IRQ. CHR A17 drives CIRAM A10: bit 7 of the register covering the nametable address's pattern page (R0/R1 or R2-R5 by $8000 bit 7; $3000-$3EFF uses pages 4-7). $A000 is disconnected. iNES keeps the MMC3 8 KiB WRAM default; four-screen headers are rejected. |
 | 119 | [TQROM](https://www.nesdev.org/wiki/TQROM) | MMC3 banking and A12 IRQ. CHR bank bit 6 (CHR A16) selects the 8 KiB CHR RAM chip, addressed by bank bits 0-2; otherwise CHR ROM sees bits 0-5 (at most 64 KiB). No work RAM. iNES implies the 8 KiB CHR RAM; NES 2.0 must declare exactly 8 KiB volatile CHR RAM. This is the only board accepted with both CHR ROM and CHR RAM. |
 | 69 | [Sunsoft FME-7 / 5A / 5B](https://www.nesdev.org/wiki/Sunsoft_FME-7) | Command/parameter registers: eight 1 KiB CHR banks, three 8 KiB PRG banks (6 bits) plus the fixed last bank, four mirroring modes, and a $6000 window that holds a PRG ROM bank, enabled RAM, or open bus. The 16-bit IRQ counter decrements every CPU cycle (including DMA) and interrupts on the $0000 to $FFFF wrap; only command 13 acknowledges. [5B audio](https://www.nesdev.org/wiki/Sunsoft_5B_audio) is always present: three tones, 17-bit noise, the 32-step envelope with all 16 shapes, and the 1.5 dB/step DAC. Mixing gain is nominal. Code at $6000 uses the interpreter. iNES implies 8 KiB PRG RAM. |
@@ -371,10 +371,11 @@ the `hardware` column is a judgment call, not oracle-verified.
   profiles), mixed at Mesen's level (20/5000 per step, 1.69 full pulses at
   full volume); `hardware` uses the nesdev level (2.4 pulses) and ~2 kHz
   low-pass. See README, "The sound unit".
-- Code: the BIOS compiles as a fixed ROM (100% native in the SMB2J boot); code
-  the BIOS loads into PRG RAM runs on the interpreter and is counted as
-  "PRG RAM" in the run summary and listed (with $6000+ addresses) in the miss
-  log.
+- Code: the BIOS compiles as a fixed ROM. Code the BIOS loads into PRG RAM
+  compiles as RAM views: every PRG file on every side at its load address,
+  plus what the capture file adds, validated by content and a write watch
+  (README, "Code in RAM"). The owner routes run 100% native; anything no view
+  covers runs on the interpreter and goes to the capture log.
 
 Every register access, IRQ edge and acknowledge, clocked byte, motor, rewind,
 ready and end-of-side transition, CRC check and side change goes into the
