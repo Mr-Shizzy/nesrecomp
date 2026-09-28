@@ -5,8 +5,10 @@ project(nesrecomp_cyc C CXX)
 #   cyc_oracle       TriCNES's complete machine (the reference)
 #   cyc_interp       NESRecomp's CPU on the interpreter alone, for any NROM ROM
 #   cyc_helper_test  exhaustive check of the cpu6502.h operation helpers
-#   cyc_fds_disk_test  FDS media parser/stream contracts (common/nes_fds.h) over
-#                    fixtures written by tools/cyc/fds_fixtures.py
+#   cyc_fds_disk_test  FDS media parser/stream contracts (common/nes_fds.h) and
+#                    disk save file / Mesen .ips contracts (common/nes_fds_save.h)
+#                    over fixtures written by tools/cyc/fds_fixtures.py
+#   cyc_fds_saves    disk saves across processes (tools/cyc/test_cyc_fds_saves.py)
 #   cyc_fds_board_test FDS RAM Adapter/drive contracts and a synthetic BIOS
 #                    (tools/cyc/fds_board_fixtures.py) on the whole machine
 #   cyc_ramview_test compiled RAM views never run stale code (builds the
@@ -86,3 +88,13 @@ add_test(NAME cyc_ramview_test
             --recompiler $<TARGET_FILE:NESRecomp> --interp $<TARGET_FILE:cyc_interp>
             --out ${CMAKE_CURRENT_BINARY_DIR}/ramview_test ${NESRECOMP_RAMVIEW_BUILD} --config "$<CONFIG>")
 set_tests_properties(cyc_ramview_test PROPERTIES TIMEOUT 1800)
+
+# FDS disk saves across processes: a synthetic program that saves to its disk
+# (tools/cyc/fds_save_fixtures.py) run by cyc_interp at all four alignments:
+# write -> save file -> reload round trips, the image never modified, foreign /
+# corrupt / newer saves refused and left intact, save cadence, write protect,
+# Mesen .ips export/import and the write position.
+add_test(NAME cyc_fds_saves
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/cyc/test_cyc_fds_saves.py
+            --host $<TARGET_FILE:cyc_interp> --out ${CMAKE_CURRENT_BINARY_DIR}/fds_saves)
+set_tests_properties(cyc_fds_saves PROPERTIES TIMEOUT 900)

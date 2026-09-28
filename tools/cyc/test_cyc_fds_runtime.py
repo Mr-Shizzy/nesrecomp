@@ -7,7 +7,10 @@ runner/cyc/cyc.cmake, and for every fixture case runs the program, the program
 with --interp-only and the standalone cyc_interp at all four CPU/PPU
 alignments. Requires identical --hash-out traces, the case's expected CPU RAM,
 and 100% of the BIOS's cycles native. Also checks that the host refuses a BIOS
-whose CRC32 its identity does not name.
+whose CRC32 its identity does not name. Then compiles the saving program of
+tools/cyc/fds_save_fixtures.py the same way and runs the disk-save suite
+(test_cyc_fds_saves.py) on it natively and with --interp-only, plus a save run
+whose trace and saved disk must match across the three hosts.
 
 python tools/cyc/test_cyc_fds_runtime.py --recompiler build/compiler/Release/NESRecomp.exe \\
     --interp build/cyc/Release/cyc_interp.exe --out build/cyc-fds-regressions [--cmake ... --generator ...]
@@ -133,6 +136,49 @@ def main():
                     i = next(i for i, (x, y) in enumerate(zip(traces['native'], traces[mode])) if x != y)
                     raise AssertionError(f'{name} align {align}: {mode} differs from native at frame {i}')
         print(f'{name}: expected RAM, native/interpreter/standalone parity at all four alignments')
+
+    # The saving program (tools/cyc/fds_save_fixtures.py) compiled the same
+    # way: its disk-save suite natively and with --interp-only, and one save
+    # run's trace identical across native, --interp-only and cyc_interp.
+    sv = out / 'saves'
+    sv.mkdir(exist_ok=True)
+    run([sys.executable, here / 'fds_save_fixtures.py', '--out', sv], sv, sv / 'fixtures.log')
+    (sv / 'game.toml').write_text('[game]\noutput_prefix = "fdssave"\ncycle_accurate = true\nfds = true\n\n'
+                                  '[fds]\nimage = "disk.fds"\nbios = "bios/disksys.rom"\n', newline='\n')
+    shutil.rmtree(sv / 'generated', ignore_errors=True)
+    run([args.recompiler.resolve(), '--game', 'game.toml'], sv, sv / 'codegen.log')
+    (sv / 'CMakeLists.txt').write_text((out / 'CMakeLists.txt').read_text().replace('fdsboard', 'fdssave'))
+    command = [args.cmake, '-S', sv, '-B', sv / 'build', f'-DCMAKE_BUILD_TYPE={args.config}']
+    if args.generator:
+        command += ['-G', args.generator]
+    run(command, sv, sv / 'configure.log', timeout=900)
+    run([args.cmake, '--build', sv / 'build', '--config', args.config, '--parallel', '4'], sv, sv / 'build.log', timeout=900)
+    saver = sv / 'build' / args.config / ('fdssave' + suffix)
+    if not saver.exists():
+        saver = sv / 'build' / ('fdssave' + suffix)
+    for mode, extra in (('native', ''), ('interp', '--interp-only')):
+        p = run([sys.executable, here / 'test_cyc_fds_saves.py', '--host', saver, '--out', sv / f'suite_{mode}',
+                 f'--host-args={extra}'], sv, sv / f'suite_{mode}.log', timeout=1800)
+        print(f'saves ({mode}): ' + p.stdout.strip().splitlines()[-1])
+    for align in range(4):
+        traces = {}
+        for mode, exe, extra in [('native', saver, []), ('interp', saver, ['--interp-only']),
+                                 ('standalone', args.interp.resolve(), [])]:
+            save = sv / f'par_a{align}_{mode}.fdssave'
+            save.unlink(missing_ok=True)
+            shutil.copyfile(sv / 'suite_native' / 'a0.fdssave', save)     # start from a saved disk (counter 3)
+            trace = sv / f'par_a{align}_{mode}.txt'
+            p = run([exe, sv / 'disk.fds', '--fds-bios', sv / 'bios' / 'disksys.rom', '--frames', 200, '--align', align,
+                     '--fds-crc-check', '--save-file', save, '--hash-out', trace] + extra, sv, trace.with_suffix('.log'))
+            traces[mode] = (trace.read_text().splitlines(), save.read_bytes())
+            if mode == 'native':
+                m = re.search(r'interpreted: ROM (\d+)', p.stdout)
+                if m and int(m[1]):
+                    raise AssertionError(f'save program: {m[1]} cycles of its ROM ran on the interpreter')
+        for mode in ('interp', 'standalone'):
+            if traces[mode] != traces['native']:
+                raise AssertionError(f'save program align {align}: {mode} differs from native (trace or saved disk)')
+    print('save program: native/interpreter/standalone traces and saved disks identical at all four alignments')
     return 0
 
 
