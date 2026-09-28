@@ -532,6 +532,22 @@ static void video_set_logical_size(int w, int h) {
     }
 }
 
+void nesrecomp_apply_video_settings(void) {
+    if (!s_renderer) return;
+    int hd = s_hd_texture && hdpack_active();
+    int w = hd ? g_render_width * s_hd_scale : g_render_width;
+    int h = hd ? 240 * s_hd_scale : 240;
+    video_set_logical_size(w, h);
+    SDL_RenderSetIntegerScale(s_renderer,
+        g_nes_config.integer_scale && !g_nes_config.stretch && !hd ? SDL_TRUE : SDL_FALSE);
+    SDL_ScaleMode sm = g_nes_config.linear_filter ? SDL_ScaleModeLinear : SDL_ScaleModeNearest;
+    if (s_texture) SDL_SetTextureScaleMode(s_texture, sm);
+    if (s_hd_texture) SDL_SetTextureScaleMode(s_hd_texture, sm);
+}
+
+static NesAudioFilter s_audio_filter = NULL;
+void nesrecomp_set_audio_filter(NesAudioFilter fn) { s_audio_filter = fn; }
+
 /* Apply a queued geometry change (nes_video.h). Called at exactly one point
  * per frame -- after SDL_RenderPresent, before the next frame renders -- so
  * g_render_width never changes while a frame is in flight. Pre-window
@@ -1596,6 +1612,9 @@ smoke_skip_input:
          * the producer thread before launcher volume so APU and overlays obey
          * the same user setting and the callback remains game-agnostic. */
         nes_mod_audio_mix(s_audio_frame, push_n);
+
+        /* Game-installed effect (e.g. an echo option), before volume. */
+        if (s_audio_filter) s_audio_filter(s_audio_frame, push_n, AUDIO_SOURCE_RATE);
 
         /* Apply the launcher volume (0..100) as a linear scale. */
         int vol = g_nes_config.volume;

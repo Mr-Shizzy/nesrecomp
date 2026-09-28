@@ -89,6 +89,13 @@ void nesrecomp_set_escape_handler(NesEscapeHandler fn);
 /* Run the installed handler as if Escape were pressed; 1 = consumed. Used by
  * the key handler and the ESCAPE input-script command. */
 int nesrecomp_escape_consumed(void);
+/* Re-apply g_nes_config's display settings (stretch, integer scale, linear
+ * filter) to the live window, e.g. after an in-game options change. */
+void nesrecomp_apply_video_settings(void);
+/* Optional mono PCM effect run on each audio frame before the volume stage.
+ * Called on the producer thread; `rate` is the sample rate in Hz. */
+typedef void (*NesAudioFilter)(int16_t *samples, int count, int rate);
+void nesrecomp_set_audio_filter(NesAudioFilter fn);
 /* Push a context marker into the dispatch ring (kind e.g. 'N'/'n' = NMI
  * enter/exit; tag = vblank depth or other context id). */
 void nes_dring_mark(char kind, uint16_t tag);
