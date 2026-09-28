@@ -100,6 +100,13 @@ void nesrecomp_set_audio_filter(NesAudioFilter fn);
  * small motor strengths (0-65535) for `ms` milliseconds; 0/0 stops it.
  * Returns 1 if a pad took it, 0 if there is no pad or it has no rumble. */
 int nesrecomp_rumble(int player, uint16_t low, uint16_t high, uint32_t ms);
+/* Image overlays drawn over the presented game at the image's own resolution
+ * (e.g. a replacement logo). load returns an id > 0, or 0 on failure. place
+ * positions it in native NES pixels (the 256x240 picture), every frame it
+ * should change; it stays as placed until placed again. */
+int  nesrecomp_overlay_load_png(const char *path);
+int  nesrecomp_overlay_size(int id, int *w, int *h);
+void nesrecomp_overlay_place(int id, int visible, float x, float y, float w, float h);
 /* Push a context marker into the dispatch ring (kind e.g. 'N'/'n' = NMI
  * enter/exit; tag = vblank depth or other context id). */
 void nes_dring_mark(char kind, uint16_t tag);

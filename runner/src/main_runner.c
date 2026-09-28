@@ -65,6 +65,7 @@ uint8_t nes_input_seat(int seat) {
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+#include "stb_image.h"      /* declarations only; impl lives in chr_codec.c */
 
 /* Always-on audio observability (round-2). Env-gated: zero effect unless
  * RECOMP_AUDIO_DEBUG=<dir> is set. See recomp_audio_debug.h. */
@@ -543,6 +544,75 @@ void nesrecomp_apply_video_settings(void) {
     SDL_ScaleMode sm = g_nes_config.linear_filter ? SDL_ScaleModeLinear : SDL_ScaleModeNearest;
     if (s_texture) SDL_SetTextureScaleMode(s_texture, sm);
     if (s_hd_texture) SDL_SetTextureScaleMode(s_hd_texture, sm);
+}
+
+/* ---- Game image overlays (nes_runtime.h) ---------------------------------
+ * RGBA images drawn over the presented game image at their own resolution,
+ * placed in native NES pixels so they line up at any window size, with an
+ * HD pack, or stretched. Textures are created lazily (images may be loaded
+ * before the renderer exists). */
+#define MAX_OVERLAYS 8
+typedef struct {
+    unsigned char *rgba;
+    int            w, h;
+    SDL_Texture   *tex;
+    int            visible;
+    float          x, y, dw, dh;
+} Overlay;
+static Overlay s_overlays[MAX_OVERLAYS];
+static int     s_overlay_count;
+
+int nesrecomp_overlay_load_png(const char *path) {
+    if (s_overlay_count >= MAX_OVERLAYS) return 0;
+    int w, h, comp;
+    unsigned char *rgba = stbi_load(path, &w, &h, &comp, 4);
+    if (!rgba) return 0;
+    Overlay *o = &s_overlays[s_overlay_count++];
+    memset(o, 0, sizeof(*o));
+    o->rgba = rgba;
+    o->w = w;
+    o->h = h;
+    return s_overlay_count;
+}
+
+int nesrecomp_overlay_size(int id, int *w, int *h) {
+    if (id < 1 || id > s_overlay_count) return 0;
+    *w = s_overlays[id - 1].w;
+    *h = s_overlays[id - 1].h;
+    return 1;
+}
+
+void nesrecomp_overlay_place(int id, int visible, float x, float y, float w, float h) {
+    if (id < 1 || id > s_overlay_count) return;
+    Overlay *o = &s_overlays[id - 1];
+    o->visible = visible;
+    o->x = x; o->y = y; o->dw = w; o->dh = h;
+}
+
+static void draw_overlays(int hd) {
+    float fx, fy;
+    if (g_nes_config.stretch) {
+        int ow = 0, oh = 0;
+        SDL_GetRendererOutputSize(s_renderer, &ow, &oh);
+        fx = (float)ow / (float)g_render_width;
+        fy = (float)oh / 240.0f;
+    } else {
+        fx = fy = (float)(hd ? s_hd_scale : 1);
+    }
+    for (int i = 0; i < s_overlay_count; i++) {
+        Overlay *o = &s_overlays[i];
+        if (!o->visible) continue;
+        if (!o->tex) {
+            o->tex = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ABGR8888,
+                                       SDL_TEXTUREACCESS_STATIC, o->w, o->h);
+            if (!o->tex) { o->visible = 0; continue; }
+            SDL_UpdateTexture(o->tex, NULL, o->rgba, o->w * 4);
+            SDL_SetTextureBlendMode(o->tex, SDL_BLENDMODE_BLEND);
+            SDL_SetTextureScaleMode(o->tex, SDL_ScaleModeLinear);
+        }
+        SDL_FRect dst = { (g_widescreen_left + o->x) * fx, o->y * fy, o->dw * fx, o->dh * fy };
+        SDL_RenderCopyF(s_renderer, o->tex, NULL, &dst);
+    }
 }
 
 static NesAudioFilter s_audio_filter = NULL;
@@ -2038,9 +2108,11 @@ smoke_skip_input:
             hdpack_upscale(present, g_render_width, s_hd_buf);
             SDL_UpdateTexture(s_hd_texture, NULL, s_hd_buf, g_render_width * s_hd_scale * 4);
             SDL_RenderCopy(s_renderer, s_hd_texture, NULL, NULL);
+            draw_overlays(1);
         } else {
             SDL_UpdateTexture(s_texture, NULL, present, g_render_width * 4);
             SDL_RenderCopy(s_renderer, s_texture, NULL, NULL);
+            draw_overlays(0);
         }
         SDL_RenderPresent(s_renderer);
         if (s_startup_first_frame) {
