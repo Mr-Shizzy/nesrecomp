@@ -57,6 +57,10 @@ output directories for Windows and Linux builds.
 Additional checks live in `tools/cyc`: `test_cyc_mapper_headers.py`,
 `test_cyc_seed_units.py`, `test_cyc_expansion_audio.py`, `test_cyc_barcode.py`,
 `test_cyc_mmc5_public.py`, `test_cyc_project.py` and `test_cyc_owner_roms.py`.
+Famicom Disk System media (`common/nes_fds.h`) has `cyc_fds_disk_test` in
+`ctest` (fixtures from `fds_fixtures.py`) and `test_fds_owner_images.py`, which
+parses a local disk library read-only and compares every side stream with the
+Mesen loader transliterations; `NESRecomp --fds-info` prints an image's table.
 Their `--help` lists required fixture directories or external inputs. The MMC5
 public test compares six published AWJ pictures; only a consistent palette
 conversion and the published overscan crop are allowed. Expansion PCM tests

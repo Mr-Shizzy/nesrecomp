@@ -9,8 +9,11 @@
 #include "hw_internal.h"
 
 #include "cyc_core.h"
+#include "cyc_ring.h"
 #include "cyc_trace.h"
 #include "hw.h"
+#include "hw_fds.h"
+#include "../../common/nes_fds.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +22,13 @@
 HwMachine  hw;
 HwCart     hw_cart;
 bool       hw_frame_done;
+int        hw_observe_line = -1;
+bool       hw_observe_hit;
+bool       hw_frame_end_hit;
 int        hw_dma_stalls;
+uint8_t    hw_code_watch[HW_CODE_BYTES];
+static void no_code_write(unsigned phys, uint8_t value) { (void)phys; (void)value; }
+void     (*hw_code_write)(unsigned phys, uint8_t value) = no_code_write;
 /* What CPU RAM holds at power-on (cyc_core.h). It belongs to the machine, not
  * to a host: every host that links this implementation needs it, and the
  * cosimulation harnesses in tools/cyc are hosts too. tric_core.cpp defines
@@ -55,6 +64,8 @@ static inline void run_tick(unsigned k)
     if (q == 0) ppu_dot();
     else if (q == 2) ppu_half_dot();
     if (k == 0) clock_cpu_devices();
+    /* Boards clocked before the CPU's access, after the IRQ sample (FDS). */
+    if (k == 11 && hw_cart.clock_late) hw_cart_cpu_clock_late();
 }
 
 void hw_clock_run_ticks(int n)
@@ -106,6 +117,7 @@ static void run_ticks_1_to_11(void)
         ppu_half_dot();   /* 11 */
         break;
     }
+    if (hw_cart.clock_late) hw_cart_cpu_clock_late();   /* 11 */
 }
 
 /* run_tick(0) without the CPU's access. */
@@ -237,7 +249,7 @@ void hw_bus_write(uint16_t addr, uint8_t value)
 {
     if (cyc_trace_enabled) cyc_trace_access(addr, value, true);
     if (hw_cart.mapper==5 && addr<0x4020) hw_cart_cpu_write(addr,value);
-    if (addr < 0x2000) hw.ram[addr & 0x7FF] = value;
+    if (addr < 0x2000) hw_code_store(&hw.ram[addr & 0x7FF], addr & 0x7FF, value);
     else if (addr < 0x4000) ppu_write(addr, value);
     else if (addr <= 0x4017) apu_write(addr, value);
     else if (addr >= 0x4020) hw_cart_cpu_write(addr, value);
@@ -274,6 +286,9 @@ bool cyc_load_ines(const uint8_t *image, size_t size)
     NesCartInfo info;
     if (!nes_cart_image(image, size, &info) || !hw_cart_supports(info.mapper) ||
         !nes_cart_variant_supported(&info)) return false;
+    /* An iNES header cannot describe a disk; the RAM Adapter comes from
+     * cyc_load_fds(). */
+    if (info.mapper == NES_FDS_MAPPER) return false;
     uint32_t prg_alloc, chr_alloc;
     uint32_t chr_len = info.chr_size ? info.chr_size : info.chr_ram + info.chr_nvram;
     /* A board with both CHR ROM and CHR RAM (TQROM) keeps the RAM chip after
@@ -312,6 +327,52 @@ bool cyc_load_ines(const uint8_t *image, size_t size)
     return true;
 }
 
+/* The RAM Adapter: the BIOS is the board's whole PRG ROM, fixed at
+ * $E000-$FFFF; the disk sides are the drive's media (hw_fds.c). */
+bool cyc_load_fds(const uint8_t *bios, size_t bios_size, const uint8_t *image, size_t image_size,
+                  const CycFdsOptions *options)
+{
+    CycFdsOptions defaults;
+    if (!options) { cyc_fds_default_options(&defaults); options = &defaults; }
+    if (!bios || bios_size != NES_FDS_BIOS_BYTES) return false;
+    uint32_t prg_alloc, chr_alloc;
+    uint8_t *prg = alloc_padded(bios, bios_size, &prg_alloc);
+    uint8_t *chr = alloc_padded(NULL, NES_FDS_CHR_RAM_BYTES, &chr_alloc);
+    if (!prg || !chr || !cyc_fds_load_media(image, image_size, options)) { free(prg); free(chr); return false; }
+    free(hw_cart.prg);
+    free(hw_cart.chr);
+    memset(&hw_cart, 0, sizeof(hw_cart));
+    nes_fds_cart_info(&hw_cart.info);
+    hw_cart.prg = prg;
+    hw_cart.prg_len = NES_FDS_BIOS_BYTES;
+    hw_cart.prg_slots = prg_alloc / 4096;
+    hw_cart.chr = chr;
+    hw_cart.chr_len = NES_FDS_CHR_RAM_BYTES;
+    hw_cart.chr_pages = chr_alloc / 1024;
+    hw_cart.chr_ram = 1;
+    hw_cart.chr_ram_len = NES_FDS_CHR_RAM_BYTES;
+    hw_cart.mapper = NES_FDS_MAPPER;
+    hw_cart.wram_len = NES_FDS_PRG_RAM_BYTES;
+    hw_cart.mirroring = HW_MIRROR_VERTICAL;
+    hw_cart_power_on();
+    return true;
+}
+
+const uint8_t *cyc_cart_ram(size_t *len)
+{
+    *len = hw_cart.has_wram ? hw_cart.wram_len : 0;
+    return hw_cart.has_wram ? hw_cart.wram : NULL;
+}
+
+const uint8_t *cyc_ppu_ciram(size_t *len) { *len = hw_cart.info.four_screen ? 4096 : 2048; return ppu.ciram; }
+const uint8_t *cyc_ppu_palette(void) { return ppu.palette; }
+const uint8_t *cyc_ppu_oam(void) { return ppu.oam; }
+const uint8_t *cyc_chr_ram(size_t *len)
+{
+    *len = hw_cart.chr_ram_len;
+    return hw_cart.chr_ram_len ? hw_cart.chr + hw_cart.chr_ram_base : NULL;
+}
+
 void cyc_power_on(uint8_t ppu_alignment)
 {
     static bool palette_ready;
@@ -321,6 +382,7 @@ void cyc_power_on(uint8_t ppu_alignment)
     }
     memset(&hw, 0, sizeof(hw));
     hw.align = ppu_alignment & 3;
+    cyc_ring_reset();
     /* CPU RAM at power-on: runs of $F0 and $0F (the pattern AccuracyCoin's
      * power-on page shows on the reference console; not defined by the
      * hardware). --ram-init selects zeros or ones instead, to compare a
@@ -375,6 +437,23 @@ const char *cyc_hw_name(void) { return "nesrecomp"; }
 
 const uint8_t *cyc_cpu_ram(void) { return hw.ram; }
 
+bool cyc_debug_peek(uint16_t addr, uint8_t *value)
+{
+    if (addr < 0x2000) { *value = hw.ram[addr & 0x7FF]; return true; }
+    if (addr >= 0x8000) {
+        uint32_t offset = hw_cart.prg_off[(addr >> 12) & 7] | (addr & 4095);
+        if (offset & MMC5_PRG_OPEN) return false;
+        *value = (offset & MMC5_PRG_RAM) ? hw_cart.wram[offset & 0x1ffff] : hw_cart.prg[offset];
+        return true;
+    }
+    if (addr >= 0x6000 && hw_cart.has_wram && hw_cart.wram_len) {
+        *value = hw_cart.mapper == NES_FDS_MAPPER ? hw_cart.wram[addr - 0x6000]
+                                                   : hw_cart.wram[(hw_cart.wram_bank + (addr & 0x1FFF)) % hw_cart.wram_len];
+        return true;
+    }
+    return false;
+}
+
 void cyc_set_controller(int port, uint8_t buttons) { hw_set_controller(port, buttons); }
 
 uint64_t cyc_cycle_count(void) { return hw.cycles; }
@@ -395,6 +474,15 @@ bool cyc_audio_enable(int sample_rate)
 
 size_t cyc_audio_read(int16_t *out, size_t max) { return apu_audio_read(out, max); }
 
+void cyc_set_console(CycConsole console) { apu_set_console((int)console); }
+
+CycConsole cyc_console(void) { return (CycConsole)apu_console(); }
+
+const char *cyc_console_name(CycConsole console)
+{
+    return console == CYC_CONSOLE_NES ? "nes" : console == CYC_CONSOLE_FAMICOM ? "famicom" : "default";
+}
+
 /* ------------------------------------------------------------------------- */
 /* Comparison                                                                */
 /* ------------------------------------------------------------------------- */
@@ -408,6 +496,7 @@ uint64_t cyc_mem_state_hash(void)
         for (unsigned i=0;i<hw_cart.eeprom[chip].size;++i) h=cyc_trace_mix(h,hw_cart.eeprom[chip].data[i]);
     if (hw_cart.mapper==5) for (unsigned i=0;i<1024;++i) h=cyc_trace_mix(h,hw_cart.exram[i]);
     if (hw_cart.mapper==19) for (unsigned i=0;i<128;++i) h=cyc_trace_mix(h,hw_cart.exram[i]);
+    if (hw_cart.mapper==NES_FDS_MAPPER) h=fds_media_hash(h);
     return h;
 }
 

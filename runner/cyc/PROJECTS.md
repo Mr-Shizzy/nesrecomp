@@ -45,10 +45,36 @@ endif()
 ```
 
 Set `NESRECOMP_ROOT` before this block. The function also accepts `HEADLESS`,
-`RECOMPILER /path/to/NESRecomp` and `SEED_FILE /path/to/seeds.txt`. Relative
+`RECOMPILER /path/to/NESRecomp`, `SEED_FILE /path/to/seeds.txt` and
+`CAPTURE_FILE /path/to/captures.txt`. Relative
 paths are relative to the calling CMake source directory; a seed path inside
 `game.toml` is relative to that configuration file. `GAME_CONFIG` is optional.
 Existing legacy-generated C and `extras.c` are not cycle-backend inputs.
+
+## Famicom Disk System titles
+
+Point `ROM` (or `NESRECOMP_ROM`) at the `.fds`/`.qd` image. The BIOS comes from
+`BIOS` (`NESRECOMP_FDS_BIOS`), else `game.toml` `[fds] bios`, else
+`bios/disksys.rom` beside the image; configure fails unless it matches the
+identity in its `.toml` (`bios/disksys.toml`: size, CRC32, SHA-1). The BIOS
+and its identity file are configure dependencies. The built program runs the
+image and BIOS named at configure time when started without arguments; any
+image and `--fds-bios` can be given on its command line. See the FDS section
+of [README.md](README.md) for the host's disk options.
+
+```cmake
+nesrecomp_add_cycle_game(MyFdsGame
+    ROM "${CMAKE_SOURCE_DIR}/Game.fds"
+    GAME_CONFIG "${CMAKE_SOURCE_DIR}/game.toml")   # [game] fds = true, [fds] bios = "bios/disksys.rom"
+```
+
+## Audio output stage
+
+`game.toml` `[game] console = "nes"` or `"famicom"` compiles in the console
+whose analog output stage the audio goes through (see the APU section of
+[README.md](README.md)); `"default"` or no key picks by board (famicom for the
+FDS, Namco 163, VRC6 and VRC7, nes otherwise). The program's `--console`
+option overrides it. Any other value fails code generation.
 
 ## Native coverage and rebuilding
 
@@ -57,11 +83,17 @@ Unseen code runs through the cycle interpreter. Profile a route with
 `NESRECOMP_CYCLE_SEEDS` (or `SEED_FILE`) to the resulting file. This overrides
 `[game].cycle_seed_file`. It is a build input, not a save or RAM image.
 
-CMake reconfigures when the ROM, configuration, seed file, host compiler or
+Code in RAM that no compiled view covered (copied or generated code, disk code
+reached only through indirect jumps, code the program rewrites) is captured the
+same way: `nes_game ROM --frames 3000 --input route.txt --capture-log
+captures.txt`, then `NESRECOMP_CYCLE_CAPTURES` (or `CAPTURE_FILE`), which
+overrides `[game].cycle_capture_file`. See [Code in RAM](README.md#code-in-ram).
+
+CMake reconfigures when the ROM, configuration, seed or capture file, host compiler or
 code-generator sources change. Each input revision gets its own generated
 directory, preventing obsolete bank translation units from entering the
 target. Prior revisions remain in the build directory and can be discarded
-with that build directory. A missing configured seed file is an error.
+with that build directory. A missing configured seed or capture file is an error.
 Generation logs and the selected source list are under `cycle-<target>`.
 
 `tools/cyc/test_cyc_project.py` checks the integration with an original ROM,

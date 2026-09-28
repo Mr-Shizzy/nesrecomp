@@ -59,6 +59,7 @@
 #endif
 
 #include "cpu6502_decoder.h"
+#include "../../common/nes_fds.h"
 
 /* A compiled block is valid for one PRG bank at one CPU address, because the
  * bytes at an address in $8000-$FFFF depend on which bank the mapper has
@@ -478,9 +479,103 @@ typedef struct {
      * discovery has already visited. */
     uint8_t *is_insn;
     uint8_t *seen;
+    /* Subroutines that take inline argument bytes after the JSR and return
+     * past them: bytes per target address, 0 for an ordinary subroutine. */
+    uint8_t  inline_jsr[0x10000];
 } Program;
 
+/* The FDS BIOS (disksys.rom, CRC32 5E607DCF) passes arguments inline after
+ * the JSR: $E844 reads the two bytes after the JSR into its caller and
+ * advances that return address by 2, and $E3E7/$E3EA do the same for 2 bytes,
+ * or 4 when called with A = $FF. The routines that call them from their own
+ * frame with a fixed A are listed; CheckFileCount/AdjustFileCount ($E2B7,
+ * $E2BB) and SetFileCount ($E301, $E305) take their count from the caller's A
+ * and are left out. Found in the BIOS disassembly; the miss log confirms it
+ * (the continuations after `JSR $E7BB` at $EF4C, $EF51, $F0D7, $F0ED and
+ * $F42B were the only BIOS instructions interpreted in the SMB2J boot, the
+ * no-disk screen and the Otocky side swap before). */
+static const struct { uint16_t target; uint8_t bytes; } FDS_BIOS_INLINE_JSR[] = {
+    { 0xE7BB, 2 }, { 0xE8D2, 2 }, { 0xE8E1, 2 }, { 0xEBAF, 2 },   /* via $E844 */
+    { 0xE1F8, 4 },                                              /* LoadFiles: $E3E7, A = $FF */
+    { 0xE237, 4 }, { 0xE239, 4 },                               /* AppendFile / WriteFile: $E3EA, A = $FF */
+    { 0xE32A, 2 },                                              /* GetDiskInfo: $E3E7, A = 0 */
+};
+
 static size_t pos_space(const Program *p) { return (size_t)p->banks * SLOT_COUNT * SLOT_SIZE; }
+
+/* ---- code in RAM ----
+ *
+ * Code a program runs from RAM is compiled from images of RAM the compiler
+ * knows: each PRG file of an FDS disk at its load address (every side, hidden
+ * files and files that overlap each other included), and snapshots a run
+ * captured (the host's --capture-log, [game] cycle_capture_file). An image is
+ * discovered like ROM, but a compiled view of it folds nothing except its own
+ * instructions' bytes, and it is split into views - the instructions static
+ * control flow connects within one 1KB chunk, not following calls - so that
+ * a store to one routine, or to a variable beside it, leaves the others
+ * valid. The runtime (runner/cyc/cyc_ramview.c) enters a view only while RAM
+ * holds exactly those bytes. */
+typedef struct {
+    uint16_t base;             /* CPU address of bytes[0] */
+    uint32_t len;
+    uint8_t *bytes;
+    char     name[96];
+    bool     evidence_only;    /* a capture snapshot: compile only what ran */
+    bool     disk;             /* a disk file (not a snapshot) */
+    uint32_t hash;             /* identity: FNV-1a of base and bytes (CycRamView.image) */
+    uint8_t *seed, *seen, *is_insn, *live, *isolate;
+    int32_t *root;             /* union-find over instruction positions */
+    uint32_t gseed_cursor;     /* global seeds already applied */
+} RamImage;
+
+typedef struct {
+    const RamImage *img;
+    uint32_t  n;               /* instructions */
+    uint16_t *pcs;             /* ascending */
+    uint16_t *runs;            /* dependency (address, length) pairs */
+    uint32_t  run_count;
+    uint8_t  *bytes;           /* dependency bytes */
+    uint32_t  byte_count;
+    uint32_t  hash;
+    int       index;           /* in the emitted table */
+} RamView;
+
+typedef struct { uint8_t len, b[3]; } RamVariant;
+
+/* A captured snapshot of a 1KB chunk and the instructions that ran in it. */
+typedef struct {
+    uint16_t base;
+    uint8_t  data[1026];
+    uint16_t *pcs;
+    uint32_t n;
+} RamCapGroup;
+
+typedef struct {
+    bool       fds;            /* PRG RAM $6000-$DFFF exists */
+    RamImage  *img;
+    int        nimg, capimg;
+    RamView   *view;
+    int        nview, capview;
+    /* Capture evidence, by CPU address: instruction variants that ran, and
+     * bytes a store changed under a validated view. */
+    RamVariant *var[0x10000];
+    uint8_t     nvar[0x10000];
+    uint8_t    *var_on_disk[0x10000];   /* per variant: some disk file holds it exactly */
+    /* Stores the capture saw change a byte under a validated view, by
+     * address: the values stored. */
+    uint8_t    *vol[0x10000];
+    uint16_t    nvol[0x10000];
+    RamCapGroup *groups;       /* every captured snapshot */
+    int          ngroups;
+    /* Global seeds: vectors, targets that leave their image, seed-file lines;
+     * each applies to every image covering it. */
+    uint16_t   *gseed;
+    uint32_t    ngseed, capgseed;
+    uint8_t     is_gseed[0x10000];
+    /* Every byte an emitted view folds, by CPU address (CPU RAM mirrored). */
+    uint8_t     code[0x10000];
+    uint32_t    code_prefix[0x10001];
+} RamProgram;
 
 /* The PRG byte at an offset, with the padding past the end of a ROM whose
  * length is not a power of two reading as zero, exactly as hw_machine.c
@@ -501,6 +596,9 @@ static uint16_t pos_addr(const Pos *at) {
  * MMC1 has no permanently fixed slots: mode 2 switches $C000-$FFFF, and
  * modes 0/1 switch all of PRG. Its reset mapping is only a discovery seed. */
 static int fixed_bank_for(int mapper, uint32_t banks, uint32_t slot) {
+    /* The FDS RAM Adapter: $8000-$DFFF is PRG RAM (no bank, never compiled),
+     * $E000-$FFFF the 8 KiB BIOS, fixed like an NROM bank. */
+    if (mapper == 20) return slot >= 6 ? (int)((slot - 6) & (banks - 1)) : -1;
     /* Decode the board once into a slot mask, then calculate its bank. The
      * execution regressions cover this with an optimized compiler too: GCC
      * 13.3 -O3 miscompiled the previous per-case bank returns when inlined
@@ -553,6 +651,7 @@ static int power_on_bank8_for(int mapper, uint32_t banks, uint32_t slot) {
 }
 
 static int power_on_bank_for(int mapper, uint32_t banks, uint32_t slot) {
+    if (mapper == 20) return fixed_bank_for(mapper, banks, slot);
     if (mapper == 31) return slot == 7 ? (int)(255 & (banks-1)) : 0;
     if (banks == 1) return 0;
     return power_on_bank8_for(mapper, banks / 2, slot / 2) * 2 + (slot & 1);
@@ -619,10 +718,12 @@ static void discover(Program *p, const uint32_t *seeds, int seed_count) {
         case K_JMP:
             succ[n++] = (uint16_t)(prg_byte(p, at.bank, at.k + 1) | prg_byte(p, at.bank, at.k + 2) << 8);
             break;
-        case K_JSR:
-            succ[n++] = (uint16_t)(prg_byte(p, at.bank, at.k + 1) | prg_byte(p, at.bank, at.k + 2) << 8);
-            succ[n++] = next;  /* return address */
+        case K_JSR: {
+            uint16_t target = (uint16_t)(prg_byte(p, at.bank, at.k + 1) | prg_byte(p, at.bank, at.k + 2) << 8);
+            succ[n++] = target;
+            succ[n++] = (uint16_t)(next + p->inline_jsr[target]);  /* return address, past inline arguments */
             break;
+        }
         case K_JMPIND: case K_RTS: case K_RTI: case K_HLT:
             break;
         case K_BRK:
@@ -657,9 +758,36 @@ typedef struct {
     uint32_t       chunk;       /* 1KB chunk within the slot being emitted */
     uint16_t       P;           /* the instruction's CPU address (compiled) */
     uint8_t        opcode;
+    /* A RAM view (NULL for ROM): its image, its instructions (the labels),
+     * the program's folded-byte map (store checks), and whether this
+     * instruction reads its operand bytes at run time (they change there). */
+    const RamImage   *img;
+    const RamView    *view;
+    const RamProgram *ram;
+    bool              live;
 } Emit;
 
 #define INTERP(e) ((e)->p == NULL)
+/* Operands read at run time: the interpreter, or a compiled RAM instruction
+ * whose operand bytes the program rewrites. Such an instruction is the
+ * interpreter's template with its address and opcode constant, and returns to
+ * the scheduler when it is done. */
+#define LIVE(e) ((e)->p == NULL || (e)->live)
+
+/* Byte k of the instruction being emitted, from ROM or from the RAM image. */
+static uint8_t insn_byte(const Emit *e, int k) {
+    if (e->img) return e->img->bytes[(uint32_t)(e->P - e->img->base) + (uint32_t)k];
+    return prg_byte(e->p, e->at.bank, e->at.k + (uint32_t)k);
+}
+
+static bool view_has(const RamView *v, uint16_t addr) {
+    uint32_t lo = 0, hi = v->n;
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) / 2;
+        if (v->pcs[mid] < addr) lo = mid + 1; else hi = mid;
+    }
+    return lo < v->n && v->pcs[lo] == addr;
+}
 
 static void out(Emit *e, const char *fmt, ...) {
     va_list ap;
@@ -710,6 +838,14 @@ static const char *flags(int f) {
  * slot is fixed. Returns false when the byte is whatever a run-time bank holds
  * - a dummy read of the next slot, say - and the access cannot be folded. */
 static bool known_byte(const Emit *e, uint16_t addr, uint8_t *out) {
+    if (e->view) {
+        /* Only this instruction's own bytes, which the view's dependency
+         * holds: every other RAM or ROM byte is read at run time. */
+        uint16_t k = (uint16_t)(addr - e->P);
+        if (e->live || k >= (uint16_t)op_length(e->opcode)) return false;
+        *out = insn_byte(e, k);
+        return true;
+    }
     Pos to;
     if (!target_pos(e->p, &e->at, addr, &to)) return false;
     *out = prg_byte(e->p, to.bank, to.k);
@@ -718,7 +854,7 @@ static bool known_byte(const Emit *e, uint16_t addr, uint8_t *out) {
 
 static const char *read_const(Emit *e, uint16_t addr, int f) {
     uint8_t v;
-    if (!INTERP(e) && known_byte(e, addr, &v))
+    if (!LIVE(e) && known_byte(e, addr, &v))
         return str("cpu_read_rom(0x%04X, 0x%02X, %s)", addr, v, flags(f));
     return str("cpu_read(0x%04X, %s)", addr, flags(f));
 }
@@ -726,7 +862,7 @@ static const char *read_const(Emit *e, uint16_t addr, int f) {
 /* Read instruction byte k (1 or 2, or the byte after a one-byte
  * instruction): a statement that leaves the value in operand(e, k). */
 static void read_operand(Emit *e, int k, int f) {
-    if (INTERP(e))
+    if (LIVE(e))
         ln(e, "b%d = cpu_read((uint16_t)(pc + %d), %s);", k, k, flags(f));
     else
         ln(e, "%s;", read_const(e, (uint16_t)(e->P + k), f));
@@ -734,24 +870,24 @@ static void read_operand(Emit *e, int k, int f) {
 
 /* The 16-bit operand of a 3-byte instruction, as a value. */
 static uint16_t insn_operand16(const Emit *e) {
-    return (uint16_t)(prg_byte(e->p, e->at.bank, e->at.k + 1) | prg_byte(e->p, e->at.bank, e->at.k + 2) << 8);
+    return (uint16_t)(insn_byte(e, 1) | insn_byte(e, 2) << 8);
 }
 
 /* An instruction's own operand bytes. fits_in_slot() kept the whole
  * instruction inside one slot, so these are always the block's own bank. */
 static const char *operand(Emit *e, int k) {
-    if (INTERP(e)) return k == 1 ? "b1" : "b2";
-    return str("0x%02X", prg_byte(e->p, e->at.bank, e->at.k + (uint32_t)k));
+    if (LIVE(e)) return k == 1 ? "b1" : "b2";
+    return str("0x%02X", insn_byte(e, k));
 }
 
 static const char *operand16(Emit *e) {
-    if (INTERP(e)) return "(uint16_t)(b1 | b2 << 8)";
+    if (LIVE(e)) return "(uint16_t)(b1 | b2 << 8)";
     return str("0x%04X", insn_operand16(e));
 }
 
 /* The address of the instruction's k-th byte. */
 static const char *pc_plus(Emit *e, int k) {
-    if (INTERP(e)) return str("(uint16_t)(pc + %d)", k);
+    if (LIVE(e)) return str("(uint16_t)(pc + %d)", k);
     return str("0x%04X", (uint16_t)(e->P + k));
 }
 
@@ -761,6 +897,7 @@ static const char *pc_plus(Emit *e, int k) {
  * function); anything else goes back to the scheduler, which looks up the
  * bank the mapper has there now. */
 static bool is_label(Emit *e, uint16_t addr) {
+    if (e->view) return view_has(e->view, addr);
     Pos to;
     if (!target_pos(e->p, &e->at, addr, &to)) return false;
     if (to.bank != e->at.bank || to.slot != e->at.slot) return false;
@@ -777,7 +914,7 @@ static const char *jump_const(Emit *e, uint16_t target) {
 /* Continue at the next instruction. */
 static void go_next(Emit *e) {
     int len = op_length(e->opcode);
-    if (INTERP(e))
+    if (LIVE(e))
         ln(e, "cpu.pc = (uint16_t)(pc + %d);", len);
     else
         ln(e, "%s", jump_const(e, (uint16_t)(e->P + len)));
@@ -822,7 +959,8 @@ static unsigned mapper_write_floor(int mapper) {
 }
 
 static WriteReach write_reach(Emit *e, AddrMode am) {
-    if (INTERP(e) || !e->p->banked) return WR_NEVER;
+    /* A RAM view folds no ROM byte, so a bank switch cannot stale it. */
+    if (LIVE(e) || e->view || !e->p->banked) return WR_NEVER;
     unsigned floor = mapper_write_floor(e->p->mapper);
     switch (am) {
     case AM_ZP: case AM_ZPX: case AM_ZPY:
@@ -853,6 +991,48 @@ static bool bank_exit(Emit *e, WriteReach reach) {
     ln(e, "if (ea >= 0x%04X) { cpu.pc = 0x%04X; return; }   /* wrote the mapper */",
        mapper_write_floor(e->p->mapper), next);
     return false;
+}
+
+/* ---- stores that can change code a RAM view folded ----
+ *
+ * A compiled RAM view is correct only while RAM holds the bytes it folded.
+ * A store that changes one of them - self-modifying code, a routine copied
+ * over another, a disk file loaded over code - makes the runtime's write
+ * watch set cyc_ram_code_dirty (runner/cyc/cyc_ramview.c), and the block
+ * must not run a single folded instruction more: after every store that can
+ * reach a byte some view of the program folds, it tests the flag and returns
+ * to the scheduler, which validates the next view afresh. A store that can
+ * only reach bytes no view folds (the stack page, most variables) continues
+ * in place: nothing it changes is folded anywhere. */
+static bool code_in(const RamProgram *r, uint32_t lo, uint32_t hi) {
+    return r->code_prefix[hi + 1] != r->code_prefix[lo];
+}
+
+static bool store_reaches_code(const Emit *e, AddrMode am) {
+    const RamProgram *r = e->ram;
+    switch (am) {
+    case AM_ZP:
+        return code_in(r, insn_byte(e, 1), insn_byte(e, 1));
+    case AM_ZPX: case AM_ZPY:
+        return code_in(r, 0x00, 0xFF);
+    case AM_ABS: {
+        uint16_t a = insn_operand16(e);
+        return code_in(r, a, a);
+    }
+    case AM_ABSX: case AM_ABSY: {
+        uint32_t base = insn_operand16(e), top = base + 0xFF;
+        if (top <= 0xFFFF) return code_in(r, base, top);
+        return code_in(r, base, 0xFFFF) || code_in(r, 0, top - 0x10000);
+    }
+    default:
+        return code_in(r, 0, 0xFFFF);   /* a run-time pointer */
+    }
+}
+
+static void ram_store_check(Emit *e, AddrMode am) {
+    if (!e->view || e->live || !store_reaches_code(e, am)) return;
+    ln(e, "if (cyc_ram_code_dirty) { cpu.pc = 0x%04X; return; }   /* stored to compiled code */",
+       (uint16_t)(e->P + op_length(e->opcode)));
 }
 
 /* Addressing cycles of read, write, read-modify-write and SH instructions.
@@ -916,7 +1096,7 @@ static void emit_implied(Emit *e, const OpDef *d) {
 }
 
 static void emit_imm(Emit *e, const OpDef *d) {
-    if (INTERP(e))
+    if (LIVE(e))
         ln(e, "uint8_t v = cpu_read((uint16_t)(pc + 1), CYC_POLL | CYC_DONE);");
     else
         ln(e, "uint8_t v = %s;", read_const(e, (uint16_t)(e->P + 1), POLL | DONE));
@@ -935,7 +1115,7 @@ static void emit_write(Emit *e, const OpDef *d) {
     WriteReach reach = write_reach(e, d->am);
     addressing(e, d->am, true, false);
     ln(e, "cpu_write(ea, %s, CYC_POLL | CYC_DONE);", d->body);
-    if (!bank_exit(e, reach)) go_next(e);
+    if (!bank_exit(e, reach)) { ram_store_check(e, d->am); go_next(e); }
 }
 
 static void emit_rmw(Emit *e, const OpDef *d) {
@@ -946,7 +1126,7 @@ static void emit_rmw(Emit *e, const OpDef *d) {
     ln(e, "%s", d->body);
     ln(e, "cpu_write(ea, r, CYC_POLL | CYC_DONE);");
     if (d->post) ln(e, "%s", d->post);
-    if (!bank_exit(e, reach)) go_next(e);
+    if (!bank_exit(e, reach)) { ram_store_check(e, d->am); go_next(e); }
 }
 
 /* SHA/SHS/SHX/SHY. The value is ANDed with the address high byte + 1, and
@@ -965,7 +1145,8 @@ static void emit_sh(Emit *e, const OpDef *d) {
                       : !strcmp(d->name, "SHX") ? "(uint8_t)(cpu.x & h)"
                       : "(uint8_t)(cpu.a & (cpu.x | 0xF5) & h)";
     ln(e, "cpu_write(ea, %s, CYC_POLL | CYC_DONE);", value);
-    if (!bank_exit(e, reach)) go_next(e);
+    /* The written high byte can be ANDed with the index: any address. */
+    if (!bank_exit(e, reach)) { ram_store_check(e, AM_INDY); go_next(e); }
 }
 
 /* The negation of a branch condition ("cpu.z" or "!cpu.z"). */
@@ -977,7 +1158,7 @@ static const char *not_taken(const OpDef *d) {
  * polling but keeping an IRQ the first poll latched, only when the target is
  * on another page. */
 static void emit_branch(Emit *e, const OpDef *d) {
-    if (INTERP(e)) {
+    if (LIVE(e)) {
         ln(e, "if (%s) { cpu_read((uint16_t)(pc + 1), CYC_POLL | CYC_DONE); cpu.pc = (uint16_t)(pc + 2); return; }",
            not_taken(d));
         ln(e, "b1 = cpu_read((uint16_t)(pc + 1), CYC_POLL);");
@@ -992,7 +1173,7 @@ static void emit_branch(Emit *e, const OpDef *d) {
         return;
     }
     uint16_t next = (uint16_t)(e->P + 2);
-    uint16_t target = (uint16_t)(next + (int8_t)prg_byte(e->p, e->at.bank, e->at.k + 1));
+    uint16_t target = (uint16_t)(next + (int8_t)insn_byte(e, 1));
     uint16_t same_page = (uint16_t)((next & 0xFF00) | (target & 0xFF));
     ln(e, "if (%s) { %s; %s }", not_taken(d), read_const(e, (uint16_t)(e->P + 1), POLL | DONE), jump_const(e, next));
     read_operand(e, 1, POLL);
@@ -1008,7 +1189,7 @@ static void emit_branch(Emit *e, const OpDef *d) {
 static void emit_jmp(Emit *e) {
     read_operand(e, 1, 0);
     read_operand(e, 2, POLL | DONE);
-    if (INTERP(e))
+    if (LIVE(e))
         ln(e, "cpu.pc = %s;", operand16(e));
     else
         ln(e, "%s", jump_const(e, insn_operand16(e)));
@@ -1018,7 +1199,7 @@ static void emit_jmp(Emit *e) {
 static void emit_jmp_ind(Emit *e) {
     read_operand(e, 1, 0);
     read_operand(e, 2, 0);
-    if (INTERP(e)) {
+    if (LIVE(e)) {
         ln(e, "uint16_t ptr = %s;", operand16(e));
         ln(e, "uint8_t lo = cpu_read(ptr, 0);");
         ln(e, "uint8_t hi = cpu_read((uint16_t)((ptr & 0xFF00) | ((ptr + 1) & 0xFF)), CYC_POLL | CYC_DONE);");
@@ -1035,7 +1216,7 @@ static void emit_jmp_ind(Emit *e) {
 static void emit_jsr(Emit *e) {
     read_operand(e, 1, 0);
     ln(e, "cpu_read((uint16_t)(0x100 | cpu.s), 0);");
-    if (INTERP(e)) {
+    if (LIVE(e)) {
         ln(e, "cpu_write((uint16_t)(0x100 | cpu.s), (uint8_t)((pc + 2) >> 8), 0);");
         ln(e, "cpu_write((uint16_t)(0x100 | (uint8_t)(cpu.s - 1)), (uint8_t)(pc + 2), 0);");
     } else {
@@ -1045,7 +1226,7 @@ static void emit_jsr(Emit *e) {
     }
     read_operand(e, 2, POLL | DONE);
     ln(e, "cpu.s = (uint8_t)(cpu.s - 2);");
-    if (INTERP(e))
+    if (LIVE(e))
         ln(e, "cpu.pc = %s;", operand16(e));
     else
         ln(e, "%s", jump_const(e, insn_operand16(e)));
@@ -1152,7 +1333,9 @@ static void emit_instruction(Emit *e) {
     out(e, "    if (cpu_fetch_rom(0x%04X, 0x%02X)) { cpu.pc = 0x%04X; cpu_interrupt(false); return; }\n", e->P,
         e->opcode, e->P);
     out(e, "    {\n");
+    if (e->live) ln(e, "const uint16_t pc = 0x%04X; uint8_t b1 = 0, b2 = 0; (void)pc; (void)b1; (void)b2;   /* operands vary */", e->P);
     emit_body(e);
+    if (e->live) ln(e, "return;");
     out(e, "    }\n");
 }
 
@@ -1250,7 +1433,22 @@ static void emit_bank_file(const Program *p, const char *path, uint32_t bank) {
 
 /* The umbrella: the table that maps (bank, slot) to a compiled view, and the
  * two entry points the scheduler uses. */
-static void emit_umbrella(const Program *p, const char *path, const char *prefix) {
+/* A C string literal. */
+static void emit_c_string(FILE *f, const char *s) {
+    if (!s || !*s) { fputs("NULL", f); return; }
+    fputc('"', f);
+    for (; *s; ++s) {
+        if (*s == '\\' || *s == '"') fputc('\\', f);
+        if ((unsigned char)*s < 32) fprintf(f, "\\%03o", (unsigned char)*s);
+        else fputc(*s, f);
+    }
+    fputc('"', f);
+}
+
+static void ram_emit_table(FILE *f, const RamProgram *r);
+
+static void emit_umbrella(const Program *p, const char *path, const char *prefix, const CycFdsProgram *fds,
+                          const RamProgram *ram, uint8_t console) {
     FILE *f = open_out(path);
     fprintf(f,
         "/* %s - generated by NESRecomp --cycle-accurate. DO NOT EDIT.\n"
@@ -1281,6 +1479,16 @@ static void emit_umbrella(const Program *p, const char *path, const char *prefix
 
     uint32_t prg_hash = 2166136261u;
     fprintf(f, "const uint32_t cyc_native_cart_hash = 0x%08Xu;\n", nes_cart_identity(&p->rom->cart));
+    fprintf(f, "const uint32_t cyc_native_fds_bios_crc32 = 0x%08Xu;\n", fds ? fds->bios_crc32 : 0u);
+    fputs("const char *cyc_native_fds_bios_path = ", f);
+    emit_c_string(f, fds ? fds->bios_path : NULL);
+    fputs(";\nconst char *cyc_native_fds_image_path = ", f);
+    emit_c_string(f, fds ? fds->image_path : NULL);
+    fputs(";\nconst char *cyc_native_fds_hle = ", f);
+    emit_c_string(f, fds ? fds->hle : NULL);
+    fputs(";\n", f);
+    fprintf(f, "const uint8_t cyc_native_console = %u;  /* game.toml [game] console: %s */\n", console,
+            console == 1 ? "nes" : console == 2 ? "famicom" : "the board's default");
     for (uint32_t i = 0; i < p->prg_len; i++) prg_hash = (prg_hash ^ p->rom->prg_data[i]) * 16777619u;
     fprintf(f,
         "const char *cyc_native_program_name = \"%s\";\n"
@@ -1319,6 +1527,8 @@ static void emit_umbrella(const Program *p, const char *path, const char *prefix
         "    }\n"
         "}\n",
         prefix, prg_hash, SLOT_SHIFT, SLOT_COUNT - 1, SLOT_SIZE - 1, CHUNK_SHIFT);
+    fputc('\n', f);
+    ram_emit_table(f, ram);
     fclose(f);
 }
 
@@ -1361,7 +1571,11 @@ bool cyc_codegen_emit_interpreter(const char *path) {
         emit_body(&e);
         fprintf(f, "        return;\n    }\n");
     }
-    fprintf(f, "    }\n    (void)b1; (void)b2;\n}\n");
+    fprintf(f, "    }\n    (void)b1; (void)b2;\n}\n\n"
+               "/* Bytes each opcode takes from the instruction stream (BRK: 2). */\n"
+               "const uint8_t cpu6502_op_length[256] = {");
+    for (int op = 0; op < 256; op++) fprintf(f, "%s%d,", op % 16 ? " " : "\n    ", op_length((uint8_t)op));
+    fprintf(f, "\n};\n");
     fclose(f);
     printf("[NESRecomp] cycle-accurate interpreter -> %s\n", path);
     return true;
@@ -1370,6 +1584,7 @@ bool cyc_codegen_emit_interpreter(const char *path) {
 /* The board names hw_mapper.c implements, for the message and the banner. */
 static const char *mapper_name(int mapper) {
     switch (mapper) {
+    case 20: return "FDS RAM Adapter";
     case 159: return "Bandai LZ93D50 / X24C01";
     case 5: return "MMC5";
     case 157: return "Bandai Datach";
@@ -1453,6 +1668,652 @@ static const char *mapper_name(int mapper) {
     }
 }
 
+/* ------------------------------------------------------------------------ */
+/* Code in RAM: images, discovery, views                                     */
+/* ------------------------------------------------------------------------ */
+
+/* RAM a view may fold: CPU RAM $0000-$07FF except the stack page (a JSR
+ * pushes between its own operand fetches), and on the FDS the PRG RAM
+ * $6000-$DFFF. Mirrors of CPU RAM are other addresses and are interpreted. */
+static bool ram_addr_ok(const RamProgram *r, uint32_t a) {
+    if (a < 0x800) return a < 0x100 || a >= 0x200;
+    return r->fds && a >= 0x6000 && a < 0xE000;
+}
+
+/* Every byte of the instruction in one RAM window, none in the stack page. */
+static bool ram_insn_ok(const RamProgram *r, uint16_t pc, int len) {
+    uint32_t last = (uint32_t)pc + (uint32_t)len - 1;
+    if (!ram_addr_ok(r, pc) || !ram_addr_ok(r, last)) return false;
+    if (pc < 0x800) return last < 0x800 && !(pc < 0x200 && last >= 0x100);
+    return last < 0xE000;
+}
+
+static RamImage *ram_add_image(RamProgram *r, uint16_t base, const uint8_t *bytes, uint32_t len, bool evidence,
+                               const char *fmt, ...) {
+    if (r->nimg == r->capimg) {
+        r->capimg = r->capimg ? r->capimg * 2 : 16;
+        r->img = (RamImage *)realloc(r->img, sizeof(RamImage) * (size_t)r->capimg);
+    }
+    RamImage *im = &r->img[r->nimg++];
+    memset(im, 0, sizeof(*im));
+    im->base = base;
+    im->len = len;
+    im->evidence_only = evidence;
+    im->bytes = (uint8_t *)malloc(len);
+    memcpy(im->bytes, bytes, len);
+    im->seed = (uint8_t *)calloc(len, 1);
+    im->seen = (uint8_t *)calloc(len, 1);
+    im->is_insn = (uint8_t *)calloc(len, 1);
+    im->live = (uint8_t *)calloc(len, 1);
+    im->isolate = (uint8_t *)calloc(len, 1);
+    im->root = (int32_t *)malloc(sizeof(int32_t) * len);
+    im->disk = !evidence;
+    uint32_t h = 2166136261u;
+    h = (h ^ (base & 0xFF)) * 16777619u;
+    h = (h ^ (base >> 8)) * 16777619u;
+    for (uint32_t k = 0; k < len; ++k) h = (h ^ bytes[k]) * 16777619u;
+    im->hash = h;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(im->name, sizeof(im->name), fmt, ap);
+    va_end(ap);
+    return im;
+}
+
+static void ram_add_gseed(RamProgram *r, uint32_t a) {
+    if (a > 0xFFFF || !ram_addr_ok(r, a) || r->is_gseed[a]) return;
+    r->is_gseed[a] = 1;
+    if (r->ngseed == r->capgseed) {
+        r->capgseed = r->capgseed ? r->capgseed * 2 : 256;
+        r->gseed = (uint16_t *)realloc(r->gseed, sizeof(uint16_t) * r->capgseed);
+    }
+    r->gseed[r->ngseed++] = (uint16_t)a;
+}
+
+static void ram_add_variant(RamProgram *r, uint16_t a, const uint8_t *b, uint8_t len) {
+    for (unsigned k = 0; k < r->nvar[a]; ++k)
+        if (r->var[a][k].len == len && !memcmp(r->var[a][k].b, b, len)) return;
+    if (r->nvar[a] == 255) return;
+    r->var[a] = (RamVariant *)realloc(r->var[a], sizeof(RamVariant) * (r->nvar[a] + 1u));
+    RamVariant *v = &r->var[a][r->nvar[a]++];
+    memset(v, 0, sizeof(*v));
+    v->len = len;
+    memcpy(v->b, b, len);
+}
+
+/* The PRG files of every side of an FDS image, at their load addresses: a
+ * file's part in CPU RAM and its part in PRG RAM are separate images (the
+ * BIOS writes the rest to registers or to the ROM, which keep nothing). */
+static int ram_add_fds_images(RamProgram *r, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "[cyc] cannot read the disk image %s\n", path); return -1; }
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t *data = (uint8_t *)malloc((size_t)size);
+    bool ok = data && fread(data, 1, (size_t)size, f) == (size_t)size;
+    fclose(f);
+    const char *ext = strrchr(path, '.');
+    bool qd = ext && (!strcmp(ext, ".qd") || !strcmp(ext, ".QD"));
+    NesFdsImage img;
+    if (!ok || !nes_fds_image(data, (size_t)size, qd ? NES_FDS_QD : NES_FDS_NONE, &img)) {
+        fprintf(stderr, "[cyc] %s is not an FDS image\n", path);
+        free(data);
+        return -1;
+    }
+    int files = 0;
+    for (unsigned side = 0; side < img.sides; ++side) {
+        NesFdsSide s;
+        NesFdsWalk w;
+        if (!nes_fds_side_begin(&img, side, &s, &w)) continue;
+        NesFdsFile file;
+        while (nes_fds_next_file(&w, &file)) {
+            if (file.type != 0 || !file.data || !file.size) continue;
+            uint32_t lo = file.load_addr, hi = lo + file.size;
+            char name[9];
+            for (int k = 0; k < 8; ++k) {
+                unsigned char c = (unsigned char)file.name[k];
+                name[k] = c >= 0x20 && c < 0x7F && c != '"' && c != '\\' ? (char)c : '.';
+            }
+            name[8] = 0;
+            if (lo < 0x800) {
+                uint32_t end = hi < 0x800 ? hi : 0x800;
+                ram_add_image(r, (uint16_t)lo, file.data, end - lo, false, "side %u file %u (%s%s) $%04X",
+                              side, file.index, name, file.hidden ? ", hidden" : "", (unsigned)lo);
+            }
+            uint32_t plo = lo > 0x6000 ? lo : 0x6000, phi = hi < 0xE000 ? hi : 0xE000;
+            if (r->fds && plo < phi)
+                ram_add_image(r, (uint16_t)plo, file.data + (plo - lo), phi - plo, false, "side %u file %u (%s%s) $%04X",
+                              side, file.index, name, file.hidden ? ", hidden" : "", (unsigned)plo);
+            files++;
+        }
+    }
+    free(data);
+    return files;
+}
+
+/* ---- the capture file (runner/cyc/cyc_ramview.c writes it) ---- */
+
+static char *ram_read_line(FILE *f) {
+    size_t cap = 256, n = 0;
+    char *s = (char *)malloc(cap);
+    int ch = 0;
+    while ((ch = fgetc(f)) != EOF) {
+        if (n + 2 > cap) s = (char *)realloc(s, cap *= 2);
+        if (ch == '\n') break;
+        if (ch != '\r') s[n++] = (char)ch;
+    }
+    if (ch == EOF && !n) { free(s); return NULL; }
+    s[n] = 0;
+    return s;
+}
+
+static int ram_hex(char c) {
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'A' && c <= 'F' ? c - 'A' + 10 : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+}
+
+static bool ram_parse_hex(const char *s, uint8_t *out, size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+        int hi = ram_hex(s[2 * i]), lo = hi < 0 ? -1 : ram_hex(s[2 * i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        out[i] = (uint8_t)(hi << 4 | lo);
+    }
+    return true;
+}
+
+static int ram_load_captures(RamProgram *r, const char *path, RamCapGroup **groups, int *ngroups) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    int cap = 0, insns = 0;
+    char *line;
+    while ((line = ram_read_line(f)) != NULL) {
+        unsigned addr, count, value, image;
+        char hex[16], hash[16];
+        int used = 0;
+        if (sscanf(line, "insn %x %15s %u", &addr, hex, &count) == 3) {
+            uint8_t b[3];
+            size_t len = strlen(hex) / 2;
+            if (addr <= 0xFFFF && len >= 1 && len <= 3 && strlen(hex) == 2 * len && ram_parse_hex(hex, b, len) &&
+                (size_t)op_length(b[0]) == len) {
+                ram_add_variant(r, (uint16_t)addr, b, (uint8_t)len);
+                insns++;
+            }
+        } else if (sscanf(line, "volatile %x %x %x %u", &addr, &value, &image, &count) == 4) {
+            if (addr <= 0xFFFF && value <= 0xFF) {
+                bool seen = false;
+                for (unsigned k = 0; k < r->nvol[addr]; ++k) seen = seen || r->vol[addr][k] == value;
+                if (!seen) {
+                    r->vol[addr] = (uint8_t *)realloc(r->vol[addr], r->nvol[addr] + 1u);
+                    r->vol[addr][r->nvol[addr]++] = (uint8_t)value;
+                }
+            }
+        } else if (sscanf(line, "code %x %15s %u %n", &addr, hash, &count, &used) == 3 && used) {
+            char *data = ram_read_line(f);
+            if (data && !strncmp(data, "data ", 5) && strlen(data + 5) == 2 * 1026 && addr <= 0xFFFF && !(addr & 0x3FF)) {
+                if (*ngroups == cap) {
+                    cap = cap ? cap * 2 : 16;
+                    *groups = (RamCapGroup *)realloc(*groups, sizeof(RamCapGroup) * (size_t)cap);
+                }
+                RamCapGroup *g = &(*groups)[*ngroups];
+                memset(g, 0, sizeof(*g));
+                g->base = (uint16_t)addr;
+                if (ram_parse_hex(data + 5, g->data, 1026)) {
+                    g->pcs = (uint16_t *)malloc(sizeof(uint16_t) * 1024);
+                    for (char *t = line + used; *t;) {
+                        char *end;
+                        unsigned long pc = strtoul(t, &end, 16);
+                        if (end == t) break;
+                        if (pc >= addr && pc < addr + 1024u) g->pcs[g->n++] = (uint16_t)pc;
+                        t = *end == ',' ? end + 1 : end;
+                    }
+                    (*ngroups)++;
+                }
+            }
+            free(data);
+        }
+        free(line);
+    }
+    fclose(f);
+    return insns;
+}
+
+/* ---- what the evidence says about one instruction of one image ----
+ *
+ * The capture recorded the instruction variants that ran with no view, and
+ * the values stores wrote over bytes compiled views fold that no view held
+ * there. A stored value a disk file holds at that address is a file loading
+ * over another (an overlay), which content-keyed views already handle. Any
+ * other is the program rewriting that byte at run time:
+ *
+ *   - an operand byte (or a variant that ran with operands no disk file has
+ *     there): the instruction is compiled to read its operands at run time
+ *     (live), so the view does not depend on them at all;
+ *   - an opcode byte: the instruction is compiled as this image has it, but
+ *     alone (isolated), so the view holding it can go invalid without taking
+ *     the code around it along - which also contains data that discovery
+ *     decoded as code and the program writes as data. */
+static bool ram_held(const RamProgram *r, uint16_t a, uint8_t value) {
+    for (int k = 0; k < r->nimg; ++k) {
+        const RamImage *im = &r->img[k];
+        if (im->disk && a >= im->base && (uint32_t)(a - im->base) < im->len && im->bytes[a - im->base] == value) return true;
+    }
+    return false;
+}
+
+static bool ram_rewritten(const RamProgram *r, uint16_t a) {
+    for (unsigned k = 0; k < r->nvol[a]; ++k)
+        if (!ram_held(r, a, r->vol[a][k])) return true;
+    return false;
+}
+
+static void ram_judge(const RamProgram *r, const RamImage *im, uint16_t pc, int len, bool *live, bool *isolate) {
+    const uint8_t *b = &im->bytes[pc - im->base];
+    bool differs = false, operand = false;
+    for (unsigned k = 0; k < r->nvar[pc]; ++k) {
+        const RamVariant *v = &r->var[pc][k];
+        if (v->b[0] == b[0] && v->len == len && !r->var_on_disk[pc][k] && memcmp(v->b + 1, b + 1, (size_t)len - 1))
+            differs = true;
+    }
+    for (int k = 1; k < len; ++k) operand = operand || ram_rewritten(r, (uint16_t)(pc + k));
+    *live = len > 1 && (differs || operand);
+    *isolate = ram_rewritten(r, pc);
+}
+
+/* Successors of the instruction at pc in image im: n entries of (address,
+ * kind) where kind 0 = local flow (fall-through, branch), 1 = a JMP/JSR
+ * target (also a global seed: whatever image is resident there then). A live
+ * instruction's operand-dependent targets are unknown. */
+static int ram_successors(const Program *p, const RamImage *im, uint16_t pc, bool live, uint32_t out[3], int kind[3]) {
+    const uint8_t *b = &im->bytes[pc - im->base];
+    const OpDef *d = &OPS[b[0]];
+    uint16_t next = (uint16_t)(pc + op_length(b[0]));
+    int n = 0;
+    switch (d->kind) {
+    case K_BRANCH:
+        out[n] = next; kind[n++] = 0;
+        if (!live) { out[n] = (uint16_t)(next + (int8_t)b[1]); kind[n++] = 0; }
+        break;
+    case K_JMP:
+        if (!live) { out[n] = (uint16_t)(b[1] | b[2] << 8); kind[n++] = 1; }
+        break;
+    case K_JSR: {
+        uint16_t target = (uint16_t)(b[1] | b[2] << 8);
+        if (!live) { out[n] = target; kind[n++] = 1; }
+        out[n] = (uint16_t)(next + (live ? 0 : p->inline_jsr[target])); kind[n++] = 0;
+        break;
+    }
+    case K_JMPIND: case K_RTS: case K_RTI: case K_HLT:
+        break;
+    default:
+        out[n] = next; kind[n++] = 0;
+        break;
+    }
+    return n;
+}
+
+/* Discover from the image's pending seeds. Targets outside the image become
+ * global seeds (RAM) or ROM seeds (fixed ROM slots, the FDS BIOS). */
+static void ram_discover(const Program *p, RamProgram *r, RamImage *im, uint32_t **rom_seeds, int *nrom, int *caprom) {
+    uint32_t cap = im->len * 3 + 64, top = 0;
+    uint16_t *work = (uint16_t *)malloc(sizeof(uint16_t) * cap);
+    for (uint32_t off = 0; off < im->len; ++off)
+        if (im->seed[off] && !im->seen[off] && top < cap) work[top++] = (uint16_t)(im->base + off);
+    while (top) {
+        uint16_t pc = work[--top];
+        uint32_t off = (uint32_t)(pc - im->base);
+        if (im->seen[off]) continue;
+        im->seen[off] = 1;
+        uint8_t opcode = im->bytes[off];
+        int len = op_length(opcode);
+        if (off + (uint32_t)len > im->len || !ram_insn_ok(r, pc, len)) continue;
+        bool live, isolate;
+        ram_judge(r, im, pc, len, &live, &isolate);
+        im->is_insn[off] = 1;
+        im->live[off] = live;
+        im->isolate[off] = isolate;
+        uint32_t succ[3];
+        int kind[3];
+        int n = ram_successors(p, im, pc, live, succ, kind);
+        for (int i = 0; i < n; ++i) {
+            uint32_t t = succ[i], toff = t - im->base;
+            bool inside = t >= im->base && toff < im->len;
+            if (kind[i] == 1 || !inside) ram_add_gseed(r, t);
+            if (inside && !im->seen[toff] && (!im->evidence_only || im->seed[toff]) && top < cap) work[top++] = (uint16_t)t;
+            if (!inside && t >= 0x8000) {
+                uint32_t slot = (t >> SLOT_SHIFT) & (SLOT_COUNT - 1);
+                if (p->fixed[slot] >= 0) {
+                    if (*nrom == *caprom) {
+                        *caprom = *caprom ? *caprom * 2 : 64;
+                        *rom_seeds = (uint32_t *)realloc(*rom_seeds, sizeof(uint32_t) * (size_t)*caprom);
+                    }
+                    (*rom_seeds)[(*nrom)++] = POS_PACK((uint32_t)p->fixed[slot], slot, t & (SLOT_SIZE - 1));
+                }
+            }
+        }
+    }
+    free(work);
+}
+
+static int32_t uf_find(int32_t *root, int32_t x) {
+    while (root[x] != x) { root[x] = root[root[x]]; x = root[x]; }
+    return x;
+}
+
+static uint32_t fnv_bytes(uint32_t h, const void *data, size_t n) {
+    const uint8_t *q = (const uint8_t *)data;
+    while (n--) h = (h ^ *q++) * 16777619u;
+    return h;
+}
+
+/* A view's identity: its instructions, which of them are live, and the bytes
+ * it folds. Two views equal in these generate the same code. */
+static bool view_equal(const RamView *a, const RamView *b) {
+    if (a->n != b->n || a->run_count != b->run_count || a->byte_count != b->byte_count) return false;
+    if (memcmp(a->pcs, b->pcs, sizeof(uint16_t) * a->n)) return false;
+    if (memcmp(a->runs, b->runs, sizeof(uint16_t) * 2 * a->run_count)) return false;
+    if (memcmp(a->bytes, b->bytes, a->byte_count)) return false;
+    for (uint32_t i = 0; i < a->n; ++i)
+        if (a->img->live[a->pcs[i] - a->img->base] != b->img->live[b->pcs[i] - b->img->base]) return false;
+    return true;
+}
+
+/* Split an image's instructions into views: the ones local control flow
+ * connects inside one 1KB chunk (calls are not followed, so a routine keeps
+ * its own validity), each folding exactly its instructions' bytes. */
+static void ram_make_views(const Program *p, RamProgram *r, RamImage *im, uint32_t *hash_table, uint32_t table_size) {
+    for (uint32_t off = 0; off < im->len; ++off) im->root[off] = (int32_t)off;
+    for (uint32_t off = 0; off < im->len; ++off) {
+        if (!im->is_insn[off]) continue;
+        uint16_t pc = (uint16_t)(im->base + off);
+        uint32_t succ[3];
+        int kind[3];
+        int n = ram_successors(p, im, pc, im->live[off] != 0, succ, kind);
+        for (int i = 0; i < n; ++i) {
+            uint32_t t = succ[i], toff = t - im->base;
+            bool call = OPS[im->bytes[off]].kind == K_JSR && kind[i] == 1;
+            if (call || t < im->base || toff >= im->len || !im->is_insn[toff] || (t >> CHUNK_SHIFT) != (pc >> CHUNK_SHIFT))
+                continue;
+            if (im->isolate[off] || im->isolate[toff]) continue;
+            int32_t a = uf_find(im->root, (int32_t)off), b = uf_find(im->root, (int32_t)toff);
+            if (a != b) im->root[a < b ? b : a] = a < b ? a : b;
+        }
+    }
+    uint32_t *count = (uint32_t *)calloc(im->len, sizeof(uint32_t));
+    for (uint32_t off = 0; off < im->len; ++off)
+        if (im->is_insn[off]) count[uf_find(im->root, (int32_t)off)]++;
+    for (uint32_t rootoff = 0; rootoff < im->len; ++rootoff) {
+        if (!count[rootoff]) continue;
+        RamView v;
+        memset(&v, 0, sizeof(v));
+        v.img = im;
+        v.pcs = (uint16_t *)malloc(sizeof(uint16_t) * count[rootoff]);
+        uint16_t chunk = (uint16_t)((im->base + rootoff) & ~((1u << CHUNK_SHIFT) - 1));
+        uint8_t mark[(1u << CHUNK_SHIFT) + 4] = { 0 };
+        for (uint32_t off = rootoff; off < im->len && v.n < count[rootoff]; ++off) {
+            if (!im->is_insn[off] || (uint32_t)uf_find(im->root, (int32_t)off) != rootoff) continue;
+            uint16_t pc = (uint16_t)(im->base + off);
+            v.pcs[v.n++] = pc;
+            int len = im->live[off] ? 1 : op_length(im->bytes[off]);
+            for (int k = 0; k < len; ++k) mark[(uint32_t)(pc - chunk) + (uint32_t)k] = 1;
+        }
+        v.runs = (uint16_t *)malloc(sizeof(uint16_t) * 2 * ((1u << CHUNK_SHIFT) + 4));
+        v.bytes = (uint8_t *)malloc((1u << CHUNK_SHIFT) + 4);
+        for (uint32_t k = 0; k < (1u << CHUNK_SHIFT) + 4; ++k) {
+            if (!mark[k]) continue;
+            uint32_t start = k;
+            while (k < (1u << CHUNK_SHIFT) + 4 && mark[k]) {
+                v.bytes[v.byte_count++] = im->bytes[chunk + k - im->base];
+                ++k;
+            }
+            v.runs[2 * v.run_count] = (uint16_t)(chunk + start);
+            v.runs[2 * v.run_count + 1] = (uint16_t)(k - start);
+            v.run_count++;
+        }
+        uint32_t h = 2166136261u;
+        h = fnv_bytes(h, v.pcs, sizeof(uint16_t) * v.n);
+        for (uint32_t i = 0; i < v.n; ++i) h = fnv_bytes(h, &im->live[v.pcs[i] - im->base], 1);
+        h = fnv_bytes(h, v.runs, sizeof(uint16_t) * 2 * v.run_count);
+        v.hash = fnv_bytes(h, v.bytes, v.byte_count);
+        /* Keep the first of identical views (the same code in two files). */
+        uint32_t slot = v.hash & (table_size - 1);
+        bool dup = false;
+        while (hash_table[slot]) {
+            const RamView *o = &r->view[hash_table[slot] - 1];
+            if (o->hash == v.hash && view_equal(o, &v)) { dup = true; break; }
+            slot = (slot + 1) & (table_size - 1);
+        }
+        if (dup) { free(v.pcs); free(v.runs); free(v.bytes); continue; }
+        if (r->nview == r->capview) {
+            r->capview = r->capview ? r->capview * 2 : 256;
+            r->view = (RamView *)realloc(r->view, sizeof(RamView) * (size_t)r->capview);
+        }
+        v.index = r->nview;
+        r->view[r->nview++] = v;
+        hash_table[slot] = (uint32_t)r->nview;
+    }
+    free(count);
+}
+
+/* Is the instruction the capture saw at pc (bytes b) what image im holds? */
+static bool ram_image_holds(const RamProgram *r, const RamImage *im, uint16_t pc, const uint8_t *b, int len) {
+    uint32_t off = (uint32_t)(pc - im->base);
+    if (pc < im->base || off + (uint32_t)len > im->len) return false;
+    if (im->bytes[off] != b[0]) return false;
+    bool live, isolate;
+    ram_judge(r, im, pc, len, &live, &isolate);
+    return live || !memcmp(&im->bytes[off], b, (size_t)len);
+}
+
+/* Build every image, discover it, and cut it into views. ROM targets that RAM
+ * code jumps to are appended to rom_seeds for the ROM's own discovery. */
+static RamProgram *ram_build(const Program *p, const GameConfig *cfg, const CycFdsProgram *fds, uint32_t **rom_seeds,
+                             int *nrom) {
+    RamProgram *r = (RamProgram *)calloc(1, sizeof(RamProgram));
+    r->fds = p->mapper == 20;
+    int caprom = 0, disk_files = 0, cap_images = 0, cap_insns = -1, ngroups = 0;
+    *rom_seeds = NULL;
+    *nrom = 0;
+    if (fds && fds->image_path[0]) disk_files = ram_add_fds_images(r, fds->image_path);
+    int disk_images = r->nimg;
+    RamCapGroup *groups = NULL;
+    if (cfg->cycle_capture_file[0]) {
+        cap_insns = ram_load_captures(r, cfg->cycle_capture_file, &groups, &ngroups);
+        r->groups = groups;
+        r->ngroups = ngroups;
+        if (cap_insns < 0)
+            fprintf(stderr, "[cyc] note: capture file %s not found (run the host with --capture-log to create it)\n",
+                    cfg->cycle_capture_file);
+    }
+    for (uint32_t a = 0; a < 0x10000; ++a) {
+        if (!r->nvar[a]) continue;
+        r->var_on_disk[a] = (uint8_t *)calloc(r->nvar[a], 1);
+        for (unsigned v = 0; v < r->nvar[a]; ++v)
+            for (int k = 0; k < disk_images && !r->var_on_disk[a][v]; ++k) {
+                const RamImage *im = &r->img[k];
+                uint32_t off = a - im->base;
+                if (a >= im->base && off + r->var[a][v].len <= im->len && !memcmp(&im->bytes[off], r->var[a][v].b, r->var[a][v].len))
+                    r->var_on_disk[a][v] = 1;
+            }
+    }
+    /* Every snapshot is an image of its own, compiled from what ran in it
+     * only: the code may be in no disk file as it ran (copied, generated),
+     * or be in one whose views were invalid when it ran (part of a file
+     * overwritten, a routine beside rewritten code). Views identical to a
+     * disk file's merge. */
+    for (int g = 0; g < ngroups; ++g) {
+        RamCapGroup *G = &groups[g];
+        uint32_t end = G->base < 0x800 ? 0x800u : 0xE000u, len = end - G->base < 1026u ? end - G->base : 1026u;
+        if (!ram_addr_ok(r, G->base)) continue;
+        RamImage *im = ram_add_image(r, G->base, G->data, len, true, "capture $%04X #%d", G->base, g);
+        for (uint32_t i = 0; i < G->n; ++i) im->seed[G->pcs[i] - G->base] = 1;
+        cap_images++;
+    }
+    /* Entry points: the game's vectors ($DFF6/$DFF8/$DFFA NMI, as $0100
+     * selects; $DFFC reset; $DFFE IRQ) in every image that holds them, the
+     * seed file's RAM addresses, and each captured instruction in every disk
+     * image that holds it as it ran. */
+    for (int k = 0; k < r->nimg; ++k) {
+        const RamImage *im = &r->img[k];
+        for (uint32_t v = 0xDFF6; v <= 0xDFFE; v += 2)
+            if (v >= im->base && v + 1 < (uint32_t)im->base + im->len)
+                ram_add_gseed(r, (uint32_t)(im->bytes[v - im->base] | im->bytes[v + 1 - im->base] << 8));
+    }
+    if (cfg->cycle_seed_file[0]) {
+        FILE *sf = fopen(cfg->cycle_seed_file, "r");
+        char line[128];
+        while (sf && fgets(line, sizeof(line), sf)) {
+            unsigned addr;
+            if (line[0] == '#' || strchr(line, ':') || sscanf(line, "%x", &addr) != 1) continue;
+            if (addr < 0x8000) ram_add_gseed(r, addr);
+        }
+        if (sf) fclose(sf);
+    }
+    for (uint32_t a = 0; a < 0x10000; ++a)
+        for (unsigned v = 0; v < r->nvar[a]; ++v)
+            for (int k = 0; k < disk_images; ++k)
+                if (ram_image_holds(r, &r->img[k], (uint16_t)a, r->var[a][v].b, r->var[a][v].len))
+                    r->img[k].seed[a - r->img[k].base] = 1;
+    /* Discover to a fixed point: a target leaving one image is a seed of
+     * every image covering it (the code resident there may be any of them). */
+    for (;;) {
+        uint32_t before = r->ngseed;
+        for (int k = 0; k < r->nimg; ++k) {
+            RamImage *im = &r->img[k];
+            for (; im->gseed_cursor < r->ngseed; ++im->gseed_cursor) {
+                uint16_t a = r->gseed[im->gseed_cursor];
+                if (!im->evidence_only && a >= im->base && (uint32_t)(a - im->base) < im->len) im->seed[a - im->base] = 1;
+            }
+            ram_discover(p, r, im, rom_seeds, nrom, &caprom);
+        }
+        if (r->ngseed == before) break;
+    }
+    uint32_t table_size = 1;
+    uint32_t total = 0;
+    for (int k = 0; k < r->nimg; ++k)
+        for (uint32_t off = 0; off < r->img[k].len; ++off) total += r->img[k].is_insn[off];
+    while (table_size < total * 2 + 16) table_size <<= 1;
+    uint32_t *hash_table = (uint32_t *)calloc(table_size, sizeof(uint32_t));
+    for (int k = 0; k < r->nimg; ++k) ram_make_views(p, r, &r->img[k], hash_table, table_size);
+    free(hash_table);
+    /* The folded-byte map, for the store checks. */
+    for (int i = 0; i < r->nview; ++i) {
+        const RamView *v = &r->view[i];
+        for (uint32_t k = 0; k < v->run_count; ++k)
+            for (uint32_t j = 0; j < v->runs[2 * k + 1]; ++j) {
+                uint16_t a = (uint16_t)(v->runs[2 * k] + j);
+                if (a < 0x800) for (uint32_t m = 0; m < 4; ++m) r->code[a | m << 11] = 1;
+                else r->code[a] = 1;
+            }
+    }
+    for (uint32_t a = 0; a < 0x10000; ++a) r->code_prefix[a + 1] = r->code_prefix[a] + r->code[a];
+    uint32_t instructions = 0;
+    for (int i = 0; i < r->nview; ++i) instructions += r->view[i].n;
+    if (r->nimg || cap_insns >= 0)
+        printf("[NESRecomp] RAM code: %d image%s (%d from %d disk file%s, %d captured snapshot%s), %u instructions "
+               "discovered, %d views (%u instructions) after merging identical ones\n",
+               r->nimg, r->nimg == 1 ? "" : "s", disk_images, disk_files < 0 ? 0 : disk_files, disk_files == 1 ? "" : "s",
+               cap_images, cap_images == 1 ? "" : "s", total, r->nview, instructions);
+    if (cap_insns >= 0)
+        printf("[NESRecomp] capture file %s: %d instruction variants, %d snapshots\n", cfg->cycle_capture_file,
+               cap_insns, ngroups);
+    for (int g = 0; g < ngroups; ++g) free(groups[g].pcs);
+    free(groups);
+    r->groups = NULL;
+    r->ngroups = 0;
+    return r;
+}
+
+/* One translation unit per few thousand instructions: the view functions and
+ * their descriptors (runner/cyc/cyc_recomp.h CycRamView). */
+static int ram_emit(const Program *p, const RamProgram *r, const char *prefix) {
+    int files = 0;
+    FILE *f = NULL;
+    uint32_t in_file = 0;
+    char path[512];
+    for (int i = 0; i < r->nview; ++i) {
+        const RamView *v = &r->view[i];
+        if (!f || in_file > 4000) {
+            if (f) fclose(f);
+            snprintf(path, sizeof(path), "generated/%s_cyc_r%02X.c", prefix, files++);
+            f = open_out(path);
+            fprintf(f,
+                "/* %s - generated by NESRecomp --cycle-accurate. DO NOT EDIT.\n"
+                " * Compiled views of code in RAM: each folds only its own instructions'\n"
+                " * bytes (the runs below) and runs only while RAM holds them; see\n"
+                " * runner/cyc/cyc_ramview.c and recompiler/src/cyc_codegen.c. */\n"
+                "#include \"cyc_recomp.h\"\n\n", path);
+            in_file = 0;
+        }
+        in_file += v->n;
+        fprintf(f, "/* view %d: %s, $%04X-$%04X, %u instructions, %u bytes folded */\n", v->index, v->img->name,
+                v->pcs[0], v->pcs[v->n - 1], v->n, v->byte_count);
+        fprintf(f, "static const uint16_t E%d[%u] = {", v->index, v->n);
+        for (uint32_t k = 0; k < v->n; ++k) fprintf(f, "%s0x%04X,", k % 12 ? "" : "\n    ", v->pcs[k]);
+        fprintf(f, "\n};\nstatic const uint16_t R%d[%u] = {", v->index, 2 * v->run_count);
+        for (uint32_t k = 0; k < v->run_count; ++k)
+            fprintf(f, "%s0x%04X, %u,", k % 8 ? " " : "\n    ", v->runs[2 * k], v->runs[2 * k + 1]);
+        fprintf(f, "\n};\nstatic const uint8_t B%d[%u] = {", v->index, v->byte_count);
+        for (uint32_t k = 0; k < v->byte_count; ++k) fprintf(f, "%s0x%02X,", k % 16 ? "" : "\n    ", v->bytes[k]);
+        fprintf(f, "\n};\nstatic void rv%d(void) {\n    switch (cpu.pc) {\n", v->index);
+        for (uint32_t k = 0; k < v->n; ++k) fprintf(f, "    case 0x%04X: goto L_%04X;\n", v->pcs[k], v->pcs[k]);
+        fprintf(f, "    default: return;\n    }\n");
+        Emit e = {0};
+        e.f = f;
+        e.p = p;
+        e.img = v->img;
+        e.view = v;
+        e.ram = r;
+        for (uint32_t k = 0; k < v->n; ++k) {
+            e.P = v->pcs[k];
+            e.opcode = v->img->bytes[e.P - v->img->base];
+            e.live = v->img->live[e.P - v->img->base] != 0;
+            emit_instruction(&e);
+        }
+        fprintf(f, "}\nconst CycRamView cyc_rv%d = { rv%d, E%d, R%d, B%d, %u, %u, 0x%08Xu, 0x%08Xu };\n\n", v->index,
+                v->index, v->index, v->index, v->index, v->n, v->run_count, v->hash, v->img->hash);
+    }
+    if (f) fclose(f);
+    /* The views, for tools: which image each came from. */
+    snprintf(path, sizeof(path), "generated/%s_cyc_views.txt", prefix);
+    FILE *m = open_out(path);
+    fprintf(m, "# index hash first last instructions folded-bytes live isolated image-hash image\n");
+    for (int i = 0; i < r->nview; ++i) {
+        const RamView *v = &r->view[i];
+        unsigned live = 0, isolated = 0;
+        for (uint32_t k = 0; k < v->n; ++k) {
+            live += v->img->live[v->pcs[k] - v->img->base];
+            isolated += v->img->isolate[v->pcs[k] - v->img->base];
+        }
+        fprintf(m, "%d %08X %04X %04X %u %u %u %u %08X %s\n", i, v->hash, v->pcs[0], v->pcs[v->n - 1], v->n,
+                v->byte_count, live, isolated, v->img->hash, v->img->name);
+    }
+    fclose(m);
+    return files;
+}
+
+static void ram_emit_table(FILE *f, const RamProgram *r) {
+    int n = r ? r->nview : 0;
+    for (int i = 0; i < n; ++i) fprintf(f, "extern const CycRamView cyc_rv%d;\n", i);
+    fprintf(f, "\n/* Compiled views of RAM code (<prefix>_cyc_rNN.c); runner/cyc/cyc_ramview.c. */\n"
+               "const CycRamView *const cyc_native_ram_views[%d] = {", n ? n : 1);
+    if (!n) fprintf(f, " 0");
+    for (int i = 0; i < n; ++i) fprintf(f, "%s&cyc_rv%d,", i % 8 ? " " : "\n    ", i);
+    fprintf(f, "\n};\nconst uint32_t cyc_native_ram_view_count = %du;\n", n);
+}
+
+static void ram_free(RamProgram *r) {
+    if (!r) return;
+    for (int k = 0; k < r->nimg; ++k) {
+        RamImage *im = &r->img[k];
+        free(im->bytes); free(im->seed); free(im->seen); free(im->is_insn); free(im->live); free(im->isolate);
+        free(im->root);
+    }
+    for (int i = 0; i < r->nview; ++i) { free(r->view[i].pcs); free(r->view[i].runs); free(r->view[i].bytes); }
+    for (uint32_t a = 0; a < 0x10000; ++a) { free(r->var[a]); free(r->var_on_disk[a]); free(r->vol[a]); }
+    free(r->img); free(r->view); free(r->gseed);
+    free(r);
+}
+
 /* A seed line is `AAAA`, legacy 8 KiB `BB:AAAA`, or `4k:BB:AAAA`,
  * each with an optional count after it.
  * The bank-less form means the bank the power-on configuration has at that
@@ -1468,10 +2329,14 @@ static uint32_t parse_seed(const Program *p, const char *line) {
         bank = (bank * 2 + ((addr >> 12) & 1)) & (p->banks - 1);
     } else if (sscanf(line, "%x", &addr) == 1) {
         if (addr < 0x8000 || addr > 0xFFFF) return POS_NONE;
+        if (p->power_on[(addr >> SLOT_SHIFT) & (SLOT_COUNT - 1)] < 0) return POS_NONE;
         bank = (unsigned)p->power_on[(addr >> SLOT_SHIFT) & (SLOT_COUNT - 1)];
     } else {
         return POS_NONE;
     }
+    /* The FDS maps one bank per ROM slot and none in RAM: a seed anywhere else
+     * would compile a view the dispatch can never select. */
+    if (p->mapper == 20 && p->fixed[(addr >> SLOT_SHIFT) & (SLOT_COUNT - 1)] != (int)bank) return POS_NONE;
     return POS_PACK(bank, (addr >> SLOT_SHIFT) & (SLOT_COUNT - 1), addr & (SLOT_SIZE - 1));
 }
 
@@ -1490,7 +2355,8 @@ static void seed_vectors(const Program *p, uint32_t bank, uint32_t *seeds, int *
     }
 }
 
-bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *output_prefix) {
+bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *output_prefix,
+                      const CycFdsProgram *fds) {
     if (!nes_cart_variant_supported(&rom->cart)) {
         fprintf(stderr, "[cyc] unsupported cartridge metadata for mapper %d submapper %u\n",
                 rom->mapper, rom->cart.submapper);
@@ -1502,6 +2368,10 @@ bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *outp
         return false;
     }
     if (!check_table()) return false;
+    if (cfg->console > 2) {
+        fprintf(stderr, "[cyc] game.toml [game] console must be nes, famicom or default\n");
+        return false;
+    }
 
     Program *p = (Program *)calloc(1, sizeof(Program));
     p->rom = rom;
@@ -1511,7 +2381,8 @@ bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *outp
      * hardware wraps lands on the same byte here as in hw_mapper.c. */
     p->banks = 1;
     while (p->banks * SLOT_SIZE < p->prg_len) p->banks <<= 1;
-    p->banked = rom->mapper != 0;
+    /* NROM and the FDS have no bank registers: no write can move their ROM. */
+    p->banked = rom->mapper != 0 && rom->mapper != 20;
     bool any_fixed = false;
     for (uint32_t s = 0; s < SLOT_COUNT; s++) {
         p->fixed[s] = fixed_bank_for(rom->mapper, p->banks, s);
@@ -1521,6 +2392,11 @@ bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *outp
             p->fixed[s] = p->power_on[s] = s & (p->banks - 1);
         if (p->fixed[s] >= 0) any_fixed = true;
     }
+    for (int i = 0; i < cfg->cycle_inline_jsr_count; i++)
+        p->inline_jsr[cfg->cycle_inline_jsr[i].target] = cfg->cycle_inline_jsr[i].bytes;
+    if (fds && fds->bios_crc32 == 0x5E607DCFu)
+        for (size_t i = 0; i < sizeof(FDS_BIOS_INLINE_JSR) / sizeof(FDS_BIOS_INLINE_JSR[0]); i++)
+            p->inline_jsr[FDS_BIOS_INLINE_JSR[i].target] = FDS_BIOS_INLINE_JSR[i].bytes;
     p->is_insn = (uint8_t *)calloc(1, pos_space(p));
     p->seen = (uint8_t *)calloc(1, pos_space(p));
     if (!p->is_insn || !p->seen) {
@@ -1544,6 +2420,7 @@ bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *outp
         uint16_t addr = cfg->extra_funcs[i].addr;
         if (addr < 0x8000) continue;
         uint32_t slot = (addr >> SLOT_SHIFT) & (SLOT_COUNT - 1);
+        if (p->power_on[slot] < 0) continue;
         seeds[n++] = POS_PACK((uint32_t)p->power_on[slot], slot, addr & (SLOT_SIZE - 1));
     }
     int file_seeds = 0;
@@ -1567,6 +2444,14 @@ bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *outp
     free(seeds);
     if (file_seeds) printf("[NESRecomp] cycle-accurate: %d seeds from %s\n", file_seeds, cfg->cycle_seed_file);
 
+    /* Code in RAM (disk files, captured snapshots), and the ROM routines it
+     * calls, which the ROM's own control flow may never reach. */
+    uint32_t *rom_seeds;
+    int rom_seed_count;
+    RamProgram *ram = ram_build(p, cfg, fds, &rom_seeds, &rom_seed_count);
+    if (rom_seed_count) discover(p, rom_seeds, rom_seed_count);
+    free(rom_seeds);
+
     uint32_t count = 0, tails = 0;
     for (size_t i = 0; i < pos_space(p); i++) {
         count += p->is_insn[i];
@@ -1584,13 +2469,17 @@ bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *outp
         emit_bank_file(p, path, bank);
         files++;
     }
+    int ram_files = ram_emit(p, ram, output_prefix);
     snprintf(path, sizeof(path), "generated/%s_cyc.c", output_prefix);
-    emit_umbrella(p, path, output_prefix);
+    emit_umbrella(p, path, output_prefix, fds, ram, cfg->console);
 
     printf("[NESRecomp] cycle-accurate (%s, %u KB PRG in %u banks of 4KB): %u instructions compiled",
            board, p->prg_len / 1024, p->banks, count);
     if (tails) printf(", %u left to the interpreter (they cross a bank or $FFFF)", tails);
-    printf(" -> generated/%s_cyc.c + %d bank file%s\n", output_prefix, files, files == 1 ? "" : "s");
+    printf(" -> generated/%s_cyc.c + %d bank file%s", output_prefix, files, files == 1 ? "" : "s");
+    if (ram_files) printf(" + %d RAM view file%s", ram_files, ram_files == 1 ? "" : "s");
+    printf("\n");
+    ram_free(ram);
     free(p->is_insn);
     free(p->seen);
     free(p);

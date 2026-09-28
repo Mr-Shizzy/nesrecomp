@@ -22,6 +22,9 @@
 #include "game_config.h"
 #include "coverage.h"
 #include "cyc_codegen.h"
+#include "toml.h"
+#include "../../common/nes_fds.h"
+#include "../../common/nes_fds_hle.h"
 
 static bool file_exists(const char *path) {
     FILE *f = fopen(path, "r");
@@ -364,6 +367,8 @@ static void print_usage(void) {
         "                         runner/cyc) instead of the function-level output. Also\n"
         "                         enabled by game.toml [game] cycle_accurate = true.\n"
         "  --cycle-seed-file <path> Override the cycle seed file from game.toml.\n"
+        "  --cycle-capture-file <path> Override the cycle RAM capture file from game.toml\n"
+        "                         (the cycle host's --capture-log).\n"
         "  --emit-cycle-interpreter <path>\n"
         "                         Write the cycle-accurate 6502 interpreter generated\n"
         "                         from the same templates (runner/cyc/cpu6502_interp.c)\n"
@@ -372,6 +377,22 @@ static void print_usage(void) {
         "                         'CART <mapper> <submapper> <path>' for each, decoded as\n"
         "                         the cycle runtime does (known-dump corrections\n"
         "                         included), or 'CART ? ? <path>' if it does not load.\n"
+        "  --fds-info <image>     Print a Famicom Disk System image's format, sides, disk\n"
+        "                         info and file table (every file, hidden ones too).\n"
+        "                         Exit 0 if every side parses cleanly, 2 on defects.\n"
+        "  --fds-stream <image> <side> <out>\n"
+        "                         Write the side's drive byte stream (gaps, $80 marks,\n"
+        "                         CRCs restored). --fds-profile mesen099|mesen2 picks\n"
+        "                         the layout (default mesen099, the nesref core);\n"
+        "                         --fds-crc computed|mesen picks real CRCs (default)\n"
+        "                         or Mesen's constant $4D $62.\n"
+        "  --fds-bios <path>      FDS: the RAM Adapter BIOS to compile (default game.toml\n"
+        "                         [fds] bios, else bios/disksys.rom beside the image).\n"
+        "                         Only the image its <name>.toml ([program] size, crc32;\n"
+        "                         bios/disksys.toml) identifies, else CRC32 5E607DCF.\n"
+        "                         An FDS image (.fds/.qd, or game.toml [fds] image) is\n"
+        "                         compiled for the cycle backend only: the BIOS as a\n"
+        "                         fixed ROM at $E000-$FFFF; disk code runs interpreted.\n"
         "  --help, -h             Show this help message.\n"
         "\n"
         "Output:\n"
@@ -405,6 +426,233 @@ static int cart_info(void) {
     return 0;
 }
 
+/* ---- Famicom Disk System images (common/nes_fds.h) ---- */
+static uint8_t *read_whole_file(const char *path, size_t *size) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    uint8_t *buf = NULL;
+    size_t cap = 0, n = 0;
+    for (;;) {
+        if (n == cap) {
+            cap = cap ? cap * 2 : 1 << 20;
+            uint8_t *grown = (uint8_t *)realloc(buf, cap);
+            if (!grown) { free(buf); fclose(f); return NULL; }
+            buf = grown;
+        }
+        size_t got = fread(buf + n, 1, cap - n, f);
+        n += got;
+        if (got == 0) break;
+    }
+    int failed = ferror(f);
+    fclose(f);
+    if (failed) { free(buf); return NULL; }
+    *size = n;
+    return buf;
+}
+
+static bool fds_open_file(const char *path, uint8_t **data, NesFdsImage *img) {
+    size_t size = 0, len = strlen(path);
+    *data = read_whole_file(path, &size);
+    if (!*data) { fprintf(stderr, "Error: cannot read '%s'\n", path); return false; }
+    /* Mesen2 selects the .qd layout by extension; detection covers the rest. */
+    bool qd = len >= 3 && path[len-3] == '.' && (path[len-2] | 32) == 'q' && (path[len-1] | 32) == 'd';
+    if (nes_fds_image(*data, size, qd ? NES_FDS_QD : NES_FDS_NONE, img)) return true;
+    fprintf(stderr, "Error: '%s' is not an FDS image (%s)\n", path,
+            img->error == NES_FDS_ERR_NO_SIDES ? "no whole side" : "no FDS header or block 1");
+    free(*data);
+    *data = NULL;
+    return false;
+}
+
+static void print_fds_flags(unsigned flags, const char *const *names, unsigned count) {
+    bool any = false;
+    for (unsigned i = 0; i < count; ++i)
+        if (flags & (1u << i)) { printf("%s%s", any ? "|" : "", names[i]); any = true; }
+    if (!any) printf("none");
+}
+
+static void print_fds_text(const char *s, size_t n) {
+    putchar('"');
+    for (size_t i = 0; i < n; ++i) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '"' || c == '\\') printf("\\%c", c);
+        else if (c >= 0x20 && c < 0x7F) putchar(c);
+        else printf("\\x%02X", c);
+    }
+    putchar('"');
+}
+
+static int fds_info(const char *path) {
+    static const char *const img_flags[] = { "truncated", "trailing" };
+    static const char *const side_flags[] = { "no_info", "bad_signature", "no_amount",
+        "no_data", "overrun", "truncated", "missing_files", "bad_crc", "hidden_files", "tail_data" };
+    uint8_t *data;
+    NesFdsImage img;
+    if (!fds_open_file(path, &data, &img)) return 1;
+    printf("FDS %s\n", path);
+    printf("IMAGE format=%s sides=%u side_bytes=%u image_bytes=%zu flags=",
+           nes_fds_format_name(img.format), img.sides, (unsigned)img.side_bytes, img.size);
+    print_fds_flags(img.flags, img_flags, 2);
+    printf("\n");
+    bool clean = !img.flags;
+    for (unsigned side = 0; side < img.sides; ++side) {
+        NesFdsSide s;
+        NesFdsWalk w;
+        NesFdsFile f;
+        const NesFdsDiskInfo *d = &s.info;
+        bool begun = nes_fds_side_begin(&img, side, &s, &w);
+        printf("SIDE %u game=", side);
+        print_fds_text(d->game_name, 3);
+        printf(" licensee=$%02X type=$%02X revision=$%02X side_number=$%02X disk_number=$%02X"
+               " disk_type=$%02X boot_file_id=$%02X mfg_date=%02X%02X%02X country=$%02X"
+               " rewrite_count=$%02X actual_side=$%02X disk_type_other=$%02X disk_version=$%02X"
+               " file_amount=%u\n",
+               d->licensee, d->game_type, d->revision, d->side_number, d->disk_number, d->disk_type,
+               d->boot_file_id, d->mfg_date[0], d->mfg_date[1], d->mfg_date[2], d->country,
+               d->rewrite_count, d->actual_side, d->disk_type_other, d->disk_version, s.file_amount);
+        unsigned files = 0;
+        while (begun && nes_fds_next_file(&w, &f)) {
+            files++;
+            printf("FILE %u %u number=$%02X id=$%02X name=", side, f.index, f.number, f.id);
+            print_fds_text(f.name, 8);
+            printf(" load=$%04X size=$%04X type=%u(%s) header=$%04X data=", f.load_addr, f.size,
+                   f.type, nes_fds_file_type_name(f.type), (unsigned)f.header_pos);
+            if (f.has_data) printf("$%04X", (unsigned)f.data_pos); else printf("missing");
+            printf(" hidden=%s\n", f.hidden ? "yes" : "no");
+        }
+        printf("END %u files=%u end=$%04X end_code=$%02X flags=", side, files, (unsigned)w.pos,
+               w.pos < img.side_bytes ? nes_fds_byte(&img, side, w.pos, true) : 0);
+        print_fds_flags(w.flags, side_flags, 10);
+        printf("\n");
+        if (w.flags & NES_FDS_SIDE_DEFECTS) clean = false;
+    }
+    free(data);
+    return clean ? 0 : 2;
+}
+
+static int fds_stream(const char *path, const char *side_arg, const char *out_path,
+                      NesFdsProfile profile, NesFdsCrc crc) {
+    uint8_t *data;
+    NesFdsImage img;
+    char *end;
+    unsigned long side = strtoul(side_arg, &end, 10);
+    if (!*side_arg || *end) { fprintf(stderr, "Error: bad side '%s'\n", side_arg); return 1; }
+    if (!fds_open_file(path, &data, &img)) return 1;
+    if (side >= img.sides) {
+        fprintf(stderr, "Error: side %lu of %u\n", side, img.sides);
+        free(data);
+        return 1;
+    }
+    size_t len = nes_fds_side_stream(&img, (unsigned)side, profile, crc, NULL, 0);
+    uint8_t *stream = (uint8_t *)malloc(len);
+    FILE *f = stream ? fopen(out_path, "wb") : NULL;
+    bool ok = f && nes_fds_side_stream(&img, (unsigned)side, profile, crc, stream, len) == len &&
+              fwrite(stream, 1, len, f) == len;
+    if (f && fclose(f)) ok = false;
+    free(stream);
+    free(data);
+    if (!ok) { fprintf(stderr, "Error: cannot write '%s'\n", out_path); return 1; }
+    printf("STREAM side=%lu bytes=%zu %s\n", side, len, out_path);
+    return 0;
+}
+
+/* ---- FDS programs: the RAM Adapter, whose ROM is the BIOS ---- */
+
+/* The identity bios/disksys.toml records ([program] size, crc32) for the BIOS
+ * at bios_path (<stem>.toml beside it); the known disksys.rom otherwise. */
+static void fds_bios_identity(const char *bios_path, uint32_t *crc, uint32_t *size, char *source, size_t n) {
+    *crc = NES_FDS_BIOS_CRC32;
+    *size = NES_FDS_BIOS_BYTES;
+    snprintf(source, n, "built-in (disksys.rom)");
+    char toml[1024];
+    snprintf(toml, sizeof(toml), "%s", bios_path);
+    char *dot = strrchr(toml, '.'), *slash = strrchr(toml, '/'), *bslash = strrchr(toml, '\\');
+    if (dot && dot > slash && dot > bslash) *dot = 0;
+    strncat(toml, ".toml", sizeof(toml) - strlen(toml) - 1);
+    FILE *f = fopen(toml, "r");
+    if (!f) return;
+    char err[256];
+    toml_table_t *root = toml_parse_file(f, err, sizeof(err));
+    fclose(f);
+    if (!root) { fprintf(stderr, "[NESRecomp] Warning: cannot parse %s: %s\n", toml, err); return; }
+    toml_table_t *prog = toml_table_in(root, "program");
+    if (prog) {
+        toml_datum_t c = toml_string_in(prog, "crc32");
+        if (c.ok) { *crc = (uint32_t)strtoul(c.u.s, NULL, 16); free(c.u.s); snprintf(source, n, "%s", toml); }
+        toml_datum_t z = toml_int_in(prog, "size");
+        if (z.ok) *size = (uint32_t)z.u.i;
+    }
+    toml_free(root);
+}
+
+static void absolute_path(const char *path, char *out, size_t n) {
+#ifdef _WIN32
+    if (!_fullpath(out, path, n)) snprintf(out, n, "%s", path);
+#else
+    char *r = realpath(path, NULL);
+    snprintf(out, n, "%s", r ? r : path);
+    free(r);
+#endif
+}
+
+/* Build the program's NESRom from the BIOS and describe the media. */
+static bool fds_program(const char *image_path, const char *bios_arg, const GameConfig *cfg, NESRom *rom,
+                        CycFdsProgram *prog) {
+    uint8_t *data;
+    NesFdsImage img;
+    if (!fds_open_file(image_path, &data, &img)) return false;
+    printf("[NESRecomp] FDS image: %s (%s, %u side%s)\n", image_path, nes_fds_format_name(img.format), img.sides,
+           img.sides == 1 ? "" : "s");
+    free(data);
+    char beside[1024];
+    const char *slash = strrchr(image_path, '/'), *bslash = strrchr(image_path, '\\');
+    const char *sep = slash > bslash ? slash : bslash;
+    snprintf(beside, sizeof(beside), "%.*sbios/disksys.rom", sep ? (int)(sep - image_path + 1) : 0, image_path);
+    const char *bios_path = bios_arg ? bios_arg : cfg->fds_bios[0] ? cfg->fds_bios : beside;
+    size_t n = 0;
+    uint8_t *bios = read_whole_file(bios_path, &n);
+    if (!bios) {
+        fprintf(stderr, "[NESRecomp] FDS: cannot read the BIOS '%s' (give --fds-bios or game.toml [fds] bios)\n", bios_path);
+        return false;
+    }
+    uint32_t want_crc, want_size;
+    char source[1024];
+    fds_bios_identity(bios_path, &want_crc, &want_size, source, sizeof(source));
+    uint32_t crc = nes_crc32(0, bios, n);
+    if (n != want_size || !nes_fds_bios_matches(bios, n, want_crc)) {
+        fprintf(stderr, "[NESRecomp] FDS: '%s' is not the expected BIOS (%zu bytes, CRC32 %08X; %s expects "
+                        "%u bytes, CRC32 %08X)\n", bios_path, n, crc, source, want_size, want_crc);
+        free(bios);
+        return false;
+    }
+    memset(rom, 0, sizeof(*rom));
+    nes_fds_cart_info(&rom->cart);
+    rom->prg_data = bios;
+    rom->prg_banks = 1;
+    rom->mapper = NES_FDS_MAPPER;
+    rom->nmi_vector = (uint16_t)(bios[0x1FFA] | bios[0x1FFB] << 8);
+    rom->reset_vector = (uint16_t)(bios[0x1FFC] | bios[0x1FFD] << 8);
+    rom->irq_vector = (uint16_t)(bios[0x1FFE] | bios[0x1FFF] << 8);
+    memset(prog, 0, sizeof(*prog));
+    NesFdsHleAsk ask;
+    const char *bad = NULL;
+    if (!nes_fds_hle_parse(cfg->fds_hle, &ask, &bad)) {
+        fprintf(stderr, "[NESRecomp] game.toml [fds] hle: unknown word at '%s' (auto-swap, fast-load, all, off, "
+                        "no-auto-swap, no-fast-load)\n", bad);
+        free(bios);
+        return false;
+    }
+    snprintf(prog->hle, sizeof(prog->hle), "%s", cfg->fds_hle);
+    if (cfg->fds_hle[0]) printf("[NESRecomp] FDS HLE default: %s\n", cfg->fds_hle);
+    prog->bios_crc32 = crc;
+    absolute_path(bios_path, prog->bios_path, sizeof(prog->bios_path));
+    absolute_path(image_path, prog->image_path, sizeof(prog->image_path));
+    printf("[NESRecomp] FDS BIOS: %s (CRC32 %08X, identity from %s)\n", bios_path, crc, source);
+    printf("[NESRecomp] Vectors: NMI=$%04X  RESET=$%04X  IRQ=$%04X\n", rom->nmi_vector, rom->reset_vector,
+           rom->irq_vector);
+    return true;
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         print_usage();
@@ -415,8 +663,13 @@ int main(int argc, char *argv[]) {
     const char *game_path = NULL;
     const char *proposal_out = NULL;
     const char *prefix_override = NULL;
-    const char *cycle_seed_override = NULL;
+    const char *cycle_seed_override = NULL, *cycle_capture_override = NULL;
     bool cycle_accurate = false;
+    const char *fds_info_path = NULL;
+    const char *fds_stream_args[3] = { NULL, NULL, NULL };
+    NesFdsProfile fds_profile = NES_FDS_PROFILE_MESEN099;
+    NesFdsCrc fds_crc = NES_FDS_CRC_COMPUTED;
+    const char *fds_bios_arg = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -424,6 +677,24 @@ int main(int argc, char *argv[]) {
             return 0;
         } else if (strcmp(argv[i], "--cart-info") == 0) {
             return cart_info();
+        } else if (strcmp(argv[i], "--fds-info") == 0 && i+1 < argc) {
+            fds_info_path = argv[++i];
+        } else if (strcmp(argv[i], "--fds-stream") == 0 && i+3 < argc) {
+            fds_stream_args[0] = argv[++i];
+            fds_stream_args[1] = argv[++i];
+            fds_stream_args[2] = argv[++i];
+        } else if (strcmp(argv[i], "--fds-profile") == 0 && i+1 < argc) {
+            const char *v = argv[++i];
+            if (strcmp(v, "mesen099") == 0) fds_profile = NES_FDS_PROFILE_MESEN099;
+            else if (strcmp(v, "mesen2") == 0) fds_profile = NES_FDS_PROFILE_MESEN2;
+            else { fprintf(stderr, "Error: --fds-profile '%s'\n", v); return 1; }
+        } else if (strcmp(argv[i], "--fds-crc") == 0 && i+1 < argc) {
+            const char *v = argv[++i];
+            if (strcmp(v, "computed") == 0) fds_crc = NES_FDS_CRC_COMPUTED;
+            else if (strcmp(v, "mesen") == 0) fds_crc = NES_FDS_CRC_MESEN;
+            else { fprintf(stderr, "Error: --fds-crc '%s'\n", v); return 1; }
+        } else if (strcmp(argv[i], "--fds-bios") == 0 && i+1 < argc) {
+            fds_bios_arg = argv[++i];
         } else if (strcmp(argv[i], "--cycle-accurate") == 0) {
             cycle_accurate = true;
         } else if (strcmp(argv[i], "--emit-cycle-interpreter") == 0 && i+1 < argc) {
@@ -434,6 +705,8 @@ int main(int argc, char *argv[]) {
             prefix_override = argv[++i];
         } else if (strcmp(argv[i], "--cycle-seed-file") == 0 && i+1 < argc) {
             cycle_seed_override = argv[++i];
+        } else if (strcmp(argv[i], "--cycle-capture-file") == 0 && i+1 < argc) {
+            cycle_capture_override = argv[++i];
         } else if (strcmp(argv[i], "--proposal-out") == 0 && i+1 < argc) {
             proposal_out = argv[++i];
         } else if (!rom_path) {
@@ -445,11 +718,9 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (!rom_path) {
-        fprintf(stderr, "Error: no ROM file specified.\n\n");
-        print_usage();
-        return 1;
-    }
+    if (fds_info_path) return fds_info(fds_info_path);
+    if (fds_stream_args[0])
+        return fds_stream(fds_stream_args[0], fds_stream_args[1], fds_stream_args[2], fds_profile, fds_crc);
 
     /* Auto-detect game.toml in current directory if not specified */
     if (!game_path) {
@@ -457,18 +728,42 @@ int main(int argc, char *argv[]) {
         if (f) { fclose(f); game_path = "game.toml"; }
     }
 
+    /* An FDS title may name its disk in game.toml ([fds] image) instead. */
+    static GameConfig fds_probe_cfg;
+    if (!rom_path && game_path && game_config_load(&fds_probe_cfg, game_path) && fds_probe_cfg.fds_image[0])
+        rom_path = fds_probe_cfg.fds_image;
+
+    if (!rom_path) {
+        fprintf(stderr, "Error: no ROM file specified.\n\n");
+        print_usage();
+        return 1;
+    }
+
     printf("[NESRecomp] Loading ROM: %s\n", rom_path);
 
     /* Parse ROM */
     NESRom rom = {0};
-    if (!rom_parse(rom_path, &rom)) {
+    bool fds_input = false;
+    {
+        /* A disk image is not an iNES file: recognize it first. */
+        size_t probe_size = 0;
+        uint8_t *probe = read_whole_file(rom_path, &probe_size);
+        NesFdsImage probe_img;
+        size_t len = strlen(rom_path);
+        bool qd = len > 3 && (!strcmp(rom_path + len - 3, ".qd") || !strcmp(rom_path + len - 3, ".QD"));
+        fds_input = probe && (probe_size < 4 || memcmp(probe, "NES\x1a", 4)) &&
+                    nes_fds_image(probe, probe_size, qd ? NES_FDS_QD : NES_FDS_NONE, &probe_img);
+        free(probe);
+    }
+    if (!fds_input && !rom_parse(rom_path, &rom)) {
         fprintf(stderr, "[NESRecomp] Failed to parse ROM\n");
         return 1;
+    } else if (!fds_input) {
+        printf("[NESRecomp] ROM: %d PRG banks x 16KB, Mapper %d\n",
+               rom.prg_banks, rom.mapper);
+        printf("[NESRecomp] Vectors: NMI=$%04X  RESET=$%04X  IRQ=$%04X\n",
+               rom.nmi_vector, rom.reset_vector, rom.irq_vector);
     }
-    printf("[NESRecomp] ROM: %d PRG banks x 16KB, Mapper %d\n",
-           rom.prg_banks, rom.mapper);
-    printf("[NESRecomp] Vectors: NMI=$%04X  RESET=$%04X  IRQ=$%04X\n",
-           rom.nmi_vector, rom.reset_vector, rom.irq_vector);
 
     /* Load game config */
     GameConfig cfg = {0};
@@ -517,8 +812,27 @@ int main(int argc, char *argv[]) {
         }
         strcpy(cfg.cycle_seed_file, cycle_seed_override);
     }
+    if (cycle_capture_override) {
+        if (strlen(cycle_capture_override) >= sizeof(cfg.cycle_capture_file)) {
+            fprintf(stderr, "Error: cycle capture path is too long\n");
+            return 1;
+        }
+        strcpy(cfg.cycle_capture_file, cycle_capture_override);
+    }
+    if (fds_input) {
+        if (!(cycle_accurate || cfg.cycle_accurate)) {
+            fprintf(stderr, "[NESRecomp] '%s' is a Famicom Disk System image: FDS titles build on the cycle "
+                            "backend only (--cycle-accurate or [game] cycle_accurate = true)\n", rom_path);
+            return 1;
+        }
+        static CycFdsProgram fds_prog;
+        if (!fds_program(rom_path, fds_bios_arg, &cfg, &rom, &fds_prog)) return 1;
+        bool ok = cyc_codegen_emit(&rom, &cfg, output_prefix, &fds_prog);
+        rom_free(&rom);
+        return ok ? 0 : 1;
+    }
     if (cycle_accurate || cfg.cycle_accurate)
-        return cyc_codegen_emit(&rom, &cfg, output_prefix) ? 0 : 1;
+        return cyc_codegen_emit(&rom, &cfg, output_prefix, NULL) ? 0 : 1;
 
     /* Load annotations sidecar */
     AnnotationTable at = {0};

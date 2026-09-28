@@ -189,6 +189,9 @@ void cpu_jam_cycle(void);
 /* Execute one instruction at cpu.pc on the interpreter (cpu6502_interp.c).
  * Includes interrupt entry when one is pending. */
 void cpu_interp_step(void);
+/* Bytes each opcode occupies in the instruction stream (cpu6502_interp.c,
+ * generated from the same templates): 1-3, and 2 for BRK. */
+extern const uint8_t cpu6502_op_length[256];
 
 #ifdef __cplusplus
 }

@@ -10,6 +10,13 @@
 HwMachine hw;
 HwCart hw_cart;
 HwPpu ppu;
+/* hw_machine.c pieces the FDS HLE tier (hw_fds_hle.c) links against. */
+int hw_dma_stalls;
+bool cyc_debug_peek(uint16_t addr, uint8_t *value) { (void)addr; *value = 0; return false; }
+/* The code watch (hw_machine.c): no compiled RAM views here. */
+uint8_t hw_code_watch[HW_CODE_BYTES];
+static void no_code_write(unsigned phys, uint8_t value) { (void)phys; (void)value; }
+void (*hw_code_write)(unsigned phys, uint8_t value) = no_code_write;
 
 static uint8_t prg[0x80000], chr[0x80000];
 static unsigned checks;

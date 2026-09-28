@@ -4,15 +4,19 @@ import argparse
 from pathlib import Path
 import re
 import subprocess
+import sys
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import nested_build  # noqa: E402
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--out', type=Path, required=True)
-    ap.add_argument('--cmake', default='cmake')
-    ap.add_argument('--generator')
+    nested_build.add_arguments(ap)
     args = ap.parse_args()
+    tc = nested_build.Toolchain.from_args(args)
     root = Path(__file__).resolve().parents[2]
     out = args.out.resolve()
     project = out / 'existing project'
@@ -35,23 +39,18 @@ def main():
         'nesrecomp_add_cycle_game(existing_game ROM "game data/test #1.nes" '
         'GAME_CONFIG "game data/game.toml" HEADLESS)\n', newline='\n')
     def run(argv, log, success=True):
-        p = subprocess.run([str(v) for v in argv], capture_output=True, text=True,
+        p = subprocess.run([str(v) for v in argv], capture_output=True, text=True, env=tc.environment(),
                            timeout=900, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         text = p.stdout + p.stderr
         (out / log).write_text(text, encoding='utf-8', newline='\n')
         assert (p.returncode == 0) == success, (argv, p.returncode, text[-4000:])
         return text
-    configure = [args.cmake, '-S', project, '-B', binary, '-DCMAKE_BUILD_TYPE=Release']
-    if args.generator:
-        configure += ['-G', args.generator]
+    configure = tc.configure_command(project, binary)
     run(configure, 'configure.log')
-    build = [args.cmake, '--build', binary, '--config', 'Release', '--parallel', '2']
-    suffix = '.exe' if hasattr(subprocess, 'CREATE_NO_WINDOW') else ''
+    build = tc.build_command(binary, 2)
     def check(stage, value, native):
         run(build, f'{stage}-build.log')
-        exe = binary / 'Release' / ('existing_game' + suffix)
-        if not exe.exists():
-            exe = binary / ('existing_game' + suffix)
+        exe = tc.executable(binary, 'existing_game')
         trace = out / (stage + '.txt')
         output = run([exe, rom, '--frames', '3', '--hash-out', trace], stage + '.log')
         lines = trace.read_text().splitlines()

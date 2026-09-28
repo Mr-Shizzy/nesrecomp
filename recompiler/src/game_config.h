@@ -360,6 +360,30 @@ typedef struct {
      * interpreter (written by the cycle-accurate host's --miss-log), used as
      * extra discovery entry points. Resolved relative to game.toml. */
     char             cycle_seed_file[512];
+    /* [game] cycle_capture_file: RAM code that ran on the interpreter with no
+     * compiled view (the cycle host's --capture-log: instructions, chunk
+     * snapshots, bytes rewritten under a view). The compiler seeds disk files
+     * with it and compiles snapshots of code no disk file holds. Resolved
+     * relative to game.toml. */
+    char             cycle_capture_file[512];
+    /* [game] fds = true and [fds] image / bios: a Famicom Disk System title.
+     * The paths are resolved relative to game.toml. The compiler builds the
+     * RAM Adapter's BIOS as the program's ROM (cycle backend only). */
+    bool             fds;
+    char             fds_image[512];
+    char             fds_bios[512];
+    /* [fds] hle = "auto-swap,fast-load": the HLE axes the program asks for by
+     * default (common/nes_fds_hle.h); empty = none. */
+    char             fds_hle[128];
+    /* [game] console = "nes" | "famicom" | "default": the audio output stage
+     * the cycle host uses by default (runner/cyc cyc_set_console); 0 = the
+     * board's default, 1 = nes, 2 = famicom. */
+    uint8_t          console;
+    /* [game] cycle_inline_jsr = ["E7BB:2", ...]: subroutines that take N
+     * bytes of inline arguments after the JSR and return past them, so the
+     * cycle-accurate discovery continues at JSR + 3 + N. */
+    struct { uint16_t target; uint8_t bytes; } cycle_inline_jsr[64];
+    int              cycle_inline_jsr_count;
 } GameConfig;
 
 /* Initialize to empty (no dispatch tables, prefix derived from ROM name) */

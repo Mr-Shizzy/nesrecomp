@@ -119,6 +119,43 @@ typedef struct {
     uint32_t lfsr;
 } Hw5B;
 
+/* The FDS RAM Adapter's registers and the drive's head/transfer state
+ * (hw_fds.c). The disk sides themselves live in hw_fds.c: they are media,
+ * kept across power cycles. */
+typedef struct {
+    uint16_t irq_reload, irq_counter;
+    uint8_t  irq_enabled, irq_repeat;          /* $4022 */
+    uint8_t  disk_regs, sound_regs;            /* $4023 */
+    uint8_t  write_data;                       /* $4024 */
+    uint8_t  ctrl;                             /* $4025 as written */
+    uint8_t  motor_on, reset_transfer, read_mode, crc_control, crc_enable, transfer_irq;
+    uint8_t  ext_out;                          /* $4026 */
+    uint8_t  timer_irq, disk_irq;              /* /IRQ sources */
+    uint8_t  transfer, read_data, bad_crc;     /* $4030/$4031 */
+    uint8_t  end_of_head, gap_ended, scanning, prev_crc_control, at_end;
+    uint16_t crc;
+    uint32_t delay, position;
+    /* The sound unit (hw_fds.c "Sound"): Mesen's FdsAudio, its volume and
+     * modulator channels (BaseFdsChannel, ModChannel), field for field. */
+    uint8_t  wave[64], wave_write;             /* $4040-$407F, $4089.7 */
+    uint8_t  sound_reg[0x0B];                  /* $4080-$408A as written */
+    uint8_t  vol_speed, vol_gain, vol_env_off, vol_increase;   /* $4080 */
+    uint8_t  mod_speed, mod_gain, mod_env_off, mod_increase;   /* $4084 */
+    uint16_t vol_freq, mod_freq;               /* $4082/$4083, $4086/$4087: 12 bits */
+    uint32_t vol_timer, mod_timer;             /* CPU cycles to the next envelope tick */
+    uint8_t  master_speed;                     /* $408A, both envelopes */
+    uint8_t  env_disabled, wave_halt;          /* $4083 bits 6, 7 */
+    uint8_t  master_vol;                       /* $4089 bits 0-1 */
+    int8_t   mod_counter;                      /* $4085: 7-bit signed */
+    uint8_t  mod_disabled;                     /* $4087.7 */
+    uint8_t  mod_pos;                          /* 0-63 */
+    uint8_t  mod_table[64];                    /* 3-bit steps, each written twice by $4088 */
+    uint16_t mod_overflow, wave_overflow;      /* 16-bit phase accumulators */
+    int32_t  mod_output;                       /* the pitch adjustment */
+    uint8_t  wave_pos;                         /* 0-63 */
+    uint8_t  out_level;                        /* 0-63: the channel's output */
+} HwFds;
+
 typedef struct {
     uint8_t *prg;
     uint32_t prg_len;
@@ -149,6 +186,7 @@ typedef struct {
     uint8_t  mirroring;         /* HwMirroring, as the cartridge drives CIRAM A10 */
     uint8_t  watch_ppu_addr;    /* the mapper needs every PPU address (MMC3) */
     uint8_t  watch_cpu;
+    uint8_t  clock_late;        /* the board is clocked before the CPU's access (FDS) */
 
     /* Work RAM at $6000-$7FFF. Boards without it leave the bus open there. */
     uint8_t  wram[0x20000];
@@ -174,6 +212,7 @@ typedef struct {
         int16_t irq_prescaler;
         uint8_t irq_mode;
         Mmc5State mmc5;
+        HwFds fds;
         HwVrc6Audio vrc6_audio;
         HwNamco namco;
         HwJaleco jaleco;
@@ -234,6 +273,22 @@ void hw_clock_run_ticks(int n);
 /* A CPU or DMA bus access through the memory map. */
 uint8_t hw_bus_read(uint16_t addr);
 void    hw_bus_write(uint16_t addr, uint8_t value);
+
+/* The code watch: RAM bytes that some compiled RAM view folds to a constant
+ * (cyc_ramview.c fills it). Indexed by physical RAM byte: CPU RAM 0-$7FF,
+ * then the FDS PRG RAM ($6000-$DFFF) from HW_CODE_PRG_RAM. Every store that
+ * reaches RAM (CPU writes; the DMAs only read) goes through hw_bus_write or
+ * fds_cpu_write, which call hw_code_write before a watched byte changes
+ * value. It observes and never alters what the machine does. */
+#define HW_CODE_PRG_RAM 0x800u
+#define HW_CODE_BYTES   (HW_CODE_PRG_RAM + 0x8000u)
+extern uint8_t hw_code_watch[HW_CODE_BYTES];
+extern void (*hw_code_write)(unsigned phys, uint8_t value);
+HW_ALWAYS_INLINE void hw_code_store(uint8_t *cell, unsigned phys, uint8_t value)
+{
+    if (hw_code_watch[phys] && *cell != value) hw_code_write(phys, value);
+    *cell = value;
+}
 
 /* ------------------------------------------------------------------------- */
 /* PPU (hw_ppu.c)                                                            */
@@ -361,6 +416,13 @@ void    hw_set_controller(int port, uint8_t buttons);
 /* Audio (hw_apu.c). */
 void    apu_audio_enable(bool on, int sample_rate);
 size_t  apu_audio_read(int16_t *out, size_t max);
+/* The console output stage (cyc_set_console): 0 = by board, 1 = NES,
+ * 2 = Famicom (CycConsole). apu_console() is the model in effect. */
+void    apu_set_console(int console);
+int     apu_console(void);
+/* One output sample's level straight into the output stage, as the mixer's
+ * per-sample average would be (tests: the stage's impulse response). */
+void    apu_debug_emit(double level);
 /* The channels' current output levels: pulse 1, pulse 2, triangle, noise
  * (0-15) and DMC (0-127), and the APU's IRQ output. For co-simulation; the
  * tone generators only run while audio is enabled. */

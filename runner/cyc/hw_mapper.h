@@ -67,6 +67,10 @@ bool hw_cart_nt_read(uint16_t addr, bool read_bus, uint8_t *value);
 bool hw_cart_nt_write(uint16_t addr, uint8_t value);
 uint16_t hw_cart_nt_a10(uint16_t addr);
 double hw_cart_audio_level(void);
+/* The board was only ever made for the Famicom and has expansion audio (the
+ * Disk System, Namco 163, VRC6, VRC7): its audio output defaults to the
+ * Famicom's output stage (cyc_set_console). */
+bool hw_cart_famicom_only(void);
 
 /* Every address the PPU puts on its bus: MMC3's IRQ counter clocks on
  * filtered rising edges of A12. Call hw_cart_ppu_addr(), which is free when the loaded
@@ -81,6 +85,9 @@ void hw_cart_ppu_data_read(void);
 void hw_cart_ppu_rd(bool reading);
 /* Once per completed CPU cycle, including cycles stolen by DMA. */
 void hw_cart_cpu_clock(void);
+/* Once per CPU cycle at tick 11, after the IRQ sample and before the next
+ * access (hw_cart.clock_late boards: the FDS, clocked as Mesen does). */
+void hw_cart_cpu_clock_late(void);
 
 /* The mapper's /IRQ output, ORed into the CPU's IRQ input with the 2A03's
  * own frame and DMC interrupts. */

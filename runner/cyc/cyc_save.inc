@@ -67,16 +67,15 @@ static bool save_load(const char *path, unsigned region)
     if (!ok) fprintf(stderr,"invalid save %s: expected exactly %zu bytes\n",path,n);
     return ok;
 }
-static bool save_write(const char *path, unsigned region)
+/* Write n bytes to path atomically: a complete, flushed temporary file
+ * replaces the old one, or the old one stays. */
+static bool save_atomic(const char *path, const uint8_t *buffer, size_t n)
 {
-    if (!path) return true;
-    size_t n=cyc_nvram_size(region);
-    uint8_t *buffer=(uint8_t *)malloc(n);
     char *temporary=(char *)malloc(strlen(path)+64);
-    if (!n || !buffer || !temporary) { free(buffer); free(temporary); return false; }
-    bool ok=cyc_nvram_export(region,buffer,n);
+    if (!temporary) return false;
+    bool ok=true;
     int fd=-1;
-    for (unsigned attempt=0;ok && attempt<100;++attempt) {
+    for (unsigned attempt=0;attempt<100;++attempt) {
         snprintf(temporary,strlen(path)+64,"%s.tmp-%lu-%u",path,(unsigned long)save_pid(),attempt);
         fd=save_open(temporary);
         if (fd>=0 || errno!=EEXIST) break;
@@ -98,6 +97,15 @@ static bool save_write(const char *path, unsigned region)
 #endif
     }
     if (fd>=0 && !ok) remove(temporary);
+    free(temporary); return ok;
+}
+static bool save_write(const char *path, unsigned region)
+{
+    if (!path) return true;
+    size_t n=cyc_nvram_size(region);
+    uint8_t *buffer=(uint8_t *)malloc(n);
+    if (!n || !buffer) { free(buffer); return false; }
+    bool ok=cyc_nvram_export(region,buffer,n) && save_atomic(path,buffer,n);
     if (!ok) fprintf(stderr,"cannot write save %s; previous file retained\n",path);
-    free(buffer); free(temporary); return ok;
+    free(buffer); return ok;
 }

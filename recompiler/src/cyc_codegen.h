@@ -14,6 +14,18 @@
 #include "game_config.h"
 #include "rom_parser.h"
 
-bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *output_prefix);
+/* A Famicom Disk System program: rom is the RAM Adapter (mapper 20) whose PRG
+ * ROM is the BIOS, which is all that is compiled; code the BIOS loads from
+ * disk into PRG RAM runs on the interpreter. The generated program records
+ * the BIOS identity and game.toml's media as the host's defaults. */
+typedef struct {
+    uint32_t bios_crc32;
+    char     bios_path[1024];    /* absolute */
+    char     image_path[1024];   /* absolute, or empty */
+    char     hle[128];           /* game.toml [fds] hle, checked; empty = none */
+} CycFdsProgram;
+
+bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *output_prefix,
+                      const CycFdsProgram *fds);
 /* Write the cycle-accurate interpreter (runner/cyc/cpu6502_interp.c). */
 bool cyc_codegen_emit_interpreter(const char *path);

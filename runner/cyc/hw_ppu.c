@@ -819,11 +819,12 @@ HW_ALWAYS_INLINE void advance_dot(void)
     if (++ppu.dot > 340) {
         ppu.dot = 0;
         if (++ppu.scanline > 261) ppu.scanline = 0;
+        if (ppu.scanline == hw_observe_line) hw_observe_hit = hw_frame_done = true;
     }
     if (ppu.scanline >= 241) {
         if (ppu.scanline == 241) {
             if (ppu.dot == 0) ppu.vblank_pending = 1;
-            else if (ppu.dot == 1) hw_frame_done = true;
+            else if (ppu.dot == 1) hw_frame_done = hw_frame_end_hit = true;
         } else if (ppu.scanline == 260 && ppu.dot == 340) {
             ppu.odd_frame = !ppu.odd_frame;
         } else if (ppu.scanline == 261 && ppu.dot == 1) {

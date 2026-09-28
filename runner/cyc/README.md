@@ -37,6 +37,7 @@ the few pixels that still differ.
 | CPU ↔ hardware interface | `hw.h` | NESRecomp's own |
 | Master clock, CPU bus, cartridge loading | `hw_machine.c` | NESRecomp's own |
 | Mappers ([coverage](MAPPERS.md)) | `hw_mapper.h`, `hw_mapper.c` | NESRecomp's own |
+| FDS RAM Adapter, drive, sound unit | `hw_fds.c`, `hw_fds_audio.c` | NESRecomp's own |
 | PPU (2C02) | `hw_ppu.c` | NESRecomp's own |
 | APU, DMAs, controller ports, audio | `hw_apu.c` | NESRecomp's own |
 | Palette | `hw_palette.c` (NTSC signal model) | NESRecomp's own |
@@ -138,8 +139,9 @@ control leaves compiled code.
 
 ### The interpreter
 
-Code in RAM, open bus execution, instructions that wrap past `$FFFF`, and
-addresses discovery did not reach run on `cpu6502_interp.c`. It is the output
+Code in RAM that no compiled view covers (see [Code in RAM](#code-in-ram)),
+open bus execution, instructions that wrap past `$FFFF`, and addresses
+discovery did not reach run on `cpu6502_interp.c`. It is the output
 of the same template functions with the operand bytes read at run time instead
 of folded:
 
@@ -212,27 +214,146 @@ NESRecomp AccuracyCoin.nes --game game.toml                              # regen
 A frame ends at the first instruction boundary at or after the PPU reports
 VBlank, in recompiled, interpreted and oracle runs alike.
 
+### Code in RAM
+
+A Famicom Disk System game is code in RAM: the BIOS loads its files from the
+disk into PRG RAM (`$6000-$DFFF`) with ordinary CPU stores, often several
+different files at the same address over a session. The disk image is a build
+input, though, so the recompiler knows every byte those files can put there.
+It compiles code in RAM from **images** of RAM:
+
+- every PRG file of every side of the disk at its load address, hidden files
+  and files that overlap each other included (a file's part below `$0800` is a
+  CPU RAM image);
+- every snapshot a run captured (below), for code no file holds as it ran:
+  routines the program copies or generates, and disk code whose compiled view
+  was not valid when it ran.
+
+An image is discovered like ROM, from the game's vectors (`$DFF6/$DFF8/$DFFA`
+NMI as `$0100` selects, `$DFFC` reset, `$DFFE` IRQ), JMP/JSR targets (a target
+that leaves one image seeds every image covering it, since any of them may be
+resident then; one in the BIOS seeds the BIOS), and captured instructions. It
+is then cut into **views**: the instructions that local control flow (fall-
+through, branches, JMP, JSR returns, not calls) connects inside one 1KB chunk.
+A view folds **only its own instructions' bytes** — its *dependency* — and
+nothing else: dummy reads of the next byte, pointer reads and all data are read
+at run time. Views equal in instructions and bytes (the same code in two files)
+merge. Each compiles to one C function in `<prefix>_cyc_rNN.c`, with its
+dependency as `(address, length)` runs and the bytes they must hold
+(`CycRamView`, `cyc_recomp.h`); `<prefix>_cyc_views.txt` names the image each
+came from.
+
+At run time (`cyc_ramview.c`) a view is entered only while RAM holds its
+dependency:
+
+- dispatch at a RAM address looks up the views with an instruction starting
+  there; a view already known to be valid is entered at once, an unknown one is
+  compared with RAM first (matching makes it valid, differing makes it
+  invalid), and if none holds, the interpreter runs the instruction — correct
+  by construction;
+- a **write watch** marks every RAM byte some view folds (`hw_code_watch`). All
+  RAM stores go through `hw_bus_write` and `fds_cpu_write` (the DMAs only
+  read), and a store that changes a watched byte demotes every view folding it
+  to unknown. A store to a byte no view folds — a variable next to code — costs
+  one table load and changes nothing, so code and data can share a page;
+- **a store that can reach a byte some view folds ends the block** if it
+  invalidated a view: compiled RAM code tests `cyc_ram_code_dirty` after every
+  store whose address range can reach the program's folded bytes (the
+  compiler knows them all; stores to the stack page or to variables no view
+  folds carry no test) and returns to the scheduler, which validates the next
+  instruction afresh. This is the RAM form of "a write that can reach a bank
+  register ends the block". An instruction's operands are fetched before its
+  stores (a JSR pushes between its operand fetches, so the stack page is never
+  compiled), and interrupts and DMA never write RAM, so no folded instruction
+  runs after its bytes change.
+
+Code that rewrites itself is compiled from the evidence a run records. The
+capture keeps the values stores wrote over folded bytes that no compiled view
+holds there. A value that a disk file holds there is a file loading over
+another, which content-keyed views already handle. Any other value is the
+program rewriting its code: an instruction whose **operand** bytes are rewritten
+(or that ran with operands no file has there) is compiled to read them at run
+time — the interpreter's template with its address and opcode constant, which
+returns to the scheduler when done — so its view never depends on them; an
+instruction whose **opcode** is rewritten is compiled alone, one view per
+content, so the code around it keeps a valid view whichever instruction it
+holds.
+
+**The capture loop** (psxrecomp's overlay model). The interpreter records the
+RAM code it ran with no valid view: each instruction as it ran (address and
+bytes), and per 1KB chunk a snapshot taken when such code ran, one per distinct
+code layout; the watch adds the rewritten bytes. `--capture-log FILE` writes it
+(merged across runs), and `[game] cycle_capture_file` (or
+`NESRecomp --cycle-capture-file`, `CAPTURE_FILE`/`NESRECOMP_CYCLE_CAPTURES` in
+a [project build](PROJECTS.md)) feeds it back as a build input, like the seed
+file:
+
+```bash
+FdsGame game.fds --frames 3000 --input route.txt --capture-log captures.txt
+NESRecomp game.fds --game game.toml --cycle-capture-file captures.txt
+```
+
+A captured instruction seeds every disk file that holds it as it ran, and each
+snapshot is compiled from what ran in it only (its data is not decoded), so a
+capture never adds guesses. CPU RAM `$0000-$07FF` (not the stack page) works
+the same way for any board; PRG RAM views need the FDS's unbanked RAM.
+
+Measured (alignment 0; each row also native = `--interp-only` = `cyc_interp`
+on `--hash-out` at all four alignments; "after" = compiled with the capture of
+one run of the same route; the 7 cycles left are the power-on reset):
+
+| Program, route | Frames | Native before (disk files only) | Native after one capture | RAM views |
+|----------------|--------|--------------------------------|--------------------------|-----------|
+| SMB2J, boot to title | 800 | 97.5% | 100.0% | 290 |
+| Otocky, side B at 1258 | 3000 | 100.0% | 100.0% (no capture needed) | 207 |
+| Nazo no Murasame-jou, title, menu, name entry | 6000 | 87.2% | 100.0% | 263 |
+| Esper Dream, title, side B, name entry | 7200 | 99.1% | 100.0% | 727 |
+| Dead Zone, title, menu, name entry | 6000 | 100.0% (716 instructions interpreted) | 100.0% | 479 |
+| AccuracyCoin (CPU RAM) | 4,324 | 100.0% (29,273 cycles interpreted) | 100.0% (2,129) | 280 |
+
+Before RAM views the FDS rows were 10.3% (SMB2J) to 68.1% of their cycles on
+the interpreter. AccuracyCoin with its captured RAM code still passes 144/144
+and matches the oracle on every frame at all four alignments. Speed is the
+hardware model's either way: SMB2J 3,000 frames went from 315 to 326 fps native
+(311 to 314 `--interp-only`), Otocky from 343 to 364 (334 to 337). The write
+watch costs nothing measurable. `tools/cyc/test_cyc_ramviews.py` (CTest
+`cyc_ramview_test`) checks a synthetic disk whose code rewrites itself every
+way above (operands, the next opcode, overlays over each other, a copy over its
+own tail, an NMI patching the loop it interrupts, stores through every
+addressing mode, a variable beside code), before and after a capture.
+
 ### Reading a coverage number
 
-A run that is not 100% native says where the rest of its cycles went:
+A run says where its cycles went:
 
 ```
-mode=native frames=20000 cycles=595608176 native_cycles=337726733 (56.7%)
-  interpreted: ROM 0 (0.0%, add to cycle_seed_file)  RAM 321881443 (54.2%, written at run time, not compilable)
+mode=native frames=800 cycles=23822067 native_cycles=23223334 (97.5%)
+  native: ROM 21372061 (89.7%)  RAM views 1851273 (7.8%)
+  interpreted: ROM 0 (0.0%, add to cycle_seed_file)  RAM 0 (0.0%, CPU RAM code no view covers: --capture-log)  PRG RAM 598726 (2.5%, disk code no view covers: --capture-log)
+  ram views: 24 compiled (24 usable here), 2541 entries, 14 validated, 0 rejected, 0 invalidated by stores, 0 block exits after code stores, 189922 RAM instructions interpreted
 ```
 
-The two are acted on differently. ROM cycles are entry points discovery did not
-reach: `--miss-log` lists them and seeding them compiles them, so that number
-should reach 0. RAM cycles are instructions the program wrote at run time —
-code that is not in the ROM image, and that a static recompiler therefore
-cannot compile at any effort. `--miss-log` also lists the RAM addresses that
-started an instruction, as comments (the recompiler skips them), with the
-number of distinct opcode bytes ever seen at each: 1 means only operands change
-there, more means the byte is an opcode on one pass and an operand on another.
-Mapperless (Demo), an NROM demo whose effects run from patched zero-page
-routines, is 100% of its ROM cycles native and 56.7% overall for that reason —
-over 45,000 frames, 364 of its 870 RAM instruction addresses saw more than one
-opcode, so there is no fixed instruction stream there to compile.
+(SMB2J's boot, compiled from its disk alone.) The interpreted cycles are acted
+on by where they started. ROM cycles are entry points discovery did not reach:
+`--miss-log` lists them and seeding them compiles them. RAM cycles (CPU RAM,
+and the FDS's PRG RAM) are code that no compiled view held as it ran: disk code
+reached only through RTS or JMP-indirect dispatch, code the program copied or
+generated, code whose view a store had just made stale. `--capture-log` records
+it and compiling with that file compiles it (see [Code in RAM](#code-in-ram)),
+so both numbers should reach 0: the same SMB2J boot after one capture run is
+100.0% native (7 cycles are the power-on reset sequence), 10.3% of it RAM views.
+The `ram views` line counts entries into views, views compared with RAM
+(validated or rejected), views a store invalidated, and blocks that returned
+after such a store; the event ring has each of these (`view.*`,
+`ram.interp`, and a per-frame `view.frame`).
+
+`--miss-log` still lists the RAM addresses that started an instruction on the
+interpreter, as comments, with the number of distinct opcode bytes seen at
+each: 1 means only operands change there, more means the byte is an opcode on
+one pass and an operand on another. Mapperless (Demo), an NROM demo whose
+effects run from patched zero-page routines, is 100% of its ROM cycles native
+and 56.7% overall without a capture file — over 45,000 frames, 364 of its 870
+RAM instruction addresses saw more than one opcode.
 
 **What the percentage is and is not.** It says how much of the program's work
 was performed by compiled code rather than interpreted — provenance, not
@@ -281,6 +402,284 @@ had exactly that problem at first — it sat in TriCNES's half-dot handler — a
 SMB3 disagreed with it at those two alignments until it moved to the end of
 `_EmulatePPU()`.
 
+### Famicom Disk System (`hw_fds.c`, `hw_fds_audio.c`, `cyc_ring.c`)
+
+The RAM Adapter is board 20 ([MAPPERS.md](MAPPERS.md#fds-ram-adapter-mapper-20)):
+the recompiler compiles the BIOS (`disksys.rom`) as the program's fixed ROM at
+$E000-$FFFF, and the host loads it with a disk image instead of an iNES file:
+
+```bash
+NESRecomp game.fds --fds-bios bios/disksys.rom --cycle-accurate   # or game.toml [fds] image/bios
+FdsGame game.fds --fds-bios bios/disksys.rom                        # defaults: game.toml's media
+FdsGame --fds-boot-disk none --frames 1200 --screenshot nodisk.png  # the BIOS's insert-disk screen
+FdsGame otocky.fds --fds-event 1199:eject --fds-event 1258:insert=B --frames 3000
+```
+
+Only the BIOS its `bios/disksys.toml` (or, for a compiled program, the one it
+was compiled from) identifies is accepted: 8192 bytes, CRC32 5E607DCF. The
+BIOS passes arguments inline after its JSRs (`$E844`, `$E3E7`); discovery
+knows its routines that do (`FDS_BIOS_INLINE_JSR` in `cyc_codegen.c`, and
+`[game] cycle_inline_jsr` for any program), so the BIOS runs 100% native with
+no seed file. Code the BIOS loads from the disk into PRG RAM runs as compiled
+RAM views ([Code in RAM](#code-in-ram)); what no view covers runs on the
+interpreter, counted as "PRG RAM" and recorded by `--capture-log`. Disk events (`--fds-event`, or `F DISK_EJECT`,
+`F DISK_SELECT SIDE`, `F DISK_INSERT [SIDE]` lines in an `--input` file) apply
+before frame F runs, where nesref applies its script's disk commands; the SDL
+window has F1 (eject / insert), F3 (next side) and F4 (the drive bar), see
+[Disk saves and sides](#disk-saves-and-sides).
+
+The drive and the board record every event from power-on into an always-on
+ring (`cyc_ring.h`): register accesses (a polling loop folds into one event
+with a repeat count), IRQ edges and acknowledges, each clocked byte with its
+position, motor, rewind, ready and end-of-side transitions, CRC checks and side
+changes. `--ring-out FILE [--ring-frames A:B]` writes it at exit, and
+`NESRECOMP_CYC_RING_DUMP=FILE` does for any host; nothing needs arming.
+
+Against nesref (Mesen), `tools/cyc/fds_oracle_gates.py` compares CPU RAM,
+PRG RAM, nametables, CHR RAM and the picture frame by frame; `--frame-log FILE
+--frame-log-at mesen` gives it cyc's memories at the point where Mesen ends a
+frame (scanline 240 dot 0, one scanline before cyc's VBlank frame end), so a
+frame that ends mid-loop is compared at the same instant. Measured (interpreter
+and native builds, alignment 0, `--ram-init zeros`):
+
+| Run | Frames | Identical frames | Notes |
+|-----|--------|------------------|-------|
+| BIOS, no disk | 1-1200 | CPU RAM, PRG RAM, CHR RAM 1200; nametables 1195; picture 1194 | "PLEASE SET DISK CARD" from 155 |
+| SMB2J, disk in at power-on | 1-800 | picture 794, PRG RAM 799, nametables 793, CHR RAM 797, CPU RAM 731 | title first at frame 751 in both |
+| Otocky, eject at 1199, side B at 1258 | every 10th, 1180-3000 | picture, PRG RAM, nametables, CHR RAM 183/183; CPU RAM 182 | OTOCKY SELECT at 1800 |
+
+The no-disk run also matches on every one of frames 1-1200 except the
+pictures of frames 1-6 and the nametables of 1-5: CIRAM and palette RAM
+power-on contents, which the hardware leaves undefined and Mesen zeroes. The
+SMB2J differences past frame 6 are one or two bytes each, caught mid-update or
+left on the stack by an NMI: at matched frame points the two CPU cycle counts
+differ by -5 to +3 cycles (+2 in 518 of 770 frames), so the snapshot or the
+NMI lands one instruction apart (in the title's 6-cycle idle loop the pushed
+return address alternates between $605B and $605D). Drive byte clocks keep
+that same +2 offset from Mesen's counter. In the SMB2J boot the BIOS is 89.7% of
+the CPU cycles and disk-loaded code the other 10.3%, all native once compiled
+with one capture ([Code in RAM](#code-in-ram)); the gate counts above are the
+same with and without RAM views.
+
+#### Disk saves and sides
+
+FDS games save by writing their disk. The drive writes into the in-memory
+disk as the BIOS clocks bytes out; the host keeps the result in a disk save
+file and never writes the image:
+
+```bash
+FdsGame game.fds --save-file game.fdssave          # headless: only with --save-file
+FdsGame game.fds                                   # windowed: <exe dir>/saves/<image stem>.fdssave
+FdsGame game.fds --no-save                         # windowed, nothing kept
+FdsGame game.fds --fds-import-ips game.ips         # start from a Mesen/nesref save
+FdsGame game.fds --save-file s.fdssave --fds-export-ips game.ips   # also write Mesen's form
+```
+
+The save (`common/nes_fds_save.h`) holds the whole drive stream of every side
+that differs from what the loader builds from the image, byte for byte as the
+BIOS wrote it (gaps, $80 marks, blocks, CRCs), plus the disk's identity (CRC-32
+and FNV-1a of the side data, so a headered image and its raw twin share a
+save). Whole sides rather than a diff: a diff of the rebuilt stream is only
+valid against the loader and options that built it, while a whole side
+reloads unchanged under any of them. A save that is damaged, from a newer
+version or for another disk is refused at start (exit 2) and left as it is.
+It is rewritten atomically (a flushed temporary file replaces it) once the
+drive has been idle for 60 frames after a change, which is right after the
+BIOS finishes a save; at the latest 3600 frames after the first unsaved
+change; when the disk is ejected; and at exit. Frames, not wall time, so a
+run saves identically at any speed.
+
+Mesen saves an IPS patch of the image file instead (`<stem>.ips`, gaps and CRCs
+dropped by its `RebuildFdsFile`). `--fds-export-ips` writes that form with
+the same algorithm; for Nazo no Murasame-jou's name save it is byte for byte
+the `.ips` nesref writes for the same input, and booting either machine on its
+own save reads the same data back (`tools/cyc/fds_save_compare.py`: PRG RAM,
+nametables, CHR RAM and picture identical on the compared frames). Writes land
+under the head, not two bytes behind as in Mesen 0.9.9 ([MAPPERS.md](MAPPERS.md#fds-ram-adapter-mapper-20)).
+
+The window shows a drive bar under the picture (F4 hides it): the side in the
+drive or EMPTY with the side F1 will insert, the drive lamp and MOTOR while it
+turns, and the save's state (SAVE LOADED, UNSAVED, SAVED F<frame>). It is drawn
+in window rows the picture never covers and is not part of the emulated
+frame, so screenshots and every comparison see only the machine's picture.
+F1 ejects or inserts, F3 picks the next side while the drive is empty; scripts
+use `--fds-event` or `DISK_` lines. Automatic side changes are the optional
+[HLE tier](#the-hle-tier-hw_fds_hlec-commonnes_fds_hleh).
+
+Ring events: `fds.wrun` (a write run: side, first position, bytes stored and
+changed), `fds.wblock` (a block written the BIOS way: code, mark position,
+length), `fds.save` (reason idle/eject/exit/timeout, sides, bytes) and
+`fds.load`. `tools/cyc/test_cyc_fds_saves.py` (CTest `cyc_fds_saves`) checks it all
+across processes on a synthetic saving program.
+
+#### The sound unit (`hw_fds_audio.c`)
+
+The RAM Adapter's wavetable channel: a 64-step, 6-bit wavetable ($4040-$407F,
+writable and held while $4089.7 is set), a 12-bit pitch ($4082/$4083), the
+volume envelope ($4080) and the modulator: a 64-step table of 3-bit steps
+($4088, two steps a write, only while $4087.7 stops the unit), a 7-bit
+signed counter ($4085) that wraps, its own envelope ($4084) and pitch
+($4086/$4087), and the pitch adjustment Mesen took from the nesdev wiki
+(the "strange" rounding, the -64..191 wrap and the round-to-nearest of the
+second product). $408A sets both envelopes' speed (8 x (speed + 1) x $408A
+cycles a tick, $E8 at power-on), $4089.0-1 the master volume (36/24/17/14 of
+36), $4090/$4092 read the gains back and $4040-$407F the sample at the wave
+position while writes are disabled. It runs on every CPU cycle, since the
+CPU can read all of that back, whether or not audio is being output.
+
+The reference is nesref's core, libretro/Mesen master 0102910: its
+`FdsAudio.h` differs from the 0.9.9 release in four places, each visible in
+nesref (wave read-back at the position, the mod output applying while the
+unit is stopped, $4084/$4085 recomputing it, $E8 at power-on). `--fds-profile
+mesen2` follows Mesen2 b9fa69d (pitch writes recompute the mod output, the
+wave runs on and the output holds while writes are enabled); `hardware` is
+Mesen2's synthesis with the nesdev output stage. `hw_fds_audio.c` has the
+table.
+
+Output: Mesen mixes the 6-bit output unfiltered at 20 per step against
+477600 / (8128 / n + 100) for the pulses; the runtime's mix is the same curve
+at 1/5000 of that scale, so the FDS is 20/5000 per step, in phase with the
+2A03 (full volume = 1.69 full pulses). The `hardware` profile uses the
+nesdev level (2.4 pulses) and its ~2 kHz one-pole low-pass instead; that
+column is a judgment call, not oracle-verified. That low-pass is the RAM
+Adapter's own: nesdev's FDS audio page gives it for the FDS signal ("This
+output signal is affected by a filter"), lidnariq derived it (1.36-1.75 kHz)
+from the adapter board's resistors and capacitors (nesdev forum t=10233),
+rainwarrior fitted ~2 kHz to Famicom + FDS recordings, and NSFPlay applies it
+(2000 Hz) to the FDS channel alone. So it filters the FDS sound before the
+adapter mixes it with the 2A03's and is not part of the console output stage;
+the FDS defaults to the `famicom` output stage (APU section below) in every
+profile. Neither Mesen models the
+newer nesdev findings ($4083.7 speeding the envelopes up, $4087.6, 16-cycle
+wave/mod ticks, $4091), and no profile does.
+
+The ring records envelope gain changes (`fds.env`, folded per frame) and, per
+frame, the wave and mod table steps (`fds.audio`); a step per event would be
+thousands a frame and evict the drive's events. `--frame-log` records the
+sound unit's state (`cyc_fds_audio_state`, Mesen's field order) with each
+frame.
+
+Checks:
+
+- `cyc_fds_board_test`: envelope timing to the cycle, the gain limits, the
+  master speeds, $4083 bits 6 and 7, read-back, master volume, the mod table
+  and counter wrap, and the pitch adjustment for values nesref's savestates
+  held and for each branch of the formula; the wave in all three profiles.
+- `cyc_fds_audio_test` (`tools/cyc/test_cyc_fds_audio.py`): synthetic FDS
+  programs, compiled from their disks, run native, `--interp-only` and on
+  `cyc_interp` at all four alignments with identical `--hash-out`; every
+  sound register read and every frame's sound state must match
+  `tools/cyc/fds_audio_model.py`, a model of Mesen's FdsAudio written apart
+  from `hw_fds_audio.c`, and the ring summaries must count what the model
+  counts; the PCM must hold the pulse and FDS tones at their pitch with
+  Mesen's level ratio (and 2.4x through the low-pass in `hardware`).
+- `tools/cyc/fds_audio_gates.py` (owner files, not CI): a route on a cyc build
+  and on nesref, compared by model replay, by the FdsAudio snapshot in
+  Mesen's savestates frame by frame, and in PCM with the A/B analyzer
+  (`tools/nes_audio_ab.py`), also with the output stage cyc used (`--console`)
+  applied to nesref's PCM so synthesis and output stage separate.
+
+#### The HLE tier (`hw_fds_hle.c`, `common/nes_fds_hle.h`)
+
+LLE (the real BIOS against the modelled drive) is the reference; the HLE tier
+is opt-in conveniences on top of it, in the shape of psxrecomp's
+`psx_bios_hle_plan()`: one pure function, `nes_fds_hle_plan()`, decides every
+axis from what was asked for and what the BIOS and disk support, every call
+site uses its answer, and an axis a BIOS or disk cannot support is refused
+with the reason (never forced). Off by default. With every axis off the
+machine runs exactly as without the tier: `--hash-out` of all owner routes at
+all four alignments is byte-identical to the build before it.
+
+```bash
+FdsGame game.fds --fds-hle auto-swap,fast-load   # or all / off / no-auto-swap / no-fast-load
+NESRECOMP_FDS_HLE=fast-load FdsGame game.fds     # the environment
+# game.toml: [fds] hle = "auto-swap,fast-load"   # the program's default
+FdsGame game.fds --fds-hle fast-load --realtime --frames 2000   # paced like the window; reports load time
+```
+
+Precedence per axis: live toggle (window F6 auto swap, F7 fast load) >
+`--fds-hle` > `NESRECOMP_FDS_HLE` > `[fds] hle` > off. The host prints the
+plan (`fds hle: auto-swap on (cli), fast-load REFUSED: ...`) whenever any
+source asked for anything; the drive bar's second line shows it (`HLE SWAP
+FAST`, `LOADING`, `AUTO SWAP TO DISK 1 SIDE B`).
+
+**Auto swap** needs the BIOS's disk-ID check anchor: the routine every
+ID-checking BIOS call runs ($E445 in disksys.rom; LoadFiles, WriteFile,
+AppendFile, CheckFileCount, AdjustFileCount and SetFileCount all reach it with
+the pointer to the caller's 10-byte disk ID at $00). It is built in for
+5E607DCF (and checked against the code there); another BIOS declares
+`hle_id_check` / `hle_id_pointer` in its identity file. Without it, or on a
+one-sided image, auto swap is refused. The signal is the request itself, read
+where the RAM Adapter sees it: the opcode fetch of the anchor (a read of it
+followed on the next cycle by the read of the byte after it, so data reads and
+interrupts do not count), then the 10 ID bytes matched against every side's
+disk header ($FF matches anything, as the BIOS compares). This observation is
+always on (ring `fds.idreq` + `fds.idbytes`, whatever the plan). With auto
+swap on:
+
+- a request matching exactly one side that is not in the drive: eject at the
+  end of the frame, 3 frames empty, insert that side. The BIOS is then still
+  in its wait before it starts the motor (~40 frames: Otocky's request at
+  cycle 21,623,595 reached the BIOS's $4032 disk test 1,185,167 cycles, 39.8 frames, later),
+  so the call finds its side and never fails;
+- a request the drive satisfies, one matching several sides (`ambiguous`) or
+  none (`nomatch`) changes nothing;
+- a game that shows "set side B" and watches $4032 for the disk to come out
+  makes no request until it has gone out and back in. After a disk access, 20
+  frames of $4032 polling with the drive idle (gaps up to 30 frames) count as
+  waiting: eject, 10 frames empty, put the same side back (a bump, harmless if
+  the program was not waiting); its next request then swaps as above. If it
+  keeps waiting with no request in between (a game that reads the header
+  itself), the next round inserts the next side. This path is inferred, like
+  Mesen's own auto-insert (FDS.cpp: > 20 $4032 reads, eject, 77 frames, insert
+  disk 1 side A, switch the side at $E445); a program that polls $4032 during
+  play without wanting a swap gets one bump per disk access.
+
+A host eject or insert takes the drive back from the tier until the next
+request. Owner titles (native, auto swap, no disk events): Otocky, Esper Dream
+and Nazo no Murasame-jou are all "watch" titles (no BIOS call until the disk
+is swapped); each had side B in 36-41 frames after it began to poll (Otocky
+f=691 -> 729, Esper 1008 -> 1049, Murasame 1484 -> 1520), against 94-105
+frames with Mesen's auto-insert through nesref (side B at Otocky ~796, Esper
+~1102, Murasame ~1585; sampled every 2-10 frames). Every request was unambiguous; in the owner's library
+(114 images, 198 sides) no two sides of an image share a disk ID and every
+side has a header, so exact requests are never ambiguous there. No library
+image has more than two sides: multi-disk swaps are fixture-checked only.
+
+**Fast load** needs only the drive. The machine is the same LLE machine frame
+for frame; only the host's pacing changes: load frames (the drive clocking
+bytes with the transfer released, data through $4031/$4024, the head rewinding
+or spinning up, the BIOS between its ID check and starting the motor, an auto
+swap in progress) run back to back without audio, and the window shows about
+60 of them a second. Load spans are always recorded (ring `fds.span`, marked
+`fast` when fast load ran them). A drive the BIOS leaves turning to the end of
+the side is not loading. Nothing the program can see changes: with fast load
+alone, and with auto swap + fast load against auto swap alone, `--hash-out`
+is identical on every owner route and fixture, so the state after each load is
+LLE's exactly (frame counters included, since the same frames run). Wall-clock
+time of the load frames, `--realtime`, auto swap on, native builds:
+
+| title (route) | frames | load frames | paced | fast load |
+|---|---|---|---|---|
+| SMB2J (boot) | 800 | 334 | 5.53 s | 0.58 s |
+| Otocky (boot, side B) | 2000 | 631 | 10.43 s | 1.20 s |
+| Esper Dream (boot, side B) | 2600 | 694 | 11.48 s | 2.00 s |
+| Nazo no Murasame-jou (boot, side B) | 3000 | 617 | 10.20 s | 1.00 s |
+| Dead Zone (two loads) | 1600 | 750 | 12.40 s | 2.14 s | A deeper
+HLE (servicing the BIOS's file calls directly) would skip those frames and so
+change what the program counts during a load; it is not done.
+
+Ring: `fds.idreq`, `fds.idbytes`, `fds.span`, `fds.hle` (config, keep, swap,
+ambiguous, nomatch, wait, eject, insert, cancel, with the evidence: the match
+mask, the side in the drive, the poll frames). Tests: `cyc_fds_hle_plan_test`
+(the plan over every request x capability, precedence, parsing, ID matching)
+and `cyc_fds_hle_test` (`tools/cyc/test_cyc_fds_hle.py`: a synthetic
+BIOS-and-game program, `tools/cyc/fds_hle_fixtures.py`, with 2- and 4-sided
+disks: a program that asks the BIOS, one that watches, one that never asks, a
+poller, short polls, ambiguous / unmatched / multi-disk / satisfied requests,
+a self-checking game; native = `--interp-only` = `cyc_interp`, fast load
+identity, config precedence, refusals, host disk changes, `--realtime`).
+
 ### Timing model (`hw_internal.h`, `hw_machine.c`)
 
 The NTSC master clock runs 12 ticks per CPU cycle and 4 per PPU dot. Within a
@@ -318,9 +717,39 @@ is checked against the oracle. The tone generators (pulse duty and sweep,
 envelopes, triangle linear counter, noise LFSR, DMC output unit) and the mixer
 follow the nesdev descriptions, run only when audio is enabled, and are
 checked against NES_MiSTer's APU. Audio is 16-bit mono at the host's rate
-(`cyc_audio_enable`/`cyc_audio_read`), with the console's 90 Hz and 440 Hz
-high-pass and 14 kHz low-pass stages; the SDL host plays it and
-`--wav-out FILE` records it.
+(`cyc_audio_enable`/`cyc_audio_read`) through a console output stage; the SDL
+host plays it and `--wav-out FILE` records it.
+
+The output stage has two models (`cyc_set_console`, `--console`, game.toml
+`[game] console = "nes" | "famicom"`):
+
+- `nes`: the front-loader's 90 Hz and 440 Hz first-order high-pass and 14 kHz
+  low-pass (nesdev APU Mixer: blargg's measurements of the RCA output, matched
+  by lidnariq to its 150 ohm / 10 uF output coupling and the 47 kohm / 220 pF
+  around the inverter amplifier). Discretized as RC sections at the output
+  rate, so at 48 kHz the low-pass is -5.2 dB at 14 kHz rather than -3 dB.
+- `famicom`: a 37 Hz first-order high-pass, the only stage nesdev's APU Mixer
+  page gives for the Famicom ("followed by the unknown (and varying)
+  properties of the RF modulator and demodulator"). Like `nes`, it stops at
+  the console's audio output; the RF modulator and the TV's demodulator and
+  FM de-emphasis are left out, as the TV behind the NES's RCA jack is. A
+  judgment call, not oracle-verified: Mesen applies no output stage.
+
+The default follows the board: `famicom` for boards made only for the Famicom
+that carry expansion audio (the Disk System, Namco 163, VRC6, VRC7: the NES
+cartridge slot has no audio return, so their sound was only heard on a
+Famicom), `nes` for the rest, including MMC5 and FME-7/5B, which also have NES
+boards. The cartridge's audio is mixed before the stage (on the Famicom the
+2A03's audio leaves on cartridge pin 46 and returns mixed on pin 45). The FDS
+RAM Adapter's ~2 kHz low-pass is the adapter's, on the 2C33's sound only, not
+the console's; it stays with `--fds-profile hardware`.
+
+`cyc_console_audio_test` checks each model's response to sines and a step
+against its RC sections and the board defaults; `cyc_console_audio_pcm`
+(`tools/cyc/test_cyc_console_audio.py`) checks the rendered defaults, pins
+the nes and famicom renders of synthetic programs by SHA-256 (the nes ones are
+those of the build before the models existed) and compares their spectra with
+the models. `tools/cyc/console_output.py` is the models in Python.
 
 ## Verification
 
@@ -665,6 +1094,16 @@ after changing compilers.
 
 ## Open questions
 
+- **The Famicom's audio past its 37 Hz high-pass.** The `famicom` output
+  stage stops at the console's audio output. A stock HVC-001 is heard through
+  its RF modulator and a TV, whose FM de-emphasis is a ~2.1 kHz first-order
+  low-pass unless the modulator pre-emphasizes (lidnariq, nesdev forum
+  t=13419; the NES modulator appears not to), and the AV Famicom (HVC-101)
+  has its own audio circuit; neither is measured or modelled. Which board a
+  Famicom-only game ran on is decided by mapper number, so a Japanese title
+  on a board that also had NES releases (MMC5, FME-7/5B, and every board
+  without expansion audio) defaults to `nes`: the header does not say which
+  console a cartridge was sold for.
 - **`$2001` landing inside a tile prefetch, and the Mapperless sprite column.**
   The two picture differences from Mesen still open (see
   [Against Mesen's picture](#against-mesens-picture)). Both involve `$2001`
@@ -758,11 +1197,12 @@ describes trace equality, while the printed test scores describe accuracy.
 - Four-screen boards (iNES flag 6 bit 3), including mapper-206 Gauntlet, are
   rejected because cartridge nametable RAM is not implemented.
 - A separate host from the main runner (`runner/src`).
-- Code the program writes at run time runs on the interpreter, not as compiled
-  code, and no amount of seeding changes that: the instructions are not in the
-  ROM to compile. Correctness is unaffected — the interpreter comes from the
-  same templates — but a program built around self-modifying code will not
-  reach a high native share. Mapperless (Demo) is the worked example.
+- Code in RAM is compiled only from images the compiler has seen: disk files,
+  and snapshots a capture run recorded. Code a run has not yet executed with
+  no view (a new route, new generated code) runs on the interpreter until it is
+  captured; correctness is unaffected either way. Cartridge work RAM
+  (`$6000-$7FFF`, banked on several boards) has no views; CPU RAM and the FDS
+  PRG RAM do.
 - Speed: a headless AccuracyCoin run takes about 9.6 s (~450 fps, ~7.5× real
   time) on a Ryzen 7 5700; 3,000 frames of its rendering menu take 11.8 s
   (~250 fps). SMB3's 3,000-frame playthrough takes 14.1 s (~213 fps, ~3.5×
