@@ -20,6 +20,8 @@ typedef struct {
 
 /* Provided by the generated umbrella file. */
 extern const char    *cyc_native_program_name;
+/* game.toml [game] name: the title players see, or NULL (then the program name). */
+extern const char    *cyc_native_display_name;
 extern const uint32_t cyc_native_prg_hash;
 extern const uint32_t cyc_native_cart_hash;
 /* FDS programs (mapper 20): the BIOS CRC32 the compiler verified against

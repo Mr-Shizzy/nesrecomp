@@ -21,10 +21,11 @@ python ../../../../tools/cyc/cyc_verify.py --exe build/Release/AccuracyCoinRecom
 build/Release/cyc_helper_test
 ```
 
-With SDL2 (`runner/external/SDL2`) the build also has a window: arrows, X/Z for
-A/B, Enter/Right Shift for Start/Select, Tab to fast-forward, F2 to switch
-between recompiled code and the interpreter live, F12 for a screenshot. Start
-on the main menu runs every test.
+With SDL2 (`runner/external/SDL2`) the build also has a window with the cycle
+host's bindings (runner/cyc/README.md, The window: arrows, Z/X for A/B,
+Return/Backslash for Start/Select, Tab to fast-forward, F12 for a screenshot;
+a `NESRECOMP_DEV_UI` build adds F2 to switch between recompiled code and the
+interpreter live). Start on the main menu runs every test.
 
 Expected: 144/144 at alignment 0; 143, 141 and 143 at alignments 1-3, where the
 oracle fails the same tests ($2002 flag timing, OAM corruption, frozen OAM2

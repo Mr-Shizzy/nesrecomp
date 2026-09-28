@@ -20,6 +20,15 @@ project(nesrecomp_cyc C CXX)
 #                    load with a synthetic BIOS and multi-side disks
 #   cyc_console_audio_test / cyc_console_audio_pcm  the console output stage
 #                    (nes / famicom): defaults, responses, pinned renders
+#   cyc_disk_action_test  the two-press Disk action's state machine
+#   cyc_input_test   the window's input actions, bindings and config.ini
+#                    (needs SDL2 for key and controller names; no window)
+#   cyc_window_run   the window over its TCP server, hidden, dummy video driver:
+#                    bindings, the Disk action and toast, the controller, the
+#                    menu (with recomp-ui), HLE settings, dev vs production
+#   cyc_disk_action_run  the Disk action on the whole machine (cyc_interp):
+#                    swaps, peeks, time-outs, cycling, and the toast never in
+#                    --hash-out / --frame-log / screenshots
 # Tests that build a generated program use this build's toolchain
 # (nested_build.json below, tools/cyc/nested_build.py).
 # Game projects use runner/cyc/cyc.cmake instead.
@@ -58,6 +67,76 @@ add_test(NAME cyc_cart_header_test COMMAND cyc_cart_header_test)
 # source precedence, the plan over every request x capability, disk-ID matching.
 add_executable(cyc_fds_hle_plan_test fds_hle_plan_test.c)
 add_test(NAME cyc_fds_hle_plan_test COMMAND cyc_fds_hle_plan_test)
+
+# The player's Disk action (cyc_disk_action.h): peek, swap, time-out, cycling,
+# retargeting, a swap behind a disk write, an empty drive, the menu's choice.
+add_executable(cyc_disk_action_test disk_action_test.c cyc_disk_action.c)
+if(MSVC)
+    target_compile_definitions(cyc_disk_action_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME cyc_disk_action_test COMMAND cyc_disk_action_test)
+
+# The window's input actions and their persistence (cyc_input.h, cyc_settings.h).
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../external/SDL2/cmake")
+find_package(SDL2 CONFIG QUIET)
+if(SDL2_FOUND)
+    add_executable(cyc_input_test input_test.c cyc_input.c cyc_settings.c)
+    target_include_directories(cyc_input_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
+    target_link_libraries(cyc_input_test PRIVATE SDL2::SDL2)
+    target_compile_definitions(cyc_input_test PRIVATE SDL_MAIN_HANDLED)
+    if(MSVC)
+        target_compile_definitions(cyc_input_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+    if(WIN32)
+        add_custom_command(TARGET cyc_input_test POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:cyc_input_test>)
+    endif()
+    add_test(NAME cyc_input_test COMMAND cyc_input_test ${CMAKE_CURRENT_BINARY_DIR})
+    # The window itself, on the standalone interpreter host: production and dev
+    # builds, driven over TCP on a hidden window, SDL dummy video (never the desktop)
+    # by tools/cyc/test_cyc_window.py. -DNESRECOMP_RECOMP_UI=<recomp-ui> adds the
+    # runtime menu (and its checks) to the production one.
+    set(NESRECOMP_RECOMP_UI "" CACHE STRING "recomp-ui checkout for cyc_window's runtime menu (optional)")
+    add_executable(cyc_window ${NESRECOMP_CYC_SOURCES} cyc_native_none.c)
+    add_executable(cyc_window_dev ${NESRECOMP_CYC_SOURCES} cyc_native_none.c)
+    foreach(t cyc_window cyc_window_dev)
+        target_include_directories(${t} PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
+        target_link_libraries(${t} PRIVATE ${NESRECOMP_CYC_LIBRARIES})
+        if(MSVC)
+            target_compile_definitions(${t} PRIVATE _CRT_SECURE_NO_WARNINGS)
+        endif()
+    endforeach()
+    nesrecomp_cyc_enable_sdl(cyc_window NO_DEV_UI)
+    nesrecomp_cyc_enable_sdl(cyc_window_dev DEV_UI)
+    set(window_ui "")
+    if(NESRECOMP_RECOMP_UI)
+        include("${NESRECOMP_RECOMP_UI}/recomp_ui.cmake")
+        nesrecomp_cyc_enable_recomp_ui(cyc_window)
+        set(window_ui --recomp-ui)
+        # The host's side of the launcher against a scripted launcher: what it
+        # hands over, and every edit coming back into config.ini.
+        add_executable(cyc_ui_launcher_test ui_launcher_test.c cyc_ui_launcher.c cyc_settings.c cyc_input.c
+            cyc_fds_bios.c)
+        target_include_directories(cyc_ui_launcher_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS}
+            "${NESRECOMP_RECOMP_UI}/src" "${NESRECOMP_RECOMP_UI}/src/common")
+        target_link_libraries(cyc_ui_launcher_test PRIVATE SDL2::SDL2)
+        target_compile_definitions(cyc_ui_launcher_test PRIVATE SDL_MAIN_HANDLED _CRT_SECURE_NO_WARNINGS
+            "CYC_LAUNCHER_ROM_SHA256=\"ab00000000000000000000000000000000000000000000000000000000000001\"")
+        if(WIN32)
+            add_custom_command(TARGET cyc_ui_launcher_test POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:cyc_ui_launcher_test>)
+        endif()
+        add_test(NAME cyc_ui_launcher_test COMMAND cyc_ui_launcher_test ${CMAKE_CURRENT_BINARY_DIR})
+    endif()
+    add_test(NAME cyc_window_run
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/cyc/test_cyc_window.py
+                --window $<TARGET_FILE:cyc_window> --dev-window $<TARGET_FILE:cyc_window_dev> ${window_ui}
+                --out ${CMAKE_CURRENT_BINARY_DIR}/window_run)
+    set_tests_properties(cyc_window_run PROPERTIES TIMEOUT 900)
+else()
+    message(STATUS "SDL2 not found: cyc_input_test and cyc_window are not built")
+endif()
 
 # FDS media: the fixture generator runs first (FIXTURES_SETUP), then the test.
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
@@ -220,6 +299,17 @@ add_test(NAME cyc_fds_hle_test
             --recompiler $<TARGET_FILE:NESRecomp> --interp $<TARGET_FILE:cyc_interp>
             --out ${CMAKE_CURRENT_BINARY_DIR}/fds_hle_test ${NESRECOMP_NESTED_BUILD_ARGS})
 set_tests_properties(cyc_fds_hle_test PROPERTIES TIMEOUT 1800)
+# The Disk action end to end on the standalone interpreter host
+# (tools/cyc/test_cyc_disk_action.py, the synthetic program and 2- and 4-sided
+# disks of fds_hle_fixtures.py): the swap reaches a program waiting for side B
+# through the normal drive path (byte-identical to --fds-event), a peek or a
+# timed-out press changes nothing, presses cycle every side of a two-disk
+# image, and the toast shows in --present-out but never in the picture,
+# --hash-out, --frame-log or the ring, at all four alignments.
+add_test(NAME cyc_disk_action_run
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/cyc/test_cyc_disk_action.py
+            --interp $<TARGET_FILE:cyc_interp> --out ${CMAKE_CURRENT_BINARY_DIR}/disk_action_run)
+set_tests_properties(cyc_disk_action_run PROPERTIES TIMEOUT 900)
 # The console output stage end to end (tools/cyc/test_cyc_console_audio.py):
 # board defaults in cyc_interp, the nes and famicom renders pinned by SHA-256,
 # their spectra against the models, and game.toml [game] console compiled in.

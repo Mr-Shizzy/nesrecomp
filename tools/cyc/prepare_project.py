@@ -42,6 +42,17 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def launcher_digest(path):
+    """SHA-256 as recomp-ui's launcher hashes a picked file: after a 16-byte
+    iNES header, after a 512-byte copier header, else the whole file (an FDS
+    image, headered or raw)."""
+    data = path.read_bytes()
+    skip = 512 if len(data) % 1024 == 512 else 0
+    if len(data) > 16 and data[:4] == b'NES\x1a':
+        skip = 16
+    return hashlib.sha256(data[skip:]).hexdigest()
+
+
 def cmake_quote(value):
     value = str(value)
     equals = '='
@@ -122,7 +133,8 @@ def main():
         stamp.write_text(json.dumps({p.name: digest(p) for p in sources}), encoding='utf-8', newline='\n')
     manifest = ''
     for name, values in [('CYC_PROJECT_SOURCES', sources), ('CYC_PROJECT_DEPENDS', dependencies),
-                         ('CYC_PROJECT_ROM', [rom]), ('CYC_PROJECT_ROM_SHA256', [digest(rom)])]:
+                         ('CYC_PROJECT_ROM', [rom]), ('CYC_PROJECT_ROM_SHA256', [digest(rom)]),
+                         ('CYC_PROJECT_LAUNCHER_SHA256', [launcher_digest(rom)])]:
         manifest += 'set(' + name + '\n' + ''.join('  ' + cmake_quote(p.as_posix() if isinstance(p, Path) else p) + '\n' for p in values) + ')\n'
     (out / 'sources.cmake').write_text(manifest, encoding='utf-8', newline='\n')
 

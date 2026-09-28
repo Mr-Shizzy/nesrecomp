@@ -417,6 +417,16 @@ FdsGame otocky.fds --fds-event 1199:eject --fds-event 1258:insert=B --frames 300
 
 Only the BIOS its `bios/disksys.toml` (or, for a compiled program, the one it
 was compiled from) identifies is accepted: 8192 bytes, CRC32 5E607DCF. The
+host takes the first of these that exists (`cyc_fds_bios.h`): `--fds-bios`,
+the window's config.ini `[FDS] Bios`, `game.toml` `[fds] bios`,
+`bios/disksys.rom` beside the image, `bios/disksys.rom` in the current
+directory. recomp-ui's launcher runs the same lookup for the selected disk:
+when it finds nothing usable it says "FDS BIOS (disksys.rom) required" with a
+Select BIOS... button, checks the chosen file's identity (a wrong one is
+refused with its size and CRC), saves it as `[FDS] Bios`, and keeps PLAY
+disabled until a BIOS is present; Settings, SYSTEM changes or clears it. A
+cartridge never sees any of it. A windowed start without the launcher shows a
+missing BIOS in a message box; headless runs print it. The
 BIOS passes arguments inline after its JSRs (`$E844`, `$E3E7`); discovery
 knows its routines that do (`FDS_BIOS_INLINE_JSR` in `cyc_codegen.c`, and
 `[game] cycle_inline_jsr` for any program), so the BIOS runs 100% native with
@@ -424,9 +434,9 @@ no seed file. Code the BIOS loads from the disk into PRG RAM runs as compiled
 RAM views ([Code in RAM](#code-in-ram)); what no view covers runs on the
 interpreter, counted as "PRG RAM" and recorded by `--capture-log`. Disk events (`--fds-event`, or `F DISK_EJECT`,
 `F DISK_SELECT SIDE`, `F DISK_INSERT [SIDE]` lines in an `--input` file) apply
-before frame F runs, where nesref applies its script's disk commands; the SDL
-window has F1 (eject / insert), F3 (next side) and F4 (the drive bar), see
-[Disk saves and sides](#disk-saves-and-sides).
+before frame F runs, where nesref applies its script's disk commands. The
+player turns the disk with the bindable Disk action ([The window](#the-window));
+see also [Disk saves and sides](#disk-saves-and-sides).
 
 The drive and the board record every event from power-on into an always-on
 ring (`cyc_ring.h`): register accesses (a polling loop folds into one event
@@ -497,13 +507,15 @@ own save reads the same data back (`tools/cyc/fds_save_compare.py`: PRG RAM,
 nametables, CHR RAM and picture identical on the compared frames). Writes land
 under the head, not two bytes behind as in Mesen 0.9.9 ([MAPPERS.md](MAPPERS.md#fds-ram-adapter-mapper-20)).
 
-The window shows a drive bar under the picture (F4 hides it): the side in the
-drive or EMPTY with the side F1 will insert, the drive lamp and MOTOR while it
-turns, and the save's state (SAVE LOADED, UNSAVED, SAVED F<frame>). It is drawn
-in window rows the picture never covers and is not part of the emulated
+The player's Disk action (`cyc_disk_action.h`, [The window](#the-window))
+shows the drive and turns the disk; a dev build (`NESRECOMP_DEV_UI`) also has
+the drive bar under the picture (F4 hides it: the side in the drive or EMPTY
+with the side F1 will insert, the drive lamp and MOTOR while it turns, and the
+save's state: SAVE LOADED, UNSAVED, SAVED F<frame>), F1 (eject / insert) and
+F3 (next side while the drive is empty). None of it is part of the emulated
 frame, so screenshots and every comparison see only the machine's picture.
-F1 ejects or inserts, F3 picks the next side while the drive is empty; scripts
-use `--fds-event` or `DISK_` lines. Automatic side changes are the optional
+Scripts use `--fds-event` or `DISK_` lines (`F DISK_ACTION` presses the Disk
+action). Automatic side changes are the optional
 [HLE tier](#the-hle-tier-hw_fds_hlec-commonnes_fds_hleh).
 
 Ring events: `fds.wrun` (a write run: side, first position, bytes stored and
@@ -597,11 +609,14 @@ NESRECOMP_FDS_HLE=fast-load FdsGame game.fds     # the environment
 FdsGame game.fds --fds-hle fast-load --realtime --frames 2000   # paced like the window; reports load time
 ```
 
-Precedence per axis: live toggle (window F6 auto swap, F7 fast load) >
-`--fds-hle` > `NESRECOMP_FDS_HLE` > `[fds] hle` > off. The host prints the
-plan (`fds hle: auto-swap on (cli), fast-load REFUSED: ...`) whenever any
-source asked for anything; the drive bar's second line shows it (`HLE SWAP
-FAST`, `LOADING`, `AUTO SWAP TO DISK 1 SIDE B`).
+Precedence per axis: live toggle (a dev build's F6 auto swap, F7 fast load,
+F6 + n for axis n) > `--fds-hle` > `NESRECOMP_FDS_HLE` > the player's saved
+setting (the runtime menu's Disk Drive rows, config.ini `[FDS]`; windows only)
+> `[fds] hle` > off. The host prints the plan (`fds hle: auto-swap on (cli),
+fast-load REFUSED: ...`) whenever any source asked for anything; a dev build's
+drive bar shows it on its second line (`HLE SWAP FAST`, `LOADING`, `AUTO SWAP
+TO DISK 1 SIDE B`). Hosts list the axes from `nes_fds_hle_axes()` (word,
+settings key, label, help, field offsets), so a new axis is one row there.
 
 **Auto swap** needs the BIOS's disk-ID check anchor: the routine every
 ID-checking BIOS call runs ($E445 in disksys.rom; LoadFiles, WriteFile,
@@ -1133,6 +1148,73 @@ after changing compilers.
    need explicit implementation and tests.
 2. **Main runner integration**: save states and the launcher (input is now the
    `--input` schedule headless and the keyboard under SDL).
+
+## The window
+
+`cyc_sdl.c` (SDL2), when a build has it. Everything the player presses is an
+action with a keyboard and a controller binding (`cyc_input.h`): each player's
+A B Select Start and D-pad, read from the keyboard or a game controller as
+config.ini `[Input] PlayerNSource` says, and the host shortcuts, read from
+the keyboard and every controller. Defaults (the nesrecomp NES layout):
+
+| Action | Keyboard | Controller |
+|---|---|---|
+| A, B, Select, Start | Z, X, Backslash, Return (player 1) | A, X, Back, Start |
+| D-pad | arrows | D-pad, left stick |
+| Disk (FDS only) | D | LB |
+| Menu | Escape | RB |
+| Fast-forward (held) | Tab | RT |
+| Screenshot (the picture, `cyc_shot_NNNN.png`) | F12 | - |
+| Fullscreen | F11 | - |
+
+A key or button bound to a shortcut belongs to the shortcut while it is
+held. config.ini beside the executable (`cyc_settings.h`; `--config FILE`)
+keeps the bindings (`[Keyboard.PlayerN]`, `[Gamepad.PlayerN]`,
+`[Keyboard.Shortcuts]`, `[Gamepad.Shortcuts]`: SDL key and controller names,
+`lefttrigger+`, `back+start` chords), the display and audio settings and the
+FDS HLE choices. Headless runs never read it.
+
+**Disk** (`cyc_disk_action.h`): the first press shows a toast with the drive's
+state (disk and side, motor, disk save) and the binding; each press while the
+toast is up turns the disk: eject, the drive empty for 30 frames, the next
+side in (disk 1 A, 1 B, 2 A, ... and around; a one-sided disk goes back in).
+A press while the drive is still empty moves on one more side and restarts
+the hold; an eject waits for a disk write to finish. After the toast times out
+(3 s) the next press only shows it again. The drive changes through the same
+eject and insert as `--fds-event`; headless, `F DISK_ACTION` in an `--input`
+file presses it, with emulated time as the toast's clock.
+`tools/cyc/test_cyc_disk_action.py` (CTest `cyc_disk_action_run`) checks a
+swap byte-for-byte against the same `--fds-event`s at every alignment.
+
+**recomp-ui** (`cyc_ui.h`): a game built with it (project.cmake finds the
+game's `recomp-ui/` submodule, or `-DNESRECOMP_RECOMP_UI=<checkout>`) opens
+recomp-ui's launcher first (the image, settings, and every binding, keyboard
+and controller, on its Controls page; `NESRECOMP_NO_LAUNCHER=1` skips it) and
+has recomp-ui's runtime menu on the Menu shortcut: display and audio, a Disk
+Drive section for a disk image only (the side in the drive, swap, eject /
+insert, and one row per HLE axis), the shortcut list, the game's own rows
+(`cyc_host_extras.h`) and Quit. The game pauses while the menu is open. The
+toast is recomp-ui's runtime toast; without recomp-ui the window draws it
+itself (`cyc_overlay.h`). Both are drawn after the picture, never into it.
+
+**Production and dev builds**: `NESRECOMP_DEV_UI` (CMake, default OFF) adds
+the drive bar, the dev keys (F1 eject / insert, F2 recompiled code /
+interpreter, F3 next side, F4 the bar, F6 + n HLE axis n) and the coverage in
+the title bar. Production builds have none of them.
+
+**Games** add to the window with `nesrecomp_add_cycle_game(... HOST_EXTRAS
+<sources>)` defining `cyc_host_extras()` (`cyc_host_extras.h`): a presented
+picture of their own size (widescreen), view modes for the menu's View mode
+row, extra menu rows, and their own config.ini `[Game]` keys.
+
+**TCP** (`cyc_tcp.h`; `--tcp PORT`, `NESRECOMP_CYC_TCP`, or `debug.ini` beside
+the executable for port 4370): JSON over newline as in [TCP.md](../../TCP.md).
+`key` and `pad` (an SDL virtual controller) hold input through the bindings,
+`action` holds an action, `disk`, `menu`, `hle`, `screenshot` (layer
+`picture`: the game alone; `ui`: everything the window drew), `state`,
+`read_ram`, `ring_dump`, `quit`. With `--hidden` and `SDL_VIDEODRIVER=dummy`
+nothing reaches a desktop; `tools/cyc/test_cyc_window.py` (CTest
+`cyc_window_run`) drives production and dev windows that way.
 
 ## Building
 

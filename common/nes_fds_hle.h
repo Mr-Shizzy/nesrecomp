@@ -29,11 +29,17 @@
  *              Needs only the drive; with an anchor a load also covers the
  *              BIOS's wait before it starts the motor.
  *
- * Requests come from four sources; a later one overrides an earlier one per
- * axis: game.toml [fds] hle (compiled into the program), the environment
- * (NESRECOMP_FDS_HLE), the command line (--fds-hle) and a live toggle (the SDL
- * host's keys). Each is a list of words: off / none, on / all, auto-swap,
- * fast-load, no-auto-swap, no-fast-load, separated by commas, spaces or +.
+ * Requests come from five sources; a later one overrides an earlier one per
+ * axis: game.toml [fds] hle (compiled into the program), the player's saved
+ * settings (the windowed host's config.ini [FDS], written by its runtime menu),
+ * the environment (NESRECOMP_FDS_HLE), the command line (--fds-hle) and a live
+ * toggle (the runtime menu, or a dev build's keys). Each text source is a list
+ * of words: off / none, on / all, auto-swap, fast-load, no-auto-swap,
+ * no-fast-load, separated by commas, spaces or +.
+ *
+ * Hosts that list the axes (a menu row or a dev key per axis) walk
+ * nes_fds_hle_axes() rather than naming the fields, so a new axis is one more
+ * row there and every host picks it up.
  *
  * Header-only C11, no runtime state: the whole decision matrix is unit-tested
  * directly (runner/cyc/fds_hle_plan_test.c). */
@@ -153,7 +159,9 @@ static inline bool nes_fds_hle_block1(const uint8_t *stream, uint32_t len, uint8
 
 /* ---- the plan ---- */
 typedef struct {
-    NesFdsHleAsk config, env, cli, live;   /* game.toml, NESRECOMP_FDS_HLE, --fds-hle, toggle */
+    /* game.toml, saved settings, NESRECOMP_FDS_HLE, --fds-hle, toggle. A source
+     * that says nothing must be NES_FDS_HLE_ASK_NONE: a zeroed ask asks for off. */
+    NesFdsHleAsk config, user, env, cli, live;
     bool     is_fds;                       /* the program runs the RAM Adapter */
     bool     have_anchor;                  /* the BIOS's disk-ID check anchor is known and verified */
     unsigned sides;                        /* sides in the image */
@@ -166,18 +174,21 @@ typedef struct {
      * boot-skip bug hid; hosts print these. */
     bool auto_swap_denied, fast_load_denied;
     const char *auto_swap_why, *fast_load_why;
-    /* Which source decided each axis: "default", "game.toml", "env", "cli", "toggle". */
+    /* Which source decided each axis: "default", "game.toml", "settings", "env",
+     * "cli", "toggle". */
     const char *auto_swap_from, *fast_load_from;
     /* The always-on disk-ID request observation (ring events) runs: it needs
      * only the anchor, whatever was asked for. */
     bool observe;
 } NesFdsHlePlan;
 
-static inline int8_t nes_fds_hle_pick(int8_t config, int8_t env, int8_t cli, int8_t live, const char **from)
+static inline int8_t nes_fds_hle_pick(int8_t config, int8_t user, int8_t env, int8_t cli, int8_t live,
+                                      const char **from)
 {
     *from = "default";
     int8_t v = 0;
     if (config >= 0) { v = config; *from = "game.toml"; }
+    if (user >= 0)   { v = user;   *from = "settings"; }
     if (env >= 0)    { v = env;    *from = "env"; }
     if (cli >= 0)    { v = cli;    *from = "cli"; }
     if (live >= 0)   { v = live;   *from = "toggle"; }
@@ -189,10 +200,10 @@ static inline NesFdsHlePlan nes_fds_hle_plan(NesFdsHleRequest r)
 {
     NesFdsHlePlan p;
     memset(&p, 0, sizeof(p));
-    int8_t want_swap = nes_fds_hle_pick(r.config.auto_swap, r.env.auto_swap, r.cli.auto_swap, r.live.auto_swap,
-                                        &p.auto_swap_from);
-    int8_t want_fast = nes_fds_hle_pick(r.config.fast_load, r.env.fast_load, r.cli.fast_load, r.live.fast_load,
-                                        &p.fast_load_from);
+    int8_t want_swap = nes_fds_hle_pick(r.config.auto_swap, r.user.auto_swap, r.env.auto_swap, r.cli.auto_swap,
+                                        r.live.auto_swap, &p.auto_swap_from);
+    int8_t want_fast = nes_fds_hle_pick(r.config.fast_load, r.user.fast_load, r.env.fast_load, r.cli.fast_load,
+                                        r.live.fast_load, &p.fast_load_from);
     p.observe = r.is_fds && r.have_anchor;
 
     /* Axis 1: auto swap. Structurally unavailable unless the request can be
@@ -217,6 +228,60 @@ static inline NesFdsHlePlan nes_fds_hle_plan(NesFdsHleRequest r)
         }
     }
     return p;
+}
+
+/* ---- the axes, for hosts that list them ----
+ *
+ * One row per axis: its word in a request list, the player-facing name and
+ * help, and where its request and its outcome live. A host menu shows a row
+ * per axis (on/off, refused with the reason), a dev build maps a key to each,
+ * config.ini stores each under `key`; none of them name the fields. */
+typedef struct {
+    const char *word;              /* the request word: "auto-swap" */
+    const char *key;               /* settings key: "AutoSwap" */
+    const char *label;             /* "Auto disk swap" */
+    const char *help;              /* one line for a menu */
+    size_t ask;                    /* offsetof(NesFdsHleAsk, <axis>) */
+    size_t on, denied, why, from;  /* offsetof(NesFdsHlePlan, ...) */
+} NesFdsHleAxis;
+
+static inline const NesFdsHleAxis *nes_fds_hle_axes(unsigned *count)
+{
+    static const NesFdsHleAxis axes[] = {
+        { "auto-swap", "AutoSwap", "Auto disk swap",
+          "Put in the side the game asks for.",
+          offsetof(NesFdsHleAsk, auto_swap), offsetof(NesFdsHlePlan, auto_swap),
+          offsetof(NesFdsHlePlan, auto_swap_denied), offsetof(NesFdsHlePlan, auto_swap_why),
+          offsetof(NesFdsHlePlan, auto_swap_from) },
+        { "fast-load", "FastLoad", "Fast disk loading",
+          "Run disk loads at full speed.",
+          offsetof(NesFdsHleAsk, fast_load), offsetof(NesFdsHlePlan, fast_load),
+          offsetof(NesFdsHlePlan, fast_load_denied), offsetof(NesFdsHlePlan, fast_load_why),
+          offsetof(NesFdsHlePlan, fast_load_from) },
+    };
+    if (count) *count = (unsigned)(sizeof(axes) / sizeof(axes[0]));
+    return axes;
+}
+
+static inline int8_t *nes_fds_hle_ask_axis(NesFdsHleAsk *a, const NesFdsHleAxis *axis)
+{
+    return (int8_t *)((char *)a + axis->ask);
+}
+static inline bool nes_fds_hle_plan_on(const NesFdsHlePlan *p, const NesFdsHleAxis *axis)
+{
+    return *(const bool *)((const char *)p + axis->on);
+}
+static inline bool nes_fds_hle_plan_denied(const NesFdsHlePlan *p, const NesFdsHleAxis *axis)
+{
+    return *(const bool *)((const char *)p + axis->denied);
+}
+static inline const char *nes_fds_hle_plan_why(const NesFdsHlePlan *p, const NesFdsHleAxis *axis)
+{
+    return *(const char *const *)((const char *)p + axis->why);
+}
+static inline const char *nes_fds_hle_plan_from(const NesFdsHlePlan *p, const NesFdsHleAxis *axis)
+{
+    return *(const char *const *)((const char *)p + axis->from);
 }
 
 #endif /* NES_FDS_HLE_H */

@@ -206,6 +206,7 @@ const uint8_t *cyc_fds_side_stream(unsigned side, uint32_t *len)
 uint32_t cyc_fds_disk_writes(void) { return media.writes; }
 uint64_t cyc_fds_disk_generation(void) { return media.generation; }
 bool     cyc_fds_motor_on(void) { return cyc_is_fds() && media.side >= 0 && F.motor_on; }
+bool     cyc_fds_writing(void) { return cyc_is_fds() && media.side >= 0 && F.motor_on && media.run.active; }
 
 const uint8_t *cyc_fds_side_base(unsigned side, uint32_t *len)
 {
