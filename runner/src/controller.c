@@ -171,6 +171,13 @@ int controller_instance_is_player(SDL_JoystickID instance_id, int player) {
 
 int controller_count(void) { return s_count; }
 
+int nesrecomp_rumble(int player, uint16_t low, uint16_t high, uint32_t ms) {
+    if (player < 1 || player > MAX_PADS) return 0;
+    int slot = s_route[player - 1];
+    if (slot < 0 || slot >= MAX_PADS || !s_pads[slot]) return 0;
+    return SDL_GameControllerRumble(s_pads[slot], low, high, ms) == 0;
+}
+
 void controller_shutdown(void) {
     for (int i = 0; i < MAX_PADS; i++) {
         if (s_pads[i]) { SDL_GameControllerClose(s_pads[i]); s_pads[i] = NULL; }

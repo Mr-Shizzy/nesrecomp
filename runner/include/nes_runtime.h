@@ -96,6 +96,10 @@ void nesrecomp_apply_video_settings(void);
  * Called on the producer thread; `rate` is the sample rate in Hz. */
 typedef void (*NesAudioFilter)(int16_t *samples, int count, int rate);
 void nesrecomp_set_audio_filter(NesAudioFilter fn);
+/* Rumble the gamepad routed to `player` (1-based): low/high are the big and
+ * small motor strengths (0-65535) for `ms` milliseconds; 0/0 stops it.
+ * Returns 1 if a pad took it, 0 if there is no pad or it has no rumble. */
+int nesrecomp_rumble(int player, uint16_t low, uint16_t high, uint32_t ms);
 /* Push a context marker into the dispatch ring (kind e.g. 'N'/'n' = NMI
  * enter/exit; tag = vblank depth or other context id). */
 void nes_dring_mark(char kind, uint16_t tag);
