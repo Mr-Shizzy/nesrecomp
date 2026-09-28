@@ -68,6 +68,24 @@ nesrecomp_add_cycle_game(MyFdsGame
     GAME_CONFIG "${CMAKE_SOURCE_DIR}/game.toml")   # [game] fds = true, [fds] bios = "bios/disksys.rom"
 ```
 
+## The window: recomp-ui, dev builds, game additions
+
+A windowed build (not `HEADLESS`, SDL2 found) takes recomp-ui's launcher and
+in-game menu from the game's `recomp-ui/` submodule when that checkout has
+what the cycle host needs (the runtime toast and the ROM-picker override);
+`-DNESRECOMP_RECOMP_UI=<checkout>` names another, `OFF` builds without it,
+and `NO_RECOMP_UI` opts one target out. An older submodule builds without it
+and says so. `BOXART file.tga` gives the launcher its art. Settings and every
+binding live in config.ini beside the executable
+([README.md, The window](README.md#the-window)).
+
+`-DNESRECOMP_DEV_UI=ON` builds the developer surface (the FDS drive bar, the
+F1-F4 and F6+ keys, coverage in the title bar); release builds leave it off.
+
+`HOST_EXTRAS <sources>` adds a game's own window code: `cyc_host_extras()`
+(`cyc_host_extras.h`) can present a wider picture (widescreen), offer view
+modes to the menu, add menu rows and keep its own config.ini `[Game]` keys.
+
 ## Audio output stage
 
 `game.toml` `[game] console = "nes"` or `"famicom"` compiles in the console
@@ -107,10 +125,11 @@ completed runs with matching input, executable and output digests.
 ## Current migration boundary
 
 This provides cartridge hardware, cycle timing, the cycle host's input/audio/
-video options and persistent cartridge saves. Legacy HD rendering, custom
-`extras.c` hooks, recomp-ui, Lua/mod interfaces, netplay and old save-state
-formats use the older runtime APIs and are not automatically ported by this
-build switch. A game's native enhancements need explicit cycle-host ports.
+video options, persistent cartridge saves, and recomp-ui's launcher and
+runtime menu with host-owned bindings (above). Legacy HD rendering, custom
+`extras.c` hooks, Lua/mod interfaces, netplay and old save-state formats use
+the older runtime APIs and are not automatically ported by this build switch;
+a game's window additions go through `HOST_EXTRAS` instead of `extras.c`.
 The older scanline runtime still has its original mapper set. Its renderer
 does not emit the PPU bus events needed for accurate MMC2/MMC4/MMC5 behavior;
 the integration therefore runs the validated cycle implementation directly.

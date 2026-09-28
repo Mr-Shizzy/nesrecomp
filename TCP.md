@@ -20,6 +20,18 @@ Search `runner/src/debug_server.c` — it is always there.
 
 ---
 
+## The cycle backend's window
+
+Cycle-backend builds (`runner/cyc`) have their own server with the same
+transport (`runner/cyc/cyc_tcp.c`, commands registered in `cyc_sdl.c`): on with
+`--tcp PORT`, `NESRECOMP_CYC_TCP=PORT`, or `debug.ini` beside the executable
+(port 4370). Commands: `ping`, `state`, `key` (an SDL key held through the
+bindings), `pad` (an SDL virtual game controller's buttons), `action`, `disk`
+(press / choose / eject / insert), `menu` (open, nav), `hle`, `screenshot`
+(`layer`: `picture` or `ui`), `read_ram`, `ring_dump`, `quit`, `help`. Run the
+window with `--hidden` and `SDL_VIDEODRIVER=dummy` to keep it off the desktop;
+see runner/cyc/README.md, The window.
+
 ## Ports
 
 Each game project uses its own port. Selection lives in
