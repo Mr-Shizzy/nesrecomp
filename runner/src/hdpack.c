@@ -842,7 +842,8 @@ static void blit_setup(const HdTile *t, int off_x, int off_y, int hmir, int vmir
                        int s, long *base, int *small_inc, int *large_inc) {
     int tileW = t->w;                /* 8*s */
     int src_off_x = hmir ? (7 - off_x) : off_x;
-    *base = (long)(off_y * s) * tileW + (long)src_off_x * s;
+    int src_off_y = vmir ? (7 - off_y) : off_y;     /* rows mirror like columns */
+    *base = (long)(src_off_y * s) * tileW + (long)src_off_x * s;
     *small_inc = 1; *large_inc = tileW - s;
     if (hmir) { *base += s - 1; *small_inc = -1; *large_inc = tileW + s; }
     if (vmir) { *base += (long)tileW * (s - 1); *large_inc = (hmir ? s : -s) - tileW; }
@@ -1113,8 +1114,11 @@ void hdpack_upscale(const uint32_t *native_fb, int native_w, uint32_t *hd_buf) {
                                                  p->bg_p0, p->bg_p1, p->bg_p2, p->bg_p3,
                                                  sx, sy, p)
                                    : NULL;
-            if (bt && !bt->fully_transparent) {
-                blit_over(dst, hd_w, bt, p->bg_ox, p->bg_oy, 0, 0, s);
+            if (bt) {
+                /* A fully transparent replacement hides the tile (Mesen
+                 * semantics): whatever is beneath shows through. */
+                if (!bt->fully_transparent)
+                    blit_over(dst, hd_w, bt, p->bg_ox, p->bg_oy, 0, 0, s);
             } else if (p->bg_has) {
                 if (s_opt_debug)      fill_block(dst, hd_w, 0xFFFF00FFu, s);  /* magenta */
                 else if (hide_orig)   { /* leave background/backdrop showing */ }
@@ -1129,8 +1133,9 @@ void hdpack_upscale(const uint32_t *native_fb, int native_w, uint32_t *hd_buf) {
                 HdTile *st = match_layer(1, p->sp_index, p->sp_t16,
                                          0, p->sp_p1, p->sp_p2, p->sp_p3,
                                          sx, sy, p);
-                if (st && !st->fully_transparent) {
-                    blit_over(dst, hd_w, st, p->sp_ox, p->sp_oy, p->sp_hm, p->sp_vm, s);
+                if (st) {
+                    if (!st->fully_transparent)      /* transparent = hidden */
+                        blit_over(dst, hd_w, st, p->sp_ox, p->sp_oy, p->sp_hm, p->sp_vm, s);
                 } else if (s_opt_debug) {
                     fill_block(dst, hd_w, 0xFF00FFFFu, s);   /* cyan: unmatched sprite */
                 } else if (!s_opt_hide_orig) {
