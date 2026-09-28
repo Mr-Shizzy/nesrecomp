@@ -135,9 +135,25 @@ typedef struct {
     uint8_t  end_of_head, gap_ended, scanning, prev_crc_control, at_end;
     uint16_t crc;
     uint32_t delay, position;
-    /* The sound unit's register side (its synthesis is phase 5). */
-    uint8_t  wave[64], wave_write, vol_gain, mod_gain;
+    /* The sound unit (hw_fds.c "Sound"): Mesen's FdsAudio, its volume and
+     * modulator channels (BaseFdsChannel, ModChannel), field for field. */
+    uint8_t  wave[64], wave_write;             /* $4040-$407F, $4089.7 */
     uint8_t  sound_reg[0x0B];                  /* $4080-$408A as written */
+    uint8_t  vol_speed, vol_gain, vol_env_off, vol_increase;   /* $4080 */
+    uint8_t  mod_speed, mod_gain, mod_env_off, mod_increase;   /* $4084 */
+    uint16_t vol_freq, mod_freq;               /* $4082/$4083, $4086/$4087: 12 bits */
+    uint32_t vol_timer, mod_timer;             /* CPU cycles to the next envelope tick */
+    uint8_t  master_speed;                     /* $408A, both envelopes */
+    uint8_t  env_disabled, wave_halt;          /* $4083 bits 6, 7 */
+    uint8_t  master_vol;                       /* $4089 bits 0-1 */
+    int8_t   mod_counter;                      /* $4085: 7-bit signed */
+    uint8_t  mod_disabled;                     /* $4087.7 */
+    uint8_t  mod_pos;                          /* 0-63 */
+    uint8_t  mod_table[64];                    /* 3-bit steps, each written twice by $4088 */
+    uint16_t mod_overflow, wave_overflow;      /* 16-bit phase accumulators */
+    int32_t  mod_output;                       /* the pitch adjustment */
+    uint8_t  wave_pos;                         /* 0-63 */
+    uint8_t  out_level;                        /* 0-63: the channel's output */
 } HwFds;
 
 typedef struct {

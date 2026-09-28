@@ -10,7 +10,8 @@
  * silently missing.
  *
  * Identical consecutive reads of one register (a polling loop) fold into one
- * event whose `repeat` counts the extra reads, so a wait loop costs one slot.
+ * event whose `repeat` counts the extra reads, so a wait loop costs one slot;
+ * an envelope's gain changes fold the same way within a frame.
  *
  * Host access: cyc_ring_dump() (cyc_host --ring-out FILE, --ring-frames A:B,
  * or NESRECOMP_CYC_RING_DUMP=FILE for any host, written at exit).
@@ -27,8 +28,7 @@ extern "C" {
 typedef enum {
     CYC_EV_NONE,
     /* FDS RAM Adapter registers ($4020-$4033, and the sound registers
-     * $4040-$4092 whose register side exists in phase 2). addr = register,
-     * value = the byte read or written. */
+     * $4040-$4092). addr = register, value = the byte read or written. */
     CYC_EV_FDS_READ,
     CYC_EV_FDS_WRITE,
     /* An interrupt source becoming asserted. value = FDS_IRQ_TIMER/DISK. */
@@ -90,6 +90,14 @@ typedef enum {
     CYC_EV_VIEW_EXIT,
     CYC_EV_RAM_INTERP,
     CYC_EV_VIEW_FRAME,
+    /* FDS sound unit (hw_fds_audio.c):
+     *   FDS_ENV    an envelope tick changed a gain: addr 0 = volume, 1 = mod,
+     *              value = the gain; the following ticks of that envelope in
+     *              the same frame fold into repeat (value = the latest gain)
+     *   FDS_AUDIO  end of a frame in which the sound unit stepped: value =
+     *              wave position steps, addr = mod table steps (<= $FFFF) */
+    CYC_EV_FDS_ENV,
+    CYC_EV_FDS_AUDIO,
     CYC_EV_KINDS
 } CycRingKind;
 

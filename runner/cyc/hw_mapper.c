@@ -1338,6 +1338,7 @@ double hw_cart_audio_level(void)
     if (hw_cart.mapper==85) return -(double)hw_cart.m.vrc7_output / 32768.0;
     if (hw_cart.mapper==69) return s5b_output();
     if (hw_cart.mapper==19) return namco_audio();
+    if (hw_cart.mapper==20) return fds_audio_level();
     return vrc6_board() ? -(double)vrc6_audio_dac() * (0.1488 / 15.0) : 0;
 }
 
@@ -1432,7 +1433,7 @@ uint64_t hw_cart_state_hash(uint64_t h)
 void hw_cart_state_dump(void *file)
 {
     FILE *f = (FILE *)file;
-    if (hw_cart.mapper==20) fds_state_dump(file);
+    if (hw_cart.mapper==20) { fds_state_dump(file); fds_audio_state_dump(file); }
     if (hw_cart.mapper==69) {
         const HwFme7 *m=&hw_cart.m.fme7; const Hw5B *s=&hw_cart.m.s5b;
         fprintf(f,"cart.fme7.command %X\ncart.fme7.prg %02X %02X %02X %02X\ncart.fme7.mirror %u\n"

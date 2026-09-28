@@ -26,6 +26,18 @@ bool     fds_irq(void);
 /* Build the side streams from a disk image (cyc_load_fds, hw_machine.c). */
 bool     cyc_fds_load_media(const uint8_t *image, size_t size, const CycFdsOptions *options);
 uint64_t fds_state_hash(uint64_t acc);
+/* The sound unit (hw_fds_audio.c): $4040-$408A writes and $4040-$4092
+ * reads while $4023.1 enables them, one clock per CPU cycle (inside
+ * fds_cpu_clock), its output level for the mixer, and the per-frame ring
+ * summary. */
+void     fds_audio_set_profile(CycFdsProfile profile);
+void     fds_audio_power_on(void);
+void     fds_audio_write(uint16_t addr, uint8_t value);
+bool     fds_audio_read(uint16_t addr, uint8_t *value);
+void     fds_audio_clock(void);
+double   fds_audio_level(void);
+void     fds_audio_frame_end(void);
+void     fds_audio_state_dump(void *file);
 uint64_t fds_media_hash(uint64_t h);
 void     fds_state_dump(void *file);
 

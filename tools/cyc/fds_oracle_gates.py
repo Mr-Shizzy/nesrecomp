@@ -227,11 +227,13 @@ def run_cyc(args, work, frames, extra, name):
 
 def read_frame_log(path):
     data = Path(path).read_bytes()
-    assert data[:8] == b'CYCFRAME' and struct.unpack_from('<I', data, 8)[0] == 1
+    version = struct.unpack_from('<I', data, 8)[0]
+    assert data[:8] == b'CYCFRAME' and version in (1, 2), version
     pos, out = 12, {}
     while pos < len(data):
         frame, lo, hi, n_ram, n_ciram, n_cart, n_chr, n_pic = struct.unpack_from('<8I', data, pos)
-        pos += 32
+        n_audio = struct.unpack_from('<I', data, pos + 32)[0] if version >= 2 else 0
+        pos += 32 + (4 if version >= 2 else 0)
         rec = {'cycles': lo | hi << 32, 'palette': data[pos:pos + 32], 'oam': data[pos + 32:pos + 288]}
         pos += 288
         for key, n in (('cpu', n_ram), ('nt', n_ciram), ('prg', n_cart), ('chr', n_chr)):
@@ -239,6 +241,8 @@ def read_frame_log(path):
             pos += n
         rec['pic'] = struct.unpack_from(f'<{n_pic // 2}H', data, pos)
         pos += n_pic
+        rec['fds_audio'] = data[pos:pos + n_audio]
+        pos += n_audio
         out[frame] = rec
     return out
 

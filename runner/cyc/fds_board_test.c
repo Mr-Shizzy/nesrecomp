@@ -1,4 +1,5 @@
-/* FDS RAM Adapter and drive contracts (hw_fds.c), on the whole machine.
+/* FDS RAM Adapter, drive and sound unit contracts (hw_fds.c, hw_fds_audio.c),
+ * on the whole machine.
  *
  * Part 1 drives the board directly: register accesses through the CPU bus
  * decode (hw_bus_read/hw_bus_write) and the drive through its per-cycle clock,
@@ -372,7 +373,7 @@ static void test_disabled_registers(void)
     CHECK(rd_bus(0x4045, 0xC0) == 0xFF && rd_bus(0x4046, 0x00) == 0x3F);
     wr(0x4089, 0x00); wr(0x4045, 0x01);
     CHECK(hw_cart.m.fds.wave[5] == 0x3F);                          /* write-protected wavetable */
-    CHECK(rd_bus(0x4045, 0) == hw_cart.m.fds.wave[0]);             /* the current position, 0 until synthesis */
+    CHECK(rd_bus(0x4045, 0) == hw_cart.m.fds.wave[0]);             /* the wave position: 0, no pitch yet */
     wr(0x4080, 0x80 | 0x15); wr(0x4084, 0x80 | 0x2A);
     CHECK(rd_bus(0x4090, 0x40) == 0x55 && rd_bus(0x4092, 0x00) == 0x2A);
     wr(0x4023, 0x01);                                              /* sound registers off */
@@ -458,6 +459,191 @@ static unsigned run_cases(const char *dir)
     return cases;
 }
 
+/* The sound unit (hw_fds_audio.c) against lr:FdsAudio.h / ModChannel.h /
+ * BaseFdsChannel.h, cycle by cycle. The mod outputs marked nesref are the
+ * values Mesen's savestate held for that counter, gain and pitch (tools/cyc/
+ * fds_audio_gates.py on the sound fixture); the others are worked by hand
+ * from ModChannel.h:88-122. */
+#define S (hw_cart.m.fds)
+
+static void test_sound_envelopes(void)
+{
+    load(CYC_FDS_PROFILE_MESEN, CYC_FDS_CRC_COMPUTED, false, false, 0);
+    CHECK(S.master_speed == 0xE8);                                 /* BaseFdsChannel.h:17 */
+    wr(0x4080, 0x80 | 10);                                         /* envelope off: gain = speed */
+    CHECK(S.vol_gain == 10 && rd_bus(0x4090, 0x40) == (0x40 | 10));
+    wr(0x4080, 0x00);                                              /* decrease, speed 0 */
+    CHECK(S.vol_timer == 8 * 1 * 0xE8 && S.vol_gain == 10);
+    clock(8 * 0xE8 - 1);
+    CHECK(S.vol_gain == 10);
+    clock(1);
+    CHECK(S.vol_gain == 9 && S.vol_timer == 8 * 0xE8);
+    wr(0x408A, 0x01);                                              /* master speed 1 */
+    wr(0x4080, 0x40 | 2);                                          /* increase, speed 2: every 24 */
+    CHECK(S.vol_timer == 24);
+    clock(24 * 40);
+    CHECK(S.vol_gain == 32);                                       /* stops at 32 */
+    wr(0x4080, 0x80 | 0x3F); wr(0x4080, 0x40);                     /* gain 63, then increase */
+    clock(8 * 5);
+    CHECK(S.vol_gain == 63);                                       /* no increase above 32 */
+    wr(0x4080, 0x00);
+    clock(8 * 3);
+    CHECK(S.vol_gain == 60);                                       /* but it decreases from there */
+    wr(0x408A, 0x00);                                              /* master speed 0: no ticks */
+    wr(0x4080, 0x00);
+    clock(10000);
+    CHECK(S.vol_gain == 60);
+    wr(0x408A, 0x01); wr(0x4080, 0x00);
+    wr(0x4084, 0x03);
+    wr(0x4083, 0x40);                                              /* envelopes disabled: both timers reloaded */
+    CHECK(S.vol_timer == 8 && S.mod_timer == 32);
+    clock(100);
+    CHECK(S.vol_gain == 60);
+    wr(0x4083, 0x80);                                              /* halt: no ticks either */
+    clock(100);
+    CHECK(S.vol_gain == 60);
+    wr(0x4083, 0x00);
+    clock(8);
+    CHECK(S.vol_gain == 59);
+    /* The mod envelope, read back at $4092. */
+    wr(0x4084, 0x40 | 0);
+    clock(8 * 5);
+    CHECK(S.mod_gain == 5 && rd_bus(0x4092, 0x00) == 5);
+    /* An envelope timer nothing loaded runs down from 0 at power-on and wraps. */
+    load(CYC_FDS_PROFILE_MESEN, CYC_FDS_CRC_COMPUTED, false, false, 0);
+    clock(3);
+    CHECK(S.mod_timer == 0xFFFFFFFCu && S.mod_gain == 0);      /* load() already ran one clock */
+    /* $4023.1 = 0: writes ignored, reads left open. */
+    wr(0x4023, 0x01); wr(0x4080, 0x80 | 7);
+    CHECK(S.vol_gain == 0 && rd_bus(0x4090, 0x5A) == 0x5A && rd_bus(0x4040, 0x5A) == 0x5A);
+    wr(0x4023, 0x03);
+    /* Gain changes reach the ring; within a frame they fold. */
+    uint64_t t0 = cyc_ring_total(), n0 = cyc_ring_kind_total(CYC_EV_FDS_ENV);
+    wr(0x408A, 0x01); wr(0x4080, 0x40);
+    clock(8 * 4);
+    CycRingEvent e;
+    CHECK(cyc_ring_kind_total(CYC_EV_FDS_ENV) == n0 + 4);
+    bool found = false;
+    for (uint64_t i = t0; i < cyc_ring_total(); ++i)
+        if (cyc_ring_get(i, &e) && e.kind == CYC_EV_FDS_ENV) {
+            CHECK(!found && e.addr == 0 && e.value == 4 && e.repeat == 3);
+            found = true;
+        }
+    CHECK(found);
+}
+
+static void test_sound_wave(CycFdsProfile profile)
+{
+    load(profile, CYC_FDS_CRC_COMPUTED, false, false, 0);
+    bool m2 = profile != CYC_FDS_PROFILE_MESEN;
+    wr(0x4089, 0x80);
+    for (unsigned i = 0; i < 64; ++i) wr((uint16_t)(0x4040 + i), (uint8_t)(0xC0 | i));
+    CHECK(S.wave[63] == 63 && rd_bus(0x4045, 0xC0) == 0xC5);      /* 6 bits kept; reads the entry */
+    wr(0x4089, 0x00); wr(0x4087, 0x80);
+    wr(0x4080, 0x80 | 32); wr(0x4082, 0x00); wr(0x4083, 0x01);     /* pitch $100: a step per 256 cycles */
+    clock(255);
+    CHECK(S.wave_pos == 0);
+    clock(1);
+    CHECK(S.wave_pos == 1 && rd_bus(0x4050, 0x40) == (0x40 | 1));  /* the sample at the position */
+    clock(256 * 3);
+    CHECK(S.wave_pos == 4);
+    clock(1);                                                      /* the output follows the position */
+    CHECK(S.out_level == (uint8_t)(4 * 32 * 36 / 1152));
+    static const uint8_t master[4] = { 36, 24, 17, 14 };
+    for (unsigned v = 0; v < 4; ++v) {
+        wr(0x4089, (uint8_t)v); wr(0x4080, 0x80 | 0x3F);           /* gain 63 counts as 32 */
+        clock(1);
+        CHECK(S.out_level == (uint8_t)(S.wave[S.wave_pos] * 32u * master[v] / 1152));
+    }
+    wr(0x4089, 0x00);
+    /* Writes enabled: the position holds (m2: it runs on and the output holds). */
+    uint8_t pos = S.wave_pos, level = S.out_level;
+    wr(0x4089, 0x80);
+    clock(256 * 2);
+    CHECK(m2 ? S.wave_pos == ((pos + 2) & 63) && S.out_level == level : S.wave_pos == pos);
+    wr(0x4089, 0x00);
+    /* Halt: position 0 (lr: forced every cycle; m2: reset by the write). */
+    wr(0x4083, 0x81);
+    CHECK(!m2 || S.wave_pos == 0);
+    clock(1);
+    CHECK(S.wave_pos == 0);
+    clock(512);
+    CHECK(S.wave_pos == 0);
+    wr(0x4083, 0x01);
+    /* A pitch write recomputes the mod output in m2 only. */
+    wr(0x4087, 0x80); wr(0x4085, 0x01); wr(0x4084, 0x80 | 0x01);
+    int32_t before = S.mod_output;
+    wr(0x4082, 0xFF); wr(0x4083, 0x07);
+    CHECK(m2 ? S.mod_output == 64 : S.mod_output == before);
+}
+
+static int32_t mod_output(int counter, unsigned gain, unsigned pitch)
+{
+    load(CYC_FDS_PROFILE_MESEN, CYC_FDS_CRC_COMPUTED, false, false, 0);
+    wr(0x4087, 0x80);                                              /* stopped: its output still applies */
+    wr(0x4082, (uint8_t)pitch); wr(0x4083, (uint8_t)(pitch >> 8));
+    wr(0x4085, (uint8_t)(counter & 0x7F));
+    wr(0x4084, (uint8_t)(0x80 | gain));                            /* both recompute (lr:FdsAudio.h:143-149) */
+    return S.mod_output;
+}
+
+static void test_sound_modulator(void)
+{
+    CHECK(mod_output(-33, 17, 2047) == -1151);                     /* nesref */
+    CHECK(mod_output(-1, 15, 2047) == -32);                        /* nesref */
+    CHECK(mod_output(1, 1, 2047) == 64);                           /* nesref */
+    CHECK(mod_output(15, 63, 2047) == 1951);                       /* nesref */
+    CHECK(mod_output(17, 17, 2047) == 640);                        /* nesref */
+    CHECK(mod_output(16, 16, 64) == 16);       /* 256 >> 4 = 16, no remainder; 1024 >> 6 */
+    CHECK(mod_output(20, 50, 100) == 100);     /* 1000: rem 8, 62 + 2 = 64; 6400 >> 6 */
+    CHECK(mod_output(63, 63, 64) == -8);       /* 3969 >> 4 = 248, bit 7: no rounding; >= 192: -8 */
+    CHECK(mod_output(-64, 63, 64) == 4);       /* -4032 >> 4 = -252 < -64: +256 = 4 */
+    CHECK(mod_output(59, 52, 64) == 191);      /* 3068 >> 4 = 191: the top of the range, no wrap */
+    CHECK(mod_output(-41, 25, 64) == 191);     /* -1025 >> 4 = -65 (bit 7 set, no rounding) wraps to 191 */
+    CHECK(mod_output(-64, 16, 64) == -64);     /* -1024 >> 4 = -64 exactly: the bottom, no wrap */
+    CHECK(mod_output(-64, 63, 1) == 0);        /* 4 >> 6 = 0, remainder 4 < 32 */
+    CHECK(mod_output(-64, 63, 16) == 1);       /* 64 >> 6 */
+    CHECK(mod_output(1, 1, 31) == 1);          /* 2 * 31 = 62: remainder 62 >= 32 rounds up */
+    CHECK(mod_output(-1, 1, 64) == -1);        /* -1 >> 4 = -1, bit 7 set: no rounding */
+    CHECK(mod_output(63, 63, 4095) == -512);   /* -32760: floor -512, remainder 8 */
+    CHECK(mod_output(-64, 1, 4095) == -256);   /* -64 >> 4 = -4 */
+    /* The table: two steps a write, only while stopped. */
+    load(CYC_FDS_PROFILE_MESEN, CYC_FDS_CRC_COMPUTED, false, false, 0);
+    wr(0x4088, 0x03);
+    CHECK(S.mod_table[0] == 0 && S.mod_pos == 0);                  /* ignored: the unit is not stopped */
+    wr(0x4087, 0x80);
+    static const uint8_t table[8] = { 3, 3, 3, 3, 4, 5, 7, 0x0E };
+    for (unsigned i = 0; i < 32; ++i) wr(0x4088, table[i & 7]);
+    CHECK(S.mod_pos == 0 && S.mod_table[0] == 3 && S.mod_table[8] == 4 && S.mod_table[9] == 4 &&
+          S.mod_table[15] == 6);                                   /* 3 bits kept */
+    wr(0x4085, 0x3C);                                              /* counter 60 */
+    wr(0x4086, 0x00); wr(0x4087, 0x08);                            /* mod pitch $800: a step every 32 cycles */
+    CHECK(S.mod_overflow == 0 && !S.mod_disabled);
+    clock(31);
+    CHECK(S.mod_counter == 60 && S.mod_pos == 0);
+    clock(1);
+    CHECK(S.mod_counter == -64 && S.mod_pos == 1);                 /* 60 + 4 wraps to -64 */
+    clock(32 * 7);
+    CHECK(S.mod_counter == -36 && S.mod_pos == 8);                 /* seven more +4 */
+    clock(32 * 2);
+    CHECK(S.mod_counter == 0 && S.mod_pos == 10);                  /* step 4: reset */
+    clock(32 * 2);
+    CHECK(S.mod_counter == -8 && S.mod_pos == 12);                 /* step 5: -4 twice */
+    clock(32 * 2);
+    CHECK(S.mod_counter == -10);                                   /* step 7: -1 twice */
+    clock(32 * 2);
+    CHECK(S.mod_counter == -14 && S.mod_pos == 16);                /* step 6: -2 twice */
+    wr(0x4087, 0x88);                                              /* stopped: accumulator cleared, position kept */
+    CHECK(S.mod_overflow == 0 && S.mod_pos == 16);
+    clock(100);
+    CHECK(S.mod_pos == 16);
+    wr(0x4085, 0x40);                                              /* $40 = -64 */
+    CHECK(S.mod_counter == -64);
+    wr(0x4085, 0xBF);                                              /* bit 7 ignored: 63 */
+    CHECK(S.mod_counter == 63);
+}
+#undef S
+
 int main(int argc, char **argv)
 {
     if (argc < 2) { fprintf(stderr, "usage: %s <fixtures dir>\n", argv[0]); return 2; }
@@ -476,6 +662,9 @@ int main(int argc, char **argv)
     test_crc();
     test_write();
     test_disabled_registers();
+    test_sound_envelopes();
+    for (int p = 0; p < 3; ++p) test_sound_wave((CycFdsProfile)p);
+    test_sound_modulator();
     test_ring();
     unsigned cases = run_cases(argv[1]);
     printf("cyc_fds_board_test: %u checks, %u machine cases passed\n", checks, cases);

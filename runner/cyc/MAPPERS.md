@@ -366,6 +366,11 @@ the `hardware` column is a judgment call, not oracle-verified.
   tick-7 IRQ sample and before the next access, the same order. In the SMB2J
   boot, byte clocks keep the same offset from Mesen's cycle counter as the
   frame points do (`tools/cyc/fds_oracle_gates.py`; see README).
+- Sound ($4040-$4092): `hw_fds_audio.c`, libretro/Mesen 0102910's
+  `FdsAudio.h` per CPU cycle (Mesen2's in the `mesen2` and `hardware`
+  profiles), mixed at Mesen's level (20/5000 per step, 1.69 full pulses at
+  full volume); `hardware` uses the nesdev level (2.4 pulses) and ~2 kHz
+  low-pass. See README, "The sound unit".
 - Code: the BIOS compiles as a fixed ROM (100% native in the SMB2J boot); code
   the BIOS loads into PRG RAM runs on the interpreter and is counted as
   "PRG RAM" in the run summary and listed (with $6000+ addresses) in the miss
