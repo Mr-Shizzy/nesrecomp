@@ -346,9 +346,16 @@ the `hardware` column is a judgment call, not oracle-verified.
 - $4032: disk absent (bit 0), not ready = not scanning (bit 1), not writable =
   absent or protected (bit 2), bits 3-7 open bus. $4033 returns $4026 as
   written (Mesen: "always return good battery").
-- Writes: write mode clocks $4024 (or the CRC) onto the in-memory disk, two
-  bytes behind the head as Mesen does; nothing is saved (disk-write sidecars
-  are a later phase).
+- Writes: write mode clocks $4024 (or the CRC) onto the disk under the head,
+  in every profile. Mesen 0.9.9 (nesref's core) stores them two bytes behind
+  it; Mesen2 moved them under the head in 352adae9f. Nazo no Murasame-jou's
+  name save shows why: the BIOS enters write mode on the byte after the
+  previous block's second CRC byte, so two-behind overwrites that CRC and a
+  CRC-checking drive then reports DISK TROUBLE ERR.27 on the next boot.
+  `--fds-write-at mesen` keeps Mesen's position for in-session comparisons.
+  The file Mesen saves (its `.ips`) is the same either way. The host keeps
+  what the game writes in a disk save file beside the image, which is never
+  written (README, [Disk saves and sides](README.md#disk-saves-and-sides)).
 - CRC: the side streams carry the real CRC-16 by default; `--fds-crc mesen`
   carries Mesen's constant $4D $62 instead. Mesen never reports a bad CRC; the
   check (`--fds-crc-check`, or the `hardware` profile) raises $4030.4 when the

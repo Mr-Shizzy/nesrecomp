@@ -424,7 +424,8 @@ RAM views ([Code in RAM](#code-in-ram)); what no view covers runs on the
 interpreter, counted as "PRG RAM" and recorded by `--capture-log`. Disk events (`--fds-event`, or `F DISK_EJECT`,
 `F DISK_SELECT SIDE`, `F DISK_INSERT [SIDE]` lines in an `--input` file) apply
 before frame F runs, where nesref applies its script's disk commands; the SDL
-window has F1 (eject / insert) and F3 (next side).
+window has F1 (eject / insert), F3 (next side) and F4 (the drive bar), see
+[Disk saves and sides](#disk-saves-and-sides).
 
 The drive and the board record every event from power-on into an always-on
 ring (`cyc_ring.h`): register accesses (a polling loop folds into one event
@@ -458,6 +459,57 @@ that same +2 offset from Mesen's counter. In the SMB2J boot the BIOS is 89.7% of
 the CPU cycles and disk-loaded code the other 10.3%, all native once compiled
 with one capture ([Code in RAM](#code-in-ram)); the gate counts above are the
 same with and without RAM views.
+
+#### Disk saves and sides
+
+FDS games save by writing their disk. The drive writes into the in-memory
+disk as the BIOS clocks bytes out; the host keeps the result in a disk save
+file and never writes the image:
+
+```bash
+FdsGame game.fds --save-file game.fdssave          # headless: only with --save-file
+FdsGame game.fds                                   # windowed: <exe dir>/saves/<image stem>.fdssave
+FdsGame game.fds --no-save                         # windowed, nothing kept
+FdsGame game.fds --fds-import-ips game.ips         # start from a Mesen/nesref save
+FdsGame game.fds --save-file s.fdssave --fds-export-ips game.ips   # also write Mesen's form
+```
+
+The save (`common/nes_fds_save.h`) holds the whole drive stream of every side
+that differs from what the loader builds from the image, byte for byte as the
+BIOS wrote it (gaps, $80 marks, blocks, CRCs), plus the disk's identity (CRC-32
+and FNV-1a of the side data, so a headered image and its raw twin share a
+save). Whole sides rather than a diff: a diff of the rebuilt stream is only
+valid against the loader and options that built it, while a whole side
+reloads unchanged under any of them. A save that is damaged, from a newer
+version or for another disk is refused at start (exit 2) and left as it is.
+It is rewritten atomically (a flushed temporary file replaces it) once the
+drive has been idle for 60 frames after a change, which is right after the
+BIOS finishes a save; at the latest 3600 frames after the first unsaved
+change; when the disk is ejected; and at exit. Frames, not wall time, so a
+run saves identically at any speed.
+
+Mesen saves an IPS patch of the image file instead (`<stem>.ips`, gaps and CRCs
+dropped by its `RebuildFdsFile`). `--fds-export-ips` writes that form with
+the same algorithm; for Nazo no Murasame-jou's name save it is byte for byte
+the `.ips` nesref writes for the same input, and booting either machine on its
+own save reads the same data back (`tools/cyc/fds_save_compare.py`: PRG RAM,
+nametables, CHR RAM and picture identical on the compared frames). Writes land
+under the head, not two bytes behind as in Mesen 0.9.9 ([MAPPERS.md](MAPPERS.md#fds-ram-adapter-mapper-20)).
+
+The window shows a drive bar under the picture (F4 hides it): the side in the
+drive or EMPTY with the side F1 will insert, the drive lamp and MOTOR while it
+turns, and the save's state (SAVE LOADED, UNSAVED, SAVED F<frame>). It is drawn
+in window rows the picture never covers and is not part of the emulated
+frame, so screenshots and every comparison see only the machine's picture.
+F1 ejects or inserts, F3 picks the next side while the drive is empty; scripts
+use `--fds-event` or `DISK_` lines. There is no automatic side change here;
+that belongs to the optional HLE tier.
+
+Ring events: `fds.wrun` (a write run: side, first position, bytes stored and
+changed), `fds.wblock` (a block written the BIOS way: code, mark position,
+length), `fds.save` (reason idle/eject/exit/timeout, sides, bytes) and
+`fds.load`. `tools/cyc/test_cyc_fds_saves.py` (CTest `cyc_fds_saves`) checks it all
+across processes on a synthetic saving program.
 
 ### Timing model (`hw_internal.h`, `hw_machine.c`)
 
