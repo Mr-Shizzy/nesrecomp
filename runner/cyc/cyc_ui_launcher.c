@@ -116,7 +116,6 @@ int cyc_ui_bios_verify(void *ctx, const char *bios_path, const char *rom_path, R
     }
     CycFdsBiosLookup in = *base;
     in.saved_path = bios_path;
-    in.image_path = rom_path;
     out->ok = cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_OK;
     snprintf(out->detail, sizeof(out->detail), "%s", r.detail);
     return 1;
@@ -142,7 +141,7 @@ int cyc_ui_launcher(CycSettings *settings, const char *settings_path, const CycH
                     const char **rom_path, bool fds, const CycFdsBiosLookup *bios)
 {
     static CycFdsBiosLookup bios_lookup;
-    static const char *const BIOS_PATTERNS[] = { "*.rom", "*.bin" };
+    static const char *const BIOS_PATTERNS[] = { "*.rom", "*.bin", "*.*" };
     static RecompLauncherCSettings io, defaults;
     static RecompLauncherCGameInfo gi;
     static char out_rom[1024], name[256];
@@ -208,12 +207,11 @@ int cyc_ui_launcher(CycSettings *settings, const char *settings_path, const CycH
     if (bios) {
         bios_lookup = *bios;
         bios_lookup.saved_path = NULL;
-        bios_lookup.image_path = NULL;
         gi.has_bios = 1;
-        gi.bios_name = "FDS BIOS (disksys.rom)";
+        gi.bios_name = "FDS BIOS";
         gi.bios_patterns = BIOS_PATTERNS;
-        gi.num_bios_patterns = 2;
-        gi.bios_filter_desc = "Famicom Disk System BIOS (disksys.rom)";
+        gi.num_bios_patterns = 3;
+        gi.bios_filter_desc = "Famicom Disk System BIOS";
         gi.bios_verify_for_rom = cyc_ui_bios_verify;
         gi.bios_verify_ctx = &bios_lookup;
         gi.host_persists_paths = 1;

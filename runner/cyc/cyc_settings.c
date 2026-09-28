@@ -204,7 +204,7 @@ bool cyc_settings_save(const CycSettings *s, const char *path, const CycSettings
         int8_t a = *nes_fds_hle_ask_axis((NesFdsHleAsk *)&s->fds_hle, &ax[i]);
         fprintf(f, "%s = %s\n", ax[i].key, a > 0 ? "on" : a == 0 ? "off" : "default");
     }
-    fprintf(f, "# the FDS BIOS file (disksys.rom); empty: game.toml's, then bios/ beside the disk, then bios/ here\n"
+    fprintf(f, "# the FDS BIOS file, any name (checked by size and CRC); empty: the launcher asks for it\n"
                "Bios = %s\n", s->fds_bios);
     char text[96];
     for (int p = 0; p < CYC_INPUT_PLAYERS; ++p) {

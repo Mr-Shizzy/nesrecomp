@@ -6,9 +6,8 @@
  * The lookup, first file that exists wins:
  *   --fds-bios FILE                 (when given, the only candidate)
  *   config.ini [FDS] Bios           (the window's; the launcher's pick)
- *   game.toml [fds] bios            (a compiled program's, cyc_native_fds_bios_path)
- *   bios/disksys.rom beside the image
- *   bios/disksys.rom here
+ *   game.toml [fds] bios            (headless runs only: a developer's build path)
+ * No file name is searched for: a BIOS is whatever file the player picked,
  * and its identity must match: 8192 bytes and the CRC32 the compiled program
  * was built against, else the one <bios>.toml records (bios/disksys.toml:
  * size, crc32), else the known disksys.rom (common/nes_fds.h, 5E607DCF).
@@ -24,8 +23,7 @@ extern "C" {
 typedef struct {
     const char *explicit_path;   /* --fds-bios; NULL: none */
     const char *saved_path;      /* config.ini [FDS] Bios; NULL or "": none */
-    const char *compiled_path;   /* game.toml [fds] bios; NULL: none */
-    const char *image_path;      /* the disk image (bios/disksys.rom beside it); NULL: none */
+    const char *compiled_path;   /* game.toml [fds] bios, headless runs only; NULL: none */
     uint32_t    compiled_crc;    /* the compiled program's BIOS CRC32; 0: <bios>.toml, else the known one */
 } CycFdsBiosLookup;
 

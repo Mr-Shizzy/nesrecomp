@@ -60,7 +60,7 @@ CycFdsBiosStatus cyc_fds_bios_check(const char *path, uint32_t compiled_crc, boo
         free(data);
         r->status = CYC_FDS_BIOS_WRONG;
         snprintf(r->detail, sizeof(r->detail),
-                 "Not the FDS BIOS (disksys.rom): %zu bytes, CRC %08X (expected %u bytes, CRC %08X)",
+                 "Not the FDS BIOS: %zu bytes, CRC %08X (expected %u bytes, CRC %08X)",
                  total, (unsigned)crc, (unsigned)r->want_size, (unsigned)r->want_crc);
         return r->status;
     }
@@ -73,22 +73,13 @@ CycFdsBiosStatus cyc_fds_bios_check(const char *path, uint32_t compiled_crc, boo
 
 CycFdsBiosStatus cyc_fds_bios_locate(const CycFdsBiosLookup *in, bool want_data, CycFdsBiosResult *r)
 {
-    char beside[1024] = "";
-    if (in->image_path && *in->image_path) {
-        const char *img = in->image_path;
-        const char *slash = strrchr(img, '/'), *bslash = strrchr(img, '\\');
-        const char *sep = slash > bslash ? slash : bslash;
-        snprintf(beside, sizeof(beside), "%.*sbios/disksys.rom", sep ? (int)(sep - img + 1) : 0, img);
-    }
-    struct { const char *path, *source; } c[5];
+    struct { const char *path, *source; } c[3];
     int count = 0;
     if (in->explicit_path && *in->explicit_path) {
         c[count].path = in->explicit_path, c[count++].source = "--fds-bios";
     } else {
         if (in->saved_path && *in->saved_path) c[count].path = in->saved_path, c[count++].source = "config.ini [FDS] Bios";
         if (in->compiled_path && *in->compiled_path) c[count].path = in->compiled_path, c[count++].source = "game.toml [fds] bios";
-        if (beside[0]) c[count].path = beside, c[count++].source = "bios/ beside the disk";
-        c[count].path = "bios/disksys.rom", c[count++].source = "bios/ here";
     }
     bool saved_gone = false;
     for (int i = 0; i < count; ++i) {
@@ -114,7 +105,7 @@ CycFdsBiosStatus cyc_fds_bios_locate(const CycFdsBiosLookup *in, bool want_data,
         snprintf(r->path, sizeof(r->path), "%s", in->explicit_path);
         snprintf(r->detail, sizeof(r->detail), "Cannot read --fds-bios %s", in->explicit_path);
     } else {
-        snprintf(r->detail, sizeof(r->detail), "%sNo FDS BIOS found (disksys.rom beside the disk or in bios/)",
+        snprintf(r->detail, sizeof(r->detail), "%sNo FDS BIOS selected",
                  saved_gone ? "The selected file is gone. " : "");
     }
     return r->status;

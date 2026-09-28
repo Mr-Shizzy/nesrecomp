@@ -70,11 +70,10 @@
  *   Famicom Disk System (<exe> <image.fds|.qd>, or no image for a program
  *   compiled with game.toml [fds] image):
  *     --fds-bios FILE      the RAM Adapter BIOS; default the window's config.ini
- *                          [FDS] Bios (the launcher's Select BIOS...), else
- *                          game.toml [fds] bios, else bios/disksys.rom beside
- *                          the image or here (cyc_fds_bios.h).
- *                          Only the image bios/disksys.toml (or the compiled
- *                          program) identifies is accepted: 8192 bytes, CRC32.
+ *                          [FDS] Bios (the launcher's Select BIOS...); headless
+ *                          runs use game.toml [fds] bios instead (cyc_fds_bios.h).
+ *                          Any file name: only the identity counts, 8192 bytes
+ *                          and the CRC32 the compiled program (or its .toml) records.
  *     --fds-boot-disk S    side in the drive at power-on: none, or a side (0 =
  *                          disk 1 side A, 1 = 1B, ...; A, B, 1A, 2B also work).
  *                          Default 0; nesref's default is none.
@@ -993,7 +992,9 @@ int main(int argc, char **argv) {
         return 2;
 #else
         if (acccoin || spam_page >= 0) { fprintf(stderr, "--acccoin/--spam need a cartridge\n"); return 2; }
-        CycFdsBiosLookup lookup = { fds_bios, saved_bios, cyc_native_fds_bios_path, rom_path,
+        /* A window uses the player's pick (config.ini) or --fds-bios, never a
+         * build-machine path; headless runs also take game.toml's. */
+        CycFdsBiosLookup lookup = { fds_bios, saved_bios, headless ? cyc_native_fds_bios_path : NULL,
                                     cyc_native_fds_bios_crc32 };
         CycFdsBiosResult found;
         if (cyc_fds_bios_locate(&lookup, true, &found) != CYC_FDS_BIOS_OK) {
@@ -1001,14 +1002,14 @@ int main(int argc, char **argv) {
             /* Where the player puts it right: the window's config.ini
              * [FDS] Bios (what the launcher's Select BIOS... saves). */
             const char *fix = headless
-                ? "give --fds-bios FILE, or put disksys.rom in bios/ beside the disk (the window "
-                  "also reads [FDS] Bios in its config.ini; headless runs do not)"
-                : "choose it with Select BIOS... in the launcher, set [FDS] Bios = <file> in config.ini "
-                  "beside the program, give --fds-bios FILE, or put disksys.rom in bios/ beside the disk";
-            if (fds_bios) fix = "give --fds-bios the RAM Adapter BIOS (disksys.rom)";
+                ? "give --fds-bios FILE, or build with game.toml [fds] bios (the window reads "
+                  "[FDS] Bios in its config.ini; headless runs do not)"
+                : "choose it with Select BIOS... in the launcher, or set [FDS] Bios = <file> in "
+                  "config.ini beside the program";
+            if (fds_bios) fix = "give --fds-bios the RAM Adapter BIOS";
             if (found.status == CYC_FDS_BIOS_WRONG)
                 snprintf(msg, sizeof(msg),
-                         "%s (%s) is not the FDS BIOS (disksys.rom): %zu bytes, CRC32 %08X; expected %u "
+                         "%s (%s) is not the FDS BIOS: %zu bytes, CRC32 %08X; expected %u "
                          "bytes, CRC32 %08X.\nTo use the right file, %s.",
                          found.path, found.source, found.size, (unsigned)found.crc,
                          (unsigned)found.want_size, (unsigned)found.want_crc, fix);
@@ -1016,7 +1017,7 @@ int main(int argc, char **argv) {
                 snprintf(msg, sizeof(msg), "Cannot read the FDS BIOS %s (--fds-bios).", found.path);
             else
                 snprintf(msg, sizeof(msg),
-                         "%s needs the Famicom Disk System BIOS (disksys.rom), and none was found.\n"
+                         "%s needs the Famicom Disk System BIOS, and none is selected.\n"
                          "To provide it, %s.", rom_path, fix);
             fprintf(stderr, "%s\n", msg);
 #if defined(CYC_WITH_SDL)

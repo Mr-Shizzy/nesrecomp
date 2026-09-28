@@ -132,8 +132,7 @@ int cyc_sdl_prelaunch(const char **rom_path, const char *cli_bios, NesFdsHleAsk 
     if (!(no && *no && *no != '0') && !s_set.skip_launcher) {
         /* The launcher's BIOS state runs the host's own lookup (cyc_fds_bios.h);
          * its pick comes back in s_set.fds_bios. */
-        const CycFdsBiosLookup bios = { cli_bios, NULL, cyc_native_fds_bios_path, NULL,
-                                        cyc_native_fds_bios_crc32 };
+        const CycFdsBiosLookup bios = { cli_bios, NULL, NULL, cyc_native_fds_bios_crc32 };
         int r = cyc_ui_launcher(&s_set, s_set_path, s_extras, rom_path, s_fds, &bios);
         save_settings();
         if (r == 1) return 1;

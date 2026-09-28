@@ -149,7 +149,7 @@ static void bios_checks(const char *dir)
     CHECK(cyc_fds_bios_check(other, crc, false, &r) == CYC_FDS_BIOS_WRONG && !r.data && r.crc == crc2);
     char want[64];
     snprintf(want, sizeof(want), "CRC %08X", (unsigned)crc2);
-    CHECK(strstr(r.detail, "Not the FDS BIOS (disksys.rom)") && strstr(r.detail, want));
+    CHECK(strstr(r.detail, "Not the FDS BIOS:") && strstr(r.detail, want));
     CHECK(cyc_fds_bios_check(wrong, crc, false, &r) == CYC_FDS_BIOS_WRONG && r.size == 16);
     CHECK(cyc_fds_bios_check(gone, crc, false, &r) == CYC_FDS_BIOS_MISSING);
     uint32_t size;
@@ -163,39 +163,39 @@ static void bios_checks(const char *dir)
     CHECK(cyc_fds_bios_expected(toml_bios, 0, &size) == crc && size == 8192);
     CHECK(cyc_fds_bios_check(toml_bios, 0, false, &r) == CYC_FDS_BIOS_OK);
 
-    /* the lookup: --fds-bios > saved > game.toml > beside the image > bios/ here */
+    /* the lookup: --fds-bios > config.ini > game.toml (headless); no file name is searched for */
     char orig[1024];
     CHECK(GETCWD(orig, (int)sizeof(orig)));
     CHECK(CHDIR(root) == 0);
-    remove("bios/disksys.rom");
-    CycFdsBiosLookup in = { NULL, NULL, NULL, image, crc };
+    CycFdsBiosLookup in = { NULL, NULL, NULL, crc };
     CHECK(cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_MISSING && !r.source);
-    CHECK(strstr(r.detail, "No FDS BIOS found"));
+    CHECK(strstr(r.detail, "No FDS BIOS selected"));
     MKDIR("bios");
-    write_bytes("bios/disksys.rom", bios, sizeof(bios));
-    CHECK(cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_OK && !strcmp(r.source, "bios/ here"));
+    write_bytes("bios/disksys.rom", bios, sizeof(bios));       /* the known names are never looked for */
     write_bytes(beside, bios, sizeof(bios));
-    CHECK(cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_OK && !strcmp(r.source, "bios/ beside the disk"));
+    CHECK(cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_MISSING);
+    remove("bios/disksys.rom");
+    remove(beside);
+    in.compiled_path = good;
+    CHECK(cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_OK && !strcmp(r.source, "game.toml [fds] bios"));
     in.compiled_path = wrong;                                  /* the first file found decides */
     CHECK(cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_WRONG && !strcmp(r.path, wrong));
     in.saved_path = good;
     CHECK(cyc_fds_bios_locate(&in, true, &r) == CYC_FDS_BIOS_OK && !strcmp(r.path, good) && r.data);
     free(r.data);
     CHECK(!strcmp(r.source, "config.ini [FDS] Bios"));
-    in.saved_path = gone;                                      /* a saved file that is gone: go on */
+    in.saved_path = gone;                                      /* a saved file that is gone: asked again */
     in.compiled_path = NULL;
-    CHECK(cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_OK && !strcmp(r.source, "bios/ beside the disk"));
+    CHECK(cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_MISSING);
     CHECK(strstr(r.detail, "selected file is gone"));
     in.explicit_path = other;                                  /* --fds-bios is the only candidate */
     in.saved_path = good;
     CHECK(cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_WRONG && !strcmp(r.source, "--fds-bios"));
     in.explicit_path = gone;
     CHECK(cyc_fds_bios_locate(&in, false, &r) == CYC_FDS_BIOS_MISSING && r.source);
-    remove("bios/disksys.rom");
-    remove(beside);
 
     /* the launcher: what it is handed, its verdict, the pick back into config.ini */
-    CycFdsBiosLookup host = { NULL, NULL, NULL, NULL, crc };
+    CycFdsBiosLookup host = { NULL, NULL, NULL, crc };
     CycSettings s;
     cyc_settings_default(&s);
     const char *rom = image;
@@ -204,22 +204,22 @@ static void bios_checks(const char *dir)
     script_result = RECOMP_LAUNCHER_RESULT_QUIT;
     CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, true, &host) == 1);
     CHECK(seen_game.has_bios == 1 && seen_game.host_persists_paths == 1);
-    CHECK(seen_game.bios_name && strstr(seen_game.bios_name, "disksys.rom"));
-    CHECK(seen_game.num_bios_patterns == 2 && !strcmp(seen_game.bios_patterns[0], "*.rom"));
+    CHECK(seen_game.bios_name && !strcmp(seen_game.bios_name, "FDS BIOS"));
+    CHECK(seen_game.num_bios_patterns == 3 && !strcmp(seen_game.bios_patterns[2], "*.*"));
     CHECK(seen_game.bios_verify_for_rom == cyc_ui_bios_verify && seen_game.bios_verify_ctx);
     CHECK(seen_io.bios_path[0] == 0);
     RecompLauncherCBiosVerify v;
     void *ctx = seen_game.bios_verify_ctx;
     CHECK(cyc_ui_bios_verify(ctx, "", image, &v) && !v.ok && !v.not_needed);     /* required, none found */
-    CHECK(cyc_ui_bios_verify(ctx, other, image, &v) && !v.ok && strstr(v.detail, "Not the FDS BIOS (disksys.rom)"));
+    CHECK(cyc_ui_bios_verify(ctx, other, image, &v) && !v.ok && strstr(v.detail, "Not the FDS BIOS:"));
     CHECK(strstr(v.detail, want));
     CHECK(cyc_ui_bios_verify(ctx, good, image, &v) && v.ok && !v.not_needed);
-    write_bytes(beside, bios, sizeof(bios));
-    CHECK(cyc_ui_bios_verify(ctx, "", image, &v) && v.ok && strstr(v.detail, "beside the disk"));
+    write_bytes(beside, bios, sizeof(bios));                 /* a disksys.rom beside the disk: still asked */
+    CHECK(cyc_ui_bios_verify(ctx, "", image, &v) && !v.ok);
     remove(beside);
-    CycFdsBiosLookup cart_host = { NULL, NULL, NULL, NULL, 0 };  /* a build that also runs cartridges */
+    CycFdsBiosLookup cart_host = { NULL, NULL, NULL, 0 };  /* a build that also runs cartridges */
     CHECK(cyc_ui_bios_verify(&cart_host, "", cart, &v) && v.ok && v.not_needed);
-    CycFdsBiosLookup cli = { good, NULL, NULL, NULL, crc };     /* --fds-bios: still checks a pick */
+    CycFdsBiosLookup cli = { good, NULL, NULL, crc };     /* --fds-bios: still checks a pick */
     CHECK(cyc_ui_bios_verify(&cli, "", image, &v) && v.ok && strstr(v.detail, "--fds-bios"));
     CHECK(cyc_ui_bios_verify(&cli, other, image, &v) && !v.ok);
 
@@ -235,7 +235,7 @@ static void bios_checks(const char *dir)
     script_edit = NULL;
     CHECK(cyc_ui_launcher(&back, cfg, NULL, &rom, true, &host) == 1);
     CHECK(!strcmp(seen_io.bios_path, good));
-    CycFdsBiosLookup start = { NULL, back.fds_bios, NULL, image, crc };  /* the next start uses it */
+    CycFdsBiosLookup start = { NULL, back.fds_bios, NULL, crc };  /* the next start uses it */
     CHECK(cyc_fds_bios_locate(&start, false, &r) == CYC_FDS_BIOS_OK && !strcmp(r.path, good));
     /* Clear: the key stays, empty */
     script_edit = clear_bios;
