@@ -512,7 +512,9 @@ reopen_recomp_launcher:
 #else
             gi.widescreen_supported = 0;
 #endif
-#ifdef NESRECOMP_GAME_NO_HDPACK
+#if defined(NESRECOMP_GAME_NO_HDPACK) || defined(NESRECOMP_GAME_HIDE_HDPACK_ROW)
+            /* HIDE_HDPACK_ROW: packs still load, but the game manages them
+             * itself (e.g. its own mod picker), so the row would be redundant. */
             gi.hdpack_supported = 0;
 #else
             gi.hdpack_supported = 1;
