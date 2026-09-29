@@ -80,6 +80,19 @@ render path is **byte-identical to stock**. Safe to ship on by default off.
 - **Two-layer compositing** (HD background, then HD sprites over it) so original
   art never bleeds through transparent HD pixels.
 - Arbitrary `<scale>`, HD SDL texture sizing, HD-aware screenshots.
+- **Whole-box HD sprites** (Mesen behavior): an HD sprite tile is drawn over
+  the sprite's full 8x8 box, not only where the original sprite pixel is
+  opaque, so replacement art can extend past the original outline. The
+  renderer records the front-most transparent-covering sprite per pixel
+  (`HdPixel.cv_*`); only its HD tile is drawn there, never the original.
+- **`oamNearby` condition** (extension, not in Mesen):
+  `<condition>name,oamNearby,dx,dy,tile,flip` is true when an OAM sprite with
+  sprite-table tile `tile` (hex) and flip bits `flip` (1 = H, 2 = V) sits
+  exactly `(dx,dy)` screen pixels from the origin of the sprite tile being
+  drawn. Unlike `spriteNearby` (a per-pixel probe that misses when the
+  neighbor's pixel is transparent) it tests OAM, so it reliably tells apart
+  pictures that share a tile (a ghost's top half over different feet).
+  Conditional `defaultTile` (wildcard-palette) entries honor their conditions.
 - Toggles (env): `NESRECOMP_HDPACK_DEBUG` (unmatched BG→magenta, sprite→cyan),
   `NESRECOMP_HDPACK_HIDE_ORIGINALS` (`disableOriginalTiles`-style),
   `NESRECOMP_CHR_DUMP` (8 KB CHR snapshot for authoring CHR-RAM packs).

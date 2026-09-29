@@ -39,6 +39,16 @@ typedef struct {
     uint8_t        sp_ox, sp_oy, sp_hm, sp_vm;
     uint8_t        sp_has;
     uint32_t       sp_argb;         /* original sprite color (fallback when unmatched) */
+
+    /* Front-most sprite whose 8x8 box covers this pixel with a transparent
+     * pixel, in front of any opaque sprite above (Mesen draws HD sprites over
+     * their whole box, so replacement art can extend past the original's
+     * outline). Only the HD tile is drawn here, never the original. */
+    int32_t        cv_index;
+    const uint8_t *cv_t16;
+    uint8_t        cv_p1, cv_p2, cv_p3;
+    uint8_t        cv_ox, cv_oy, cv_hm, cv_vm;
+    uint8_t        cv_has;
 } HdPixel;
 
 /* Load the pack in `dir` (expects dir/hires.txt). native_w is the runner's
@@ -70,6 +80,9 @@ int      hdpack_recording(void);   /* 1 == renderer should fill hdpack_pixels() 
 /* Clear the side channel's per-pixel `has` flags for a new frame. Called by the
  * renderer at the start of an actually-rendered frame. */
 void hdpack_frame_begin(void);
+
+/* The OAM the frame was rendered from (read by oamNearby conditions). */
+void hdpack_set_oam(const uint8_t oam[256]);
 
 /* Produce the HD framebuffer from the native one + side channel.
  * native_fb is native_w x 240 ARGB8888; hd_buf is (native_w*scale) x

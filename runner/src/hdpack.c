@@ -96,6 +96,7 @@ typedef enum {
     CT_TILE_NEARBY, CT_SPRITE_NEARBY,        /* current pixel +- delta (per-pixel) */
     CT_POS_X, CT_POS_Y, CT_ORIGIN_X, CT_ORIGIN_Y,
     CT_HMIRROR, CT_VMIRROR,                  /* built-in: current tile's flip flags */
+    CT_OAM_NEARBY,                           /* extension: sprite tile at an offset from this one */
     CT_UNKNOWN,
 } HdCondType;
 
@@ -245,9 +246,13 @@ static HdTile *find_tile(const HdKey *k, int x, int y, HdPixel *cur, int is_spri
     HdKey wk = *k;
     wk.palette = 0xFFFFFFFFu;
     uint32_t wh = key_hash(&wk) & (HD_NBUCKETS - 1);
-    for (HdAlias *a = s_alias_buckets[wh]; a; a = a->next)
-        if (key_eq(&a->key, &wk)) return a->tile;
-    return NULL;
+    HdTile *wild = NULL;
+    for (HdAlias *a = s_alias_buckets[wh]; a; a = a->next) {
+        if (!key_eq(&a->key, &wk)) continue;
+        if (a->tile->ncond == 0) { if (!wild) wild = a->tile; continue; }
+        if (tile_conds_pass(a->tile, x, y, cur, is_sprite)) return a->tile;
+    }
+    return wild;
 }
 
 static void track_tile(HdTile *t) {
@@ -541,6 +546,19 @@ static void process_condition(char *rest) {
                   strstr(ty, "X") ? CT_ORIGIN_X : CT_ORIGIN_Y;
         c->operandA = (uint32_t)atoi(tok[3]);
         c->use_cache = 0;
+    } else if (!strcmp(ty, "oamNearby")) {
+        /* Extension (not Mesen): name,oamNearby,dx,dy,tile,flip. True when an
+         * OAM sprite with sprite-table tile `tile` (hex) and H/V flip bits
+         * `flip` (1 = H, 2 = V) sits exactly (dx,dy) pixels from the origin of
+         * the sprite tile being drawn. Tells apart pictures that share a tile
+         * (a ghost's top half over different feet). */
+        if (n < 6) { free(c); return; }
+        c->type = CT_OAM_NEARBY;
+        c->x = atoi(tok[2]);
+        c->y = atoi(tok[3]);
+        c->operandA = hex_u32(tok[4]) & 0xFF;
+        c->operandB = (uint32_t)atoi(tok[5]) & 3;
+        c->use_cache = 0;
     } else {
         free(c); return;   /* unknown / unsupported condition type */
     }
@@ -672,6 +690,9 @@ int hdpack_active(void) { return s_active; }
 int hdpack_scale(void)  { return s_active ? s_scale : 1; }
 HdPixel *hdpack_pixels(void) { return s_active ? s_pixels : NULL; }
 int hdpack_recording(void)   { return s_active; }
+
+static uint8_t s_oam[256];
+void hdpack_set_oam(const uint8_t oam[256]) { memcpy(s_oam, oam, sizeof(s_oam)); }
 
 void hdpack_frame_begin(void) {
     if (s_active && s_pixels)
@@ -992,6 +1013,16 @@ static int cond_eval(HdCond *c, int x, int y, HdPixel *cur, int is_sprite) {
         case CT_POS_Y: r = cond_cmp(y, c->op, (int)c->operandA); break;
         case CT_ORIGIN_X: if (cur) r = cond_cmp(x - cur->bg_ox, c->op, (int)c->operandA); break;
         case CT_ORIGIN_Y: if (cur) r = cond_cmp(y - cur->bg_oy, c->op, (int)c->operandA); break;
+        case CT_OAM_NEARBY:
+            if (is_sprite && cur) {
+                int ox = x - cur->sp_ox + c->x, oy = y - cur->sp_oy + c->y;
+                for (int i = 0; i < 64 && !r; i++) {
+                    const uint8_t *e = &s_oam[i * 4];
+                    r = e[0] < 0xEF && e[1] == c->operandA && ((e[2] >> 6) & 3) == (int)c->operandB &&
+                        e[3] == ox && e[0] + 1 == oy;
+                }
+            }
+            break;
         case CT_HMIRROR:  r = is_sprite && cur && cur->sp_hm; break;  /* NES BG tiles never flip */
         case CT_VMIRROR:  r = is_sprite && cur && cur->sp_vm; break;
         default: break;
@@ -1141,6 +1172,18 @@ void hdpack_upscale(const uint32_t *native_fb, int native_w, uint32_t *hd_buf) {
                 } else if (!s_opt_hide_orig) {
                     fill_block(dst, hd_w, p->sp_argb, s);    /* original sprite */
                 }
+            }
+            /* A sprite box in front whose original pixel is transparent here:
+             * its HD art may still paint this pixel. */
+            if (p->cv_has) {
+                HdPixel cv = *p;
+                cv.sp_has = 1; cv.sp_index = p->cv_index; cv.sp_t16 = p->cv_t16;
+                cv.sp_p1 = p->cv_p1; cv.sp_p2 = p->cv_p2; cv.sp_p3 = p->cv_p3;
+                cv.sp_ox = p->cv_ox; cv.sp_oy = p->cv_oy; cv.sp_hm = p->cv_hm; cv.sp_vm = p->cv_vm;
+                HdTile *ct = match_layer(1, cv.sp_index, cv.sp_t16, 0, cv.sp_p1, cv.sp_p2, cv.sp_p3,
+                                         sx, sy, &cv);
+                if (ct && !ct->fully_transparent)
+                    blit_over(dst, hd_w, ct, cv.sp_ox, cv.sp_oy, cv.sp_hm, cv.sp_vm, s);
             }
 
             /* foreground backgrounds (priority 30..39, over everything) */

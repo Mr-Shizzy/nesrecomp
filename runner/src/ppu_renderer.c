@@ -521,6 +521,7 @@ static void render_frame_native(uint32_t *framebuf) {
     uint8_t render_start_mask = g_ppumask;
     memcpy(render_oam, g_ppu_oam, sizeof(render_oam));
     memcpy(render_oam_x16, g_oam_x16, sizeof(render_oam_x16));
+    if (g_hp) hdpack_set_oam(render_oam);  /* for oamNearby conditions */
 
     uint8_t render_start_ctrl = g_ppuctrl;
     uint8_t render_start_sx = g_ppuscroll_x;
@@ -1151,7 +1152,25 @@ render_sprites:
                  * margins are 0). */
                 if (px < -ws_eff_l || px >= 256 + ws_eff_r) continue;
                 int color_idx = ((lo >> chr_bit) & 1) | (((hi >> chr_bit) & 1) << 1);
-                if (color_idx == 0) continue; /* transparent */
+                if (color_idx == 0) {         /* transparent */
+                    /* HD: remember the box so replacement art can use it. */
+                    int cfx = px + g_widescreen_left;
+                    if (g_hp && !priority && cfx >= 0 && cfx < g_render_width &&
+                        (px >= 8 || (row_mask & 0x04))) {
+                        HdPixel *hp = &g_hp[py * g_render_width + cfx];
+                        hp->cv_has   = 1;
+                        hp->cv_index = (int32_t)((tile_chr_base >> 4) + tile_num);
+                        hp->cv_t16   = &chr_src[tile_chr_base + tile_num * 16];
+                        hp->cv_p1 = g_ppu_pal[(spr_pal * 4 + 1) & 0x1F] & 0x3F;
+                        hp->cv_p2 = g_ppu_pal[(spr_pal * 4 + 2) & 0x1F] & 0x3F;
+                        hp->cv_p3 = g_ppu_pal[(spr_pal * 4 + 3) & 0x1F] & 0x3F;
+                        hp->cv_ox = (uint8_t)(7 - bit);
+                        hp->cv_oy = (uint8_t)(row & 7);
+                        hp->cv_hm = (uint8_t)flip_h;
+                        hp->cv_vm = (uint8_t)flip_v;
+                    }
+                    continue;
+                }
                 /* PPUMASK bit 2: clip leftmost 8 sprite pixels */
                 if (px < 8 && !(row_mask & 0x04)) continue;
                 /* Offset sprite X into widescreen framebuffer */
@@ -1198,6 +1217,7 @@ render_sprites:
                     hp->sp_hm = (uint8_t)flip_h;
                     hp->sp_vm = (uint8_t)flip_v;
                     hp->sp_argb = spc;                /* original sprite color (fallback) */
+                    hp->cv_has = 0;                   /* covers any box behind it */
                 }
             }
         }
