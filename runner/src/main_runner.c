@@ -2609,7 +2609,9 @@ int nesrecomp_runner_run(int argc, char *argv[]) {
      * or config.ini [Display] HdPackEnabled/HdPackDir. When a pack loads, present
      * an HD-resolution texture and set the renderer logical size to match so the
      * upscaled art shows at full detail. Mirrors the SNES MSU-1 opt-in wiring. */
-    if (hdpack_load_current() == 0) hd_output_enable(1);
+    /* Keep the player's Window scale: the HD frame is scaled into the
+     * window like any other, instead of resizing it to the pack's size. */
+    if (hdpack_load_current() == 0) hd_output_enable(0);
 
     memset(s_framebuf, 0, VIDEO_BUF_BYTES);
 
