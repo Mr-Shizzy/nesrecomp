@@ -73,6 +73,16 @@ void nesrecomp_expect_process_exit(void) {
     s_expected_process_exit = 1;
 }
 
+void nesrecomp_quit_to_desktop(void) {
+    /* Same exit as closing the window: the launcher is not running while a
+     * game is (it relaunches on return), so this ends everything. */
+    fprintf(stderr, "[RunnerExit] quit to desktop at frame %llu\n",
+            (unsigned long long)g_frame_count);
+    fflush(stderr); fflush(stdout);
+    nesrecomp_expect_process_exit();
+    exit(0);
+}
+
 void nesrecomp_return_to_launcher(void) {
     fprintf(stderr, "[RunnerExit] return to launcher at frame %llu\n",
             (unsigned long long)g_frame_count);

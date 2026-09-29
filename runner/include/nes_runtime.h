@@ -81,6 +81,8 @@ void nesrecomp_expect_process_exit(void);
  * with --launcher (so no guest state carries over), then exits. Does not
  * return. Falls back to a plain exit if the new process cannot start. */
 void nesrecomp_return_to_launcher(void);
+/* Quit the game and the program (like closing the window). Does not return. */
+void nesrecomp_quit_to_desktop(void);
 /* Offline Escape key: a game may install a handler (e.g. from game_on_init)
  * that returns 1 when it consumed the key, such as to open its own pause /
  * exit prompt. With no handler, or when it returns 0, Escape quits. */
