@@ -544,12 +544,12 @@ static void video_set_logical_size(int w, int h) {
 
 void nesrecomp_apply_video_settings(void) {
     if (!s_renderer) return;
-    int hd = s_hd_texture && hdpack_active();
-    int w = hd ? g_render_width * s_hd_scale : g_render_width;
-    int h = hd ? 240 * s_hd_scale : 240;
-    video_set_logical_size(w, h);
+    /* Logical size is the NES frame even with an HD pack: SDL still draws
+     * the HD texture at the window's real resolution, and the picture gets
+     * the same size (and integer scaling) as without a pack. */
+    video_set_logical_size(g_render_width, 240);
     SDL_RenderSetIntegerScale(s_renderer,
-        g_nes_config.integer_scale && !g_nes_config.stretch && !hd ? SDL_TRUE : SDL_FALSE);
+        g_nes_config.integer_scale && !g_nes_config.stretch ? SDL_TRUE : SDL_FALSE);
     SDL_ScaleMode sm = g_nes_config.linear_filter ? SDL_ScaleModeLinear : SDL_ScaleModeNearest;
     if (s_texture) SDL_SetTextureScaleMode(s_texture, sm);
     if (s_hd_texture) SDL_SetTextureScaleMode(s_hd_texture, sm);
@@ -591,10 +591,7 @@ static void hd_output_enable(int size_window) {
         return;
     }
     if (!s_renderer) return;
-    video_set_logical_size(hw, hh);
-    /* The HD logical size is larger than the native window, so integer
-     * scaling would round to 0 and draw nothing. Use fractional fit. */
-    SDL_RenderSetIntegerScale(s_renderer, SDL_FALSE);
+    nesrecomp_apply_video_settings();       /* native logical size, as without a pack */
     if (g_nes_config.linear_filter)
         SDL_SetTextureScaleMode(s_hd_texture, SDL_ScaleModeLinear);
     if (size_window && !g_nes_config.fullscreen) {
@@ -697,7 +694,8 @@ static void draw_overlays(int hd) {
         fx = (float)ow / (float)g_render_width;
         fy = (float)oh / 240.0f;
     } else {
-        fx = fy = (float)(hd ? s_hd_scale : 1);
+        fx = fy = 1.0f;                 /* logical size is the NES frame */
+        (void)hd;
     }
     for (int i = 0; i < s_overlay_count; i++) {
         Overlay *o = &s_overlays[i];
@@ -747,7 +745,7 @@ static void video_apply_pending(void) {
             SDL_DestroyTexture(s_hd_texture);
             s_hd_texture = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_ARGB8888,
                                              SDL_TEXTUREACCESS_STREAMING, hw, hh);
-            video_set_logical_size(hw, hh);
+            video_set_logical_size(g_render_width, 240);
         } else {
             /* Pack side channel could not follow: drop to native output. */
             if (nb) s_hd_buf = nb;
