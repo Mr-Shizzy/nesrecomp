@@ -460,6 +460,15 @@ static SDL_Texture       *s_texture   = NULL;
  * g_render_width x 240, then hdpack_upscale() builds this HD frame (scale x). */
 static SDL_Texture       *s_hd_texture = NULL;
 static uint32_t          *s_hd_buf     = NULL;
+
+/* [Display] HideOverscan: black out the top and bottom 8 NES rows (s = the
+ * buffer's scale: 1 native, or the HD pack's). */
+static void mask_overscan(uint32_t *buf, int native_w, int s) {
+    if (!g_nes_config.hide_overscan || !buf) return;
+    size_t row = (size_t)native_w * s;
+    for (size_t i = 0; i < row * 8 * s; i++) buf[i] = 0xFF000000u;
+    for (size_t i = row * 232 * s; i < row * 240 * s; i++) buf[i] = 0xFF000000u;
+}
 static int                s_hd_scale   = 1;
 /* Widescreen globals — default to standard 4:3 NES output.
  * Games override these in game_on_init() before the first frame. */
@@ -1883,6 +1892,7 @@ smoke_skip_input:
     benchmark_phase_start = benchmark_measure_callback
         ? SDL_GetPerformanceCounter() : 0;
     game_post_render(s_framebuf);
+    mask_overscan(s_framebuf, g_render_width, 1);
     if (benchmark_measure_callback)
         s_benchmark_post_render_ticks +=
             SDL_GetPerformanceCounter() - benchmark_phase_start;
@@ -2038,6 +2048,7 @@ smoke_skip_input:
                 /* Capture the HD output so screenshots match what is displayed. */
                 int hw = g_render_width * s_hd_scale, hh = 240 * s_hd_scale;
                 hdpack_upscale(s_framebuf, g_render_width, s_hd_buf);
+                mask_overscan(s_hd_buf, g_render_width, s_hd_scale);
                 uint8_t *rgb = (uint8_t *)malloc((size_t)hw * hh * 3);
                 if (rgb) {
                     for (int i = 0; i < hw * hh; i++) {
@@ -2198,6 +2209,7 @@ smoke_skip_input:
              * into the HD buffer, present the HD texture. (A game-owned wide
              * compositor bypasses the pack: its side channel is native-space.) */
             hdpack_upscale(present, g_render_width, s_hd_buf);
+            mask_overscan(s_hd_buf, g_render_width, s_hd_scale);
             SDL_UpdateTexture(s_hd_texture, NULL, s_hd_buf, g_render_width * s_hd_scale * 4);
             SDL_RenderCopy(s_renderer, s_hd_texture, NULL, NULL);
             draw_overlays(1);

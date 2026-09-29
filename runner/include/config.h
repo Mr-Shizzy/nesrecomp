@@ -46,6 +46,10 @@ typedef struct {
     /* Stretch the picture to fill the window/screen, ignoring the NES aspect
      * (distorts pixels). Last so positional initializers leave it 0 = off. */
     int stretch;
+
+    /* Hide the top and bottom 8 rows like a CRT's overscan did (they often
+     * hold junk the game never meant to be seen, e.g. parked sprites). */
+    int hide_overscan;
 } NesConfig;
 
 extern NesConfig g_nes_config;
