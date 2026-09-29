@@ -572,6 +572,10 @@ reopen_recomp_launcher:
 #if NESRECOMP_ENABLE_MODS
             gi.mods = nes_mod_runtime_launcher_provider_c();
 #endif
+#ifdef NESRECOMP_GAME_LAUNCHER_PAGES
+            /* Game-defined launcher pages (e.g. its in-game options menu). */
+            gi.host_pages = game_launcher_pages(&gi.host_page_count);
+#endif
             char win_title[96];
             snprintf(win_title, sizeof(win_title), "%s - Launcher",
                      gi.name ? gi.name : "NES");

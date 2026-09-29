@@ -88,3 +88,12 @@ void game_fill_frame_record(void *record);
  * Returns 1 if handled, 0 if not recognized.
  * Use debug_server_send_fmt() to send responses. */
 int game_handle_debug_cmd(const char *cmd, int id, const char *json);
+
+/* Optional: a build that defines NESRECOMP_GAME_LAUNCHER_PAGES implements
+ * this to add its own pages to the launcher (recomp-ui host pages, e.g. the
+ * game's in-game options menu). Returns an array of *count page pointers
+ * (the launcher's RecompLauncherCHostPage), valid for the program's life. */
+#ifdef NESRECOMP_GAME_LAUNCHER_PAGES
+struct RecompLauncherCHostPage;
+const struct RecompLauncherCHostPage* const* game_launcher_pages(int *count);
+#endif
