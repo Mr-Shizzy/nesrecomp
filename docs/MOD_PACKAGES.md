@@ -27,7 +27,12 @@ stages extraction, validates the manifest, and publishes a version atomically.
 
 The selected game image remains a stock ROM. Targets use the lowercase CRC32
 of all bytes after the 16-byte iNES header, matching NESRecomp's existing ROM
-verification and allowing equivalent header variants.
+verification and allowing equivalent header variants. A Famicom Disk System
+image is identified by its side data: the bytes after a 16-byte fwNES
+`FDS` header, or the whole of a headerless image (its first side begins
+with the disk info block, `*NINTENDO-HVC*`). Games on the cycle backend
+(`runner/cyc`) use the same packages and runtime; see
+[runner/cyc/README.md, Game mods](../runner/cyc/README.md#game-mods).
 
 ## Package layout
 
@@ -305,6 +310,27 @@ function entry`) rather than silently never firing — worth heeding, since the
 
 This is intentionally narrow. It is not a general per-instruction mod
 dispatcher.
+
+On the cycle backend (`runner/cyc`) a site is an instruction boundary rather
+than a C function entry, and it names its plugin and its code:
+
+```toml
+[[mod_function_hook]]
+id = "example.area-parser"   # the plugin registered for this site
+addr = 0x6E39
+length = 8                   # content key: CRC32 of the 8 bytes at addr
+crc32 = 0x24933765           # (or bytes = "A5 0E 48 20 ...")
+```
+
+The key is what makes an address in RAM mean one routine: a disk program
+loads different files at the same address, and the site fires only while its
+bytes are there (compiled RAM views, ROM banks and the interpreter alike).
+`length` + `crc32` keeps game bytes out of the repository. A callback runs
+before the site's instruction with the machine as the program left it, and
+can read, write and call the program's own routines in isolation (`cyc_mod.h`);
+nonzero returns from the routine as its RTS would. A plugin registered for an
+id the program does not declare refuses to start. See
+[runner/cyc/README.md, Game mods](../runner/cyc/README.md#game-mods).
 
 Games with additional local players can compile with `NESRECOMP_INPUT_SEATS=4`
 and read one-based seats through `logical_input.h`. Seats 1/2 retain the NES

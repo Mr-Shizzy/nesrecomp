@@ -13,6 +13,10 @@ Source of truth: `runner/include/nes_video.h`, `runner/src/nes_video.c`,
 `runner/src/main_runner.c`, the "Game-owned custom renderer" block in
 `runner/include/nes_runtime.h`, and the tail of `runner/src/ppu_renderer.c`.
 
+The widths come from `common/nes_video_geometry.h`, which the cycle backend
+shares: its equivalents are `runner/cyc/cyc_video.h` and `cyc_render.h`
+([runner/cyc/README.md, Game mods](../runner/cyc/README.md#game-mods)).
+
 ---
 
 ## 1. Render geometry (`nes_video`)
