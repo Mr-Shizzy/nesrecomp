@@ -40,7 +40,9 @@
  *   frame_end    (both) The machine finished a frame (cyc_run_frame), before
  *                anything is presented: the place for a game's per-frame work
  *                (caches, simulation) that must happen whether or not the
- *                frame is shown.
+ *                frame is shown. The frame's picture is already current: a
+ *                cyc_render_present here composes the one the window shows
+ *                next (a probe measuring the composed picture every frame).
  *
  *   options / option
  *                (both) Developer command-line options of the game's own, as

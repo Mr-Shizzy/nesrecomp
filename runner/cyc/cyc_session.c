@@ -161,10 +161,12 @@ void cyc_session_frame_begin(void)
 
 void cyc_session_frame_end(void)
 {
+    /* A new picture first: the game's frame_end may compose it
+     * (cyc_render_present), the one the window presents next. */
+    cyc_render_frame_done();
     const CycHostExtras *x = cyc_session_extras();
     if (x && x->frame_end) x->frame_end(x->ctx);
     cyc_mod_frame_end();          /* the ring's summary of the calls it made */
-    cyc_render_frame_done();
 }
 
 void cyc_session_state_loaded(void)

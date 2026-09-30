@@ -114,8 +114,11 @@ static void add_mod_rows(void)
             snprintf(m->feature, sizeof(m->feature), "%s", feat.id);
             snprintf(m->option, sizeof(m->option), "%s", o.id);
             snprintf(m->key, sizeof(m->key), "cyc.mod.%d", s_mod_count);
-            snprintf(m->label, sizeof(m->label), "%s: %s", feat.name, o.label);
-            snprintf(m->desc, sizeof(m->desc), "%s", o.description);
+            /* The option's own label (the row value needs the width); the
+             * description line names its feature. */
+            snprintf(m->label, sizeof(m->label), "%s", o.label);
+            if (o.description[0]) snprintf(m->desc, sizeof(m->desc), "%s: %s", feat.name, o.description);
+            else snprintf(m->desc, sizeof(m->desc), "%s", feat.name);
             m->type = o.type;
             if (o.type == RECOMP_MOD_OPTION_CHOICE) {
                 RecompLauncherCModChoice ch;

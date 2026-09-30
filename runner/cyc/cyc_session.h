@@ -51,7 +51,7 @@ void cyc_session_mods_reapply(void);
 bool cyc_session_start(void);
 /* Before every frame: the game's frame_begin. */
 void cyc_session_frame_begin(void);
-/* After every frame: the game's frame_end, then a new picture to present. */
+/* After every frame: a new picture to present, then the game's frame_end. */
 void cyc_session_frame_end(void);
 /* After a save state replaced the machine. */
 void cyc_session_state_loaded(void);
