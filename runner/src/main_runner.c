@@ -1468,8 +1468,7 @@ void nes_vblank_callback(void) {
     /* Update controllers from keyboard state via configurable keybinds */
     if (!headless_run_active()) {
         const uint8_t *keys = SDL_GetKeyboardState(NULL);
-        /* P1 may use keyboard or gamepad. P2 is an explicitly assigned gamepad
-         * (or a netplay peer), never a second hidden keyboard layout. */
+        /* P1 and P2 may each use keyboard (own [playerN] layout) or gamepad. */
         int s1 = g_nes_config.player_src[0], s2 = g_nes_config.player_src[1];
         /* Two-seat builds route the first pad to seat 1, so a keyboard P1
          * also takes it (keyboard + gamepad merged, as the README promises). */
@@ -1489,7 +1488,7 @@ void nes_vblank_callback(void) {
         if (tcp_btn >= 0) btn = (uint8_t)tcp_btn;
 
         g_controller1_buttons = btn;
-        g_controller2_buttons = (uint8_t)(s2 == 2 ? controller_read_player(2) : (NESRECOMP_INPUT_SEATS > 2 && s2 == 1 ? keybinds_read_player(keys,2) : 0));
+        g_controller2_buttons = (uint8_t)(s2 == 2 ? controller_read_player(2) : (s2 == 1 ? keybinds_read_player(keys,2) : 0));
         for (int p=2; p<NESRECOMP_INPUT_SEATS; ++p) {
             int src = g_nes_config.player_src[p];
             g_logical_input[p] = src==1 ? keybinds_read_player(keys,p+1) : src==2 ? controller_read_player(p+1) : 0;

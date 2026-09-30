@@ -251,7 +251,7 @@ static void write_defaults(const char *path) {
     fprintf(f, "# Common keys: Z, X, Backslash, Return, Up, Down, Left, Right\n");
     fprintf(f, "# Tab and F1-F12 are reserved runtime hotkeys.\n\n");
     write_player(f, "player1", &s_binds.p1);
-    if (NESRECOMP_INPUT_SEATS > 2) for (int p=2; p<=NESRECOMP_INPUT_SEATS; ++p) {
+    for (int p=2; p<=NESRECOMP_INPUT_SEATS; ++p) {
         char section[16]; snprintf(section,sizeof(section),"player%d",p);
         write_player(f,section,&s_binds.extra[p-2]);
     }
@@ -301,13 +301,11 @@ static void load_ini(const char *path) {
             current = NULL;
             cur_pad = NULL;
             if (strcmp(section, "player1") == 0) current = &s_binds.p1;
-            /* Legacy [player2] keyboard sections are intentionally ignored.
-             * P2 is now assigned explicitly to a gamepad or netplay peer. */
             else if (strcmp(section, "zapper") == 0) in_zapper = 1;
             else if (strcmp(section, "camera") == 0) in_camera = 1;
             else if (strcmp(section, "gamepad1") == 0) cur_pad = &s_binds.pad1;
             else if (strcmp(section, "gamepad2") == 0) cur_pad = &s_binds.pad2;
-            else if (NESRECOMP_INPUT_SEATS > 2 && strlen(section)==7 && !strncmp(section,"player",6) && section[6]>='2' && section[6]<='4') current=&s_binds.extra[section[6]-'2'];
+            else if (strlen(section)==7 && !strncmp(section,"player",6) && section[6]>='2' && section[6]<='0'+NESRECOMP_INPUT_SEATS) current=&s_binds.extra[section[6]-'2'];
             else if (NESRECOMP_INPUT_SEATS > 2 && strlen(section)==8 && !strncmp(section,"gamepad",7) && section[7]>='3' && section[7]<='4') cur_pad=&s_binds.extra_pad[section[7]-'3'];
             continue;
         }
@@ -399,16 +397,14 @@ static void load_ini(const char *path) {
 
 void keybinds_init(const char *exe_path) {
     s_binds = s_defaults;
-    /* Match the launcher's established second keyboard layout. Extra seats
-       remain unbound until assigned; two-seat titles retain legacy behavior. */
-    if (NESRECOMP_INPUT_SEATS > 2) {
-        s_binds.extra[0] = (PlayerBinds){
-            .a=SDL_SCANCODE_K, .b=SDL_SCANCODE_L,
-            .select=SDL_SCANCODE_RSHIFT, .start=SDL_SCANCODE_BACKSLASH,
-            .up=SDL_SCANCODE_W, .down=SDL_SCANCODE_S,
-            .left=SDL_SCANCODE_A, .right=SDL_SCANCODE_D
-        };
-    }
+    /* Match the launcher's established second keyboard layout. Seats 3/4
+       remain unbound until assigned. */
+    s_binds.extra[0] = (PlayerBinds){
+        .a=SDL_SCANCODE_K, .b=SDL_SCANCODE_L,
+        .select=SDL_SCANCODE_RSHIFT, .start=SDL_SCANCODE_BACKSLASH,
+        .up=SDL_SCANCODE_W, .down=SDL_SCANCODE_S,
+        .left=SDL_SCANCODE_A, .right=SDL_SCANCODE_D
+    };
     s_binds.extra_pad[0] = s_binds.extra_pad[1] = s_binds.pad2;
     derive_ini_path(exe_path);
 
@@ -431,7 +427,7 @@ static int is_runtime_hotkey(SDL_Scancode sc) {
 }
 
 uint8_t keybinds_read_player(const uint8_t *keys, int player) {
-    if (player < 1 || player > NESRECOMP_INPUT_SEATS || (NESRECOMP_INPUT_SEATS == 2 && player != 1)) return 0;
+    if (player < 1 || player > NESRECOMP_INPUT_SEATS) return 0;
     const PlayerBinds *pb = player == 1 ? &s_binds.p1 : &s_binds.extra[player-2];
     uint8_t btn = 0;
     if (!is_runtime_hotkey(pb->a)      && keys[pb->a])      btn |= 0x80;
