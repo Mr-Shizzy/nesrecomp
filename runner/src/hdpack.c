@@ -946,9 +946,15 @@ static int s_opt_hide_orig = -1;   /* unmatched tiles show backdrop, not the ori
 
 /* ── <condition> evaluation ───────────────────────────────────────────────── */
 
+/* $5F00-$5F0F: values the game sets with hdpack_set_var (state the NES RAM
+ * doesn't hold directly, e.g. which way a sprite is drawn facing). */
+static uint8_t s_vars[16];
+void hdpack_set_var(int i, uint8_t v) { if (i >= 0 && i < 16) s_vars[i] = v; }
+
 static uint8_t read_cpu_mem(uint32_t addr) {
     addr &= 0xFFFF;
     if (addr < 0x2000) return g_ram[addr & 0x07FF];
+    if ((addr & 0xFFF0) == 0x5F00) return s_vars[addr & 15];
     return 0;   /* outside internal RAM (PPU regs / ROM): not tracked */
 }
 static int cond_cmp(int a, HdCondOp op, int b) {

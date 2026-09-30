@@ -93,6 +93,10 @@ render path is **byte-identical to stock**. Safe to ship on by default off.
   neighbor's pixel is transparent) it tests OAM, so it reliably tells apart
   pictures that share a tile (a ghost's top half over different feet).
   Conditional `defaultTile` (wildcard-palette) entries honor their conditions.
+- **Game variables at `$5F00-$5F0F`** (extension): `memoryCheck(Constant)`
+  reads these addresses from values the game sets with `hdpack_set_var(i, v)`,
+  for state the NES RAM doesn't hold directly (e.g. the way a sprite is drawn
+  facing, which some games don't keep up to date during cutscenes).
 - Toggles (env): `NESRECOMP_HDPACK_DEBUG` (unmatched BG→magenta, sprite→cyan),
   `NESRECOMP_HDPACK_HIDE_ORIGINALS` (`disableOriginalTiles`-style),
   `NESRECOMP_CHR_DUMP` (8 KB CHR snapshot for authoring CHR-RAM packs).

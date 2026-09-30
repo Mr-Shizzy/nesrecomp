@@ -83,6 +83,8 @@ void hdpack_frame_begin(void);
 
 /* The OAM the frame was rendered from (read by oamNearby conditions). */
 void hdpack_set_oam(const uint8_t oam[256]);
+/* Game-set values that <condition> memory checks read at $5F00 + i (i < 16). */
+void hdpack_set_var(int i, uint8_t v);
 
 /* Produce the HD framebuffer from the native one + side channel.
  * native_fb is native_w x 240 ARGB8888; hd_buf is (native_w*scale) x
