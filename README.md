@@ -168,7 +168,7 @@ exits. All in-tree game projects already use `game.toml`; see Dr. Mario's
 
 A `keybinds.ini` file is auto-generated next to the game executable on first run. Player 1 keyboard bindings and both players' gamepad bindings are configurable. Edit the INI file and restart the game to apply changes.
 
-**Keyboard** — the `[player1]` section maps each NES button to an SDL key name. Player 2 has its own `[player2]` keyboard layout (default `W`/`A`/`S`/`D`, `K`/`L`), or an assigned gamepad or netplay peer. The default Player 1 Select key is `\`; Tab and F1–F12 are reserved runtime hotkeys.
+**Keyboard** — the `[player1]` section maps each NES button to an SDL key name. Player 2 has its own `[player2]` keyboard layout (default `W`/`A`/`S`/`D`, `K`/`L`, Right Shift = Select, Right Ctrl = Start), or an assigned gamepad or netplay peer. The default Player 1 Select key is `\`; Tab and F1–F12 are reserved runtime hotkeys.
 
 **Gamepad** — game controllers are supported cross-platform via SDL's
 `SDL_GameController` API (Xbox, PlayStation/DualSense, Switch Pro, and generic

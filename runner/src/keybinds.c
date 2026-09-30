@@ -141,6 +141,7 @@ static SDL_Scancode name_to_scancode(const char *name) {
     if (strcmp(name, "space") == 0) return SDL_SCANCODE_SPACE;
     if (strcmp(name, "lshift") == 0) return SDL_SCANCODE_LSHIFT;
     if (strcmp(name, "rshift") == 0) return SDL_SCANCODE_RSHIFT;
+    if (strcmp(name, "rctrl") == 0) return SDL_SCANCODE_RCTRL;
     if (strcmp(name, "backslash") == 0) return SDL_SCANCODE_BACKSLASH;
     if (strcmp(name, "escape") == 0) return SDL_SCANCODE_ESCAPE;
     return SDL_SCANCODE_UNKNOWN;
@@ -401,7 +402,7 @@ void keybinds_init(const char *exe_path) {
        remain unbound until assigned. */
     s_binds.extra[0] = (PlayerBinds){
         .a=SDL_SCANCODE_K, .b=SDL_SCANCODE_L,
-        .select=SDL_SCANCODE_RSHIFT, .start=SDL_SCANCODE_BACKSLASH,
+        .select=SDL_SCANCODE_RSHIFT, .start=SDL_SCANCODE_RCTRL,
         .up=SDL_SCANCODE_W, .down=SDL_SCANCODE_S,
         .left=SDL_SCANCODE_A, .right=SDL_SCANCODE_D
     };
