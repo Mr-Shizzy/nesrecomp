@@ -710,6 +710,10 @@ void apu_output_ring_rewind(int head) {
  * The APU is now run by the CPU-cycle stream, so this no longer synthesizes —
  * it pulls finished samples. Underrun (ring empty on a slow/odd frame) holds the
  * last sample; the DRC bridge's servo + stall-conceal absorb the slight jitter. */
+int apu_output_available(void) {
+    return (s_ring_head - s_ring_tail) & (APU_RING_SIZE - 1);
+}
+
 void apu_generate(int16_t *buf, int n_samples) {
     int16_t last = 0;
     int16_t lastc[APU_T0_CHANNELS] = {0, 0, 0, 0, 0};

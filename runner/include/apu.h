@@ -12,6 +12,9 @@ uint8_t apu_read_status(void);
 /* Generate n_samples mono int16 samples into buf.
  * Call once per VBlank (n_samples = 735 at 44100 Hz / 60 fps). */
 void    apu_generate(int16_t *buf, int n_samples);
+/* Samples produced and not yet taken by apu_generate (for exact draining,
+ * e.g. a game recording its own sounds in a headless run). */
+int     apu_output_available(void);
 
 /* Silence channels at the mixer only (bit0 pulse1, bit1 pulse2, bit2
  * triangle, bit3 noise, bit4 dmc). Channel state keeps running, so a game
