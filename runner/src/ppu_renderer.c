@@ -1153,10 +1153,13 @@ render_sprites:
                 if (px < -ws_eff_l || px >= 256 + ws_eff_r) continue;
                 int color_idx = ((lo >> chr_bit) & 1) | (((hi >> chr_bit) & 1) << 1);
                 if (color_idx == 0) {         /* transparent */
-                    /* HD: remember the box so replacement art can use it. */
+                    /* HD: remember the box so replacement art can use it
+                     * (a behind-BG sprite only where the BG is empty). */
                     int cfx = px + g_widescreen_left;
-                    if (g_hp && !priority && cfx >= 0 && cfx < g_render_width &&
-                        (px >= 8 || (row_mask & 0x04))) {
+                    if (g_hp && cfx >= 0 && cfx < g_render_width &&
+                        (px >= 8 || (row_mask & 0x04)) &&
+                        !(priority && s_bg_opaque_width == g_render_width &&
+                          s_bg_opaque_snapshot[(size_t)py * g_render_width + cfx])) {
                         HdPixel *hp = &g_hp[py * g_render_width + cfx];
                         hp->cv_has   = 1;
                         hp->cv_index = (int32_t)((tile_chr_base >> 4) + tile_num);
