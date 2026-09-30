@@ -2,6 +2,7 @@
 #include "cyc_session.h"
 
 #include "cyc_hooks.h"
+#include "cyc_mod.h"
 #include "cyc_render.h"
 
 #include <stdlib.h>
@@ -123,6 +124,13 @@ bool cyc_session_mods_start(const char *image_path, char *err, size_t err_len)
 #endif
 }
 
+void cyc_session_mods_reapply(void)
+{
+#if NESRECOMP_ENABLE_MODS
+    if (s_mods) nes_mod_runtime_activate_plugins_c();
+#endif
+}
+
 /* ---- the run ---- */
 
 bool cyc_session_start(void)
@@ -145,10 +153,17 @@ bool cyc_session_start(void)
     return true;
 }
 
+void cyc_session_frame_begin(void)
+{
+    const CycHostExtras *x = cyc_session_extras();
+    if (x && x->frame_begin) x->frame_begin(x->ctx);
+}
+
 void cyc_session_frame_end(void)
 {
     const CycHostExtras *x = cyc_session_extras();
     if (x && x->frame_end) x->frame_end(x->ctx);
+    cyc_mod_frame_end();          /* the ring's summary of the calls it made */
     cyc_render_frame_done();
 }
 

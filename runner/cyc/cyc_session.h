@@ -42,10 +42,15 @@ const void *cyc_session_mods_provider(void);
 /* Commit the selection for this image and activate its plugins (reset
  * callbacks first). */
 bool cyc_session_mods_start(const char *image_path, char *err, size_t err_len);
+/* Activate the committed plugins again after the selection changed in the
+ * running game (the runtime menu's Mods rows). */
+void cyc_session_mods_reapply(void);
 
 /* After power-on, before the first frame: bind hook plugins, apply the game's
  * command-line options, the game's power_on. False: do not run. */
 bool cyc_session_start(void);
+/* Before every frame: the game's frame_begin. */
+void cyc_session_frame_begin(void);
 /* After every frame: the game's frame_end, then a new picture to present. */
 void cyc_session_frame_end(void);
 /* After a save state replaced the machine. */

@@ -86,7 +86,9 @@ void cyc_hooks_frame_end(void);
 typedef struct {
     uint64_t fired;       /* callbacks run */
     uint64_t handled;     /* ... that returned from the routine */
-    uint64_t mismatched;  /* the site's address came up with other code there */
+    uint64_t mismatched;  /* the site's address came up with other code there, where the
+                             scheduler looked: interpreted code (a compiled view of other
+                             code has no exit at the site and never stops there) */
 } CycHookStats;
 /* Per site (index into cyc_native_hook_sites), or the total for -1. */
 void cyc_hooks_stats(int site, CycHookStats *out);

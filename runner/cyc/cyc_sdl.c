@@ -1085,7 +1085,7 @@ int cyc_sdl_main(const char *title_in, int scale)
     }
 #ifdef CYC_WITH_RECOMP_UI
     CycUiHost host = { &s_set, s_extras, s_fds, apply_settings, save_settings, request_quit, frames_done, now_ms, title,
-                       save_state_slot, load_state_slot };
+                       save_state_slot, load_state_slot, cyc_session_mods_provider(), s_image, cyc_session_mods_reapply };
     s_have_menu = cyc_ui_init(s_win, s_ren, &host);
 #endif
 
@@ -1219,6 +1219,7 @@ int cyc_sdl_main(const char *title_in, int scale)
             cyc_host_disk_frame(now, s_frames_done);
             cyc_set_controller(0, pad0);
             cyc_set_controller(1, pad1);
+            cyc_session_frame_begin();
             cyc_run_frame();
             cyc_session_frame_end();
             frames++;

@@ -1354,6 +1354,7 @@ int main(int argc, char **argv) {
         cyc_host_disk_frame(emulated_ms(frame), frame);
         observe_frame = frame;
         double frame_start = wall_seconds();
+        cyc_session_frame_begin();
         cyc_run_frame();
         cyc_session_frame_end();
         fds_save_frame(frame + 1);

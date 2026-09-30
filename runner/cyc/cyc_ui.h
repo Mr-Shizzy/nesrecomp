@@ -45,6 +45,13 @@ typedef struct {
     const char *title;                    /* the menu's title (the game) */
     bool (*save_state)(void);             /* the save state slot (cyc_state.h) */
     bool (*load_state)(void);
+    /* The mod runtime's RecompLauncherCModProvider (NULL: no mods) and the
+     * image the game runs: the menu's Mods rows edit the features and their
+     * options live, commit them for this image, and call mods_changed to
+     * activate the plugins again. */
+    const void *mods;
+    const char *image;
+    void (*mods_changed)(void);
 } CycUiHost;
 
 /* The launcher, before the image loads. `settings` is edited in place; on

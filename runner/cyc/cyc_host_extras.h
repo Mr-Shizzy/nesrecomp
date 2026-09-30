@@ -35,6 +35,8 @@
  *   power_on     (both) The machine was just powered on, before its first
  *                frame (and after mods activated): reset the game's own state.
  *
+ *   frame_begin  (both) A frame is about to run (before cyc_run_frame).
+ *
  *   frame_end    (both) The machine finished a frame (cyc_run_frame), before
  *                anything is presented: the place for a game's per-frame work
  *                (caches, simulation) that must happen whether or not the
@@ -81,6 +83,7 @@ typedef struct CycHostExtras {
     void (*load_setting)(void *ctx, const char *key, const char *value);
     void (*save_settings)(void *ctx, FILE *f);
     void (*power_on)(void *ctx);
+    void (*frame_begin)(void *ctx);
     void (*frame_end)(void *ctx);
     const CycHostOption *options;
     size_t option_count;
