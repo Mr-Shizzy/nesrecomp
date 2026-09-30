@@ -26,6 +26,22 @@
 
 HwPpu    ppu;
 uint16_t hw_frame_index[256 * 240];
+CycLine  hw_frame_lines[240];
+uint8_t  hw_frame_bg[256 * 240];
+
+const CycLine *cyc_frame_lines(void) { return hw_frame_lines; }
+const uint8_t *cyc_frame_bg_opaque(void) { return hw_frame_bg; }
+
+/* cyc_core.h CycLine, at dot 1 of visible line sl. */
+static inline void capture_line(int sl)
+{
+    CycLine *l = &hw_frame_lines[sl];
+    l->v = ppu.v;
+    l->fine_x = ppu.fine_x;
+    l->ctrl = (uint8_t)(ppu.sprite_table << 3 | ppu.bg_table << 4 | ppu.sprite16 << 5);
+    l->mask = (uint8_t)(ppu.greyscale | ppu.show_bg8 << 1 | ppu.show_spr8 << 2 | ppu.show_bg << 3 | ppu.show_spr << 4 |
+                        ppu.emphasis << 5);
+}
 
 /* Dots an open-bus bit of the PPU's CPU-side data bus holds a 1. */
 #define IO_DECAY_DOTS 1786830u
@@ -666,6 +682,7 @@ static void compute_pixel(void)
         pal = (uint8_t)(((ppu.attr_lo >> (7 - fx)) & 1) | (((ppu.attr_hi >> (7 - fx)) & 1) << 1));
         if (color == 0) pal = 0;
     }
+    hw_frame_bg[ppu.scanline * 256 + ppu.dot - 1] = color != 0;
     if (ppu.show_spr && (ppu.dot > 8 || ppu.show_spr8) && !sprite_units_idle()) {
         int i;
         uint8_t sc = 0;
@@ -917,6 +934,8 @@ static void blank_dot(void)
     if (line) {
         if (dot >= 1 && dot <= 256) {
             if (sl < 240) {
+                if (dot == 1) capture_line(sl);
+                hw_frame_bg[sl * 256 + dot - 1] = 0;
                 uint8_t addr = 0;
                 if ((ppu.v & 0x3F1F) >= 0x3F00) {
                     addr = (uint8_t)(ppu.v & 0x1F);
@@ -987,6 +1006,7 @@ static void general_dot(void)
         }
     }
     int dot = ppu.dot;
+    if (dot == 1 && sl < 240) capture_line(sl);
 
     /* At alignment 1 sprite evaluation sees $2001 one dot later. */
     if (hw.align != 1) {
@@ -1274,6 +1294,12 @@ void ppu_write(uint16_t addr, uint8_t value)
 
 /* ---- power-on ---- */
 
+void ppu_state_reloaded(void)
+{
+    sm_rest = false;
+    dot_kind = DOT_UNKNOWN;
+}
+
 void ppu_power_on(void)
 {
     memset(&ppu, 0, sizeof(ppu));
@@ -1295,6 +1321,8 @@ void ppu_power_on(void)
     };
     memcpy(ppu.palette, power_on_palette, sizeof(ppu.palette));
     memset(hw_frame_index, 0, sizeof(hw_frame_index));
+    memset(hw_frame_lines, 0, sizeof(hw_frame_lines));
+    memset(hw_frame_bg, 0, sizeof(hw_frame_bg));
 }
 
 /* ---- state hash ---- */

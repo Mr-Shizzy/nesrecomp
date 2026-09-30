@@ -240,7 +240,7 @@ void cyc_ramview_run(int index)
             cyc_ramview_stats.code_write_exits++;
             cyc_ring_push(CYC_EV_VIEW_EXIT, cpu.pc, (uint32_t)index);
         }
-    } while (!hw_frame_done && !cpu.jammed && (index = cyc_ramview_find(cpu.pc)) >= 0);
+    } while (!hw_frame_done && !cyc_hook_hit && !cpu.jammed && (index = cyc_ramview_find(cpu.pc)) >= 0);
 }
 
 void cyc_ramview_frame_end(void)
@@ -248,6 +248,17 @@ void cyc_ramview_frame_end(void)
     if (frame_entries || frame_validated)
         cyc_ring_push(CYC_EV_VIEW_FRAME, (uint16_t)(frame_validated > 0xFFFF ? 0xFFFF : frame_validated), frame_entries);
     frame_entries = frame_validated = 0;
+}
+
+size_t cyc_ramview_validity_size(void) { return state ? view_count : 0; }
+void   cyc_ramview_validity_get(uint8_t *buf) { if (state) memcpy(buf, state, view_count); }
+void   cyc_ramview_validity_set(const uint8_t *buf) { if (state) memcpy(state, buf, view_count); }
+
+void cyc_ramview_revalidate(void)
+{
+    for (uint32_t i = 0; state && i < view_count; ++i)
+        if (state[i] != RV_UNUSABLE) state[i] = RV_UNKNOWN;
+    cyc_ram_code_dirty = 0;
 }
 
 void cyc_ramview_list(void *file)

@@ -7,6 +7,7 @@
  */
 #include "nes_video.h"
 #include "nes_runtime.h"
+#include "../../common/nes_video_geometry.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -18,85 +19,30 @@ static int s_pending = 0;
 static int s_pending_left = 0, s_pending_right = 0;
 static int s_last_out_w = 0, s_last_out_h = 0;
 
-static int clamp_even_width(int w) {
-    if (w < 256) w = 256;
-    if (w > NES_MAX_RENDER_WIDTH) w = NES_MAX_RENDER_WIDTH;
-    /* Even width keeps the stock 256 columns exactly centered. */
-    w &= ~1;
-    return w;
-}
+/* The numbers are common/nes_video_geometry.h's, shared with the cycle host
+ * (runner/cyc/cyc_video.c); this file keeps only the function-level runner's
+ * request/apply state. */
+typedef char nes_video_one_width_limit[NES_MAX_RENDER_WIDTH == NES_VIDEO_MAX_WIDTH ? 1 : -1];
+typedef char nes_video_one_mode_list[(NES_ASPECT_STOCK == NES_VIDEO_STOCK && NES_ASPECT_16_9 == NES_VIDEO_16_9 &&
+                                      NES_ASPECT_21_9 == NES_VIDEO_21_9 && NES_ASPECT_32_9 == NES_VIDEO_32_9 &&
+                                      NES_ASPECT_FIT == NES_VIDEO_FIT && NES_ASPECT_COUNT == NES_VIDEO_MODE_COUNT)
+                                     ? 1 : -1];
 
-int nes_video_width_for_aspect(double aspect) {
-    if (!(aspect > 0.0)) return 256;
-    /* Square pixels: the picture is 240 rows tall, so the width that shows a
-     * given aspect is 240 * aspect. Round to nearest even. (16:15 -> 256, the
-     * vanilla frame; 4:3 -> 320, which genuinely fills a 4:3 window.) */
-    int w = 2 * (int)floor((240.0 * aspect) / 2.0 + 0.5);
-    return clamp_even_width(w);
-}
+static int clamp_even_width(int w) { return nes_video_geometry_clamp_width(w); }
+
+int nes_video_width_for_aspect(double aspect) { return nes_video_geometry_width_for_aspect(aspect); }
 
 int nes_video_width_for(NesAspectMode mode, int out_w, int out_h) {
-    /* Under the square-pixel model a 256x240 frame is 16:15, NOT 4:3. STOCK
-     * therefore has to be an explicit case: routing it through the aspect
-     * formula at 4/3 would yield round_even(240 * 4/3) = 320, i.e. 32-px
-     * margins of invented picture rather than the vanilla frame. */
-    double aspect;
-    switch (mode) {
-    case NES_ASPECT_16_9: aspect = 16.0 / 9.0; break;
-    case NES_ASPECT_21_9: aspect = 21.0 / 9.0; break;
-    case NES_ASPECT_32_9: aspect = 32.0 / 9.0; break;
-    case NES_ASPECT_FIT:
-        /* Clamp low at 16:15 (= NES_STOCK_ASPECT), the aspect of the vanilla
-         * frame: a window narrower than that gets the stock 256 columns
-         * (pillarboxed by SDL_RenderSetLogicalSize) instead of a picture
-         * narrower than the game. A 4:3 window still fits exactly, at 320. */
-        if (out_w > 0 && out_h > 0) {
-            aspect = (double)out_w / (double)out_h;
-            if (aspect < NES_STOCK_ASPECT)  aspect = NES_STOCK_ASPECT;
-            if (aspect > 32.0 / 9.0)        aspect = 32.0 / 9.0;
-        } else {
-            aspect = NES_STOCK_ASPECT;
-        }
-        break;
-    case NES_ASPECT_STOCK:
-    default:
-        return 256;
-    }
-    return nes_video_width_for_aspect(aspect);
+    return nes_video_geometry_width_for((int)mode, out_w, out_h);
 }
 
-const char *nes_video_aspect_name(NesAspectMode mode) {
-    switch (mode) {
-    case NES_ASPECT_STOCK: return "stock";
-    case NES_ASPECT_16_9:  return "16:9";
-    case NES_ASPECT_21_9:  return "21:9";
-    case NES_ASPECT_32_9:  return "32:9";
-    case NES_ASPECT_FIT:   return "fit";
-    default:               return "?";
-    }
-}
+const char *nes_video_aspect_name(NesAspectMode mode) { return nes_video_geometry_name((int)mode); }
 
 int nes_video_aspect_from_name(const char *name, NesAspectMode *out) {
-    if (!name || !out) return 0;
-    char n[16];
-    size_t i;
-    for (i = 0; name[i] && i < sizeof(n) - 1; i++) {
-        char c = name[i];
-        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-        if (c == '-' || c == 'x' || c == '_') c = ':';
-        n[i] = c;
-    }
-    n[i] = '\0';
-    if (!strcmp(n, "stock") || !strcmp(n, "4:3") || !strcmp(n, "off") || !strcmp(n, "0")) {
-        *out = NES_ASPECT_STOCK; return 1;
-    }
-    if (!strcmp(n, "16:9")) { *out = NES_ASPECT_16_9; return 1; }
-    if (!strcmp(n, "21:9")) { *out = NES_ASPECT_21_9; return 1; }
-    if (!strcmp(n, "32:9")) { *out = NES_ASPECT_32_9; return 1; }
-    if (!strcmp(n, "fit") || !strcmp(n, "adaptive") || !strcmp(n, "auto")) {
-        *out = NES_ASPECT_FIT; return 1;
-    }
-    return 0;
+    int mode;
+    if (!out || !nes_video_geometry_parse(name, &mode)) return 0;
+    *out = (NesAspectMode)mode;
+    return 1;
 }
 
 void nes_video_request_margins(int left, int right) {

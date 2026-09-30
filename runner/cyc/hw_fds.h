@@ -55,6 +55,17 @@ void     fds_hle_ready(void);
 void     fds_hle_host_disk_change(void);     /* a host eject or insert */
 void     fds_hle_frame_end(void);
 uint64_t fds_hle_state_hash(uint64_t acc);
+/* State outside hw_cart for save states and isolated calls (cyc_state.c):
+ * the HLE tier's struct (its plan, cfg, is the host's and is kept on load);
+ * the media's scalars (in-process snapshot: the drive's side, write run,
+ * change counters); and the media whole, sides included, as a save state
+ * serializes it (false on load when it is not this image's). */
+void    *fds_hle_state_ptr(size_t *size);
+size_t   fds_media_snapshot_size(void);
+void     fds_media_snapshot(void *buf);
+void     fds_media_restore(const void *buf);
+size_t   fds_media_serialize(uint8_t *buf, size_t cap);
+bool     fds_media_deserialize(const uint8_t *buf, size_t len, bool apply);
 
 #ifdef __cplusplus
 }

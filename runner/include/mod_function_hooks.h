@@ -80,6 +80,20 @@ int nes_mod_function_entry(uint16_t addr);
  * did nothing". */
 uint64_t nes_mod_function_hook_hits(void);
 
+/*
+ * The registry itself, for a runtime that dispatches hooks on its own terms
+ * (the cycle host keys each site on the code at its address: runner/cyc/
+ * cyc_hooks.h). Index order is registration order and never changes.
+ */
+int nes_mod_function_hook_count(void);
+/* 1 and the hook's fields for a valid index (any out pointer may be NULL). */
+int nes_mod_function_hook_at(int index, const char **id, uint16_t *addr, int *enabled,
+                             NESModFunctionEntryCallback *callback);
+/* Number of enabled hooks. */
+int nes_mod_function_hooks_active(void);
+/* Called after every change of any hook's enabled state (one listener). */
+void nes_mod_function_hooks_set_listener(void (*listener)(void));
+
 #ifdef __cplusplus
 }
 #endif

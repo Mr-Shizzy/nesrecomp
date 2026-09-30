@@ -203,7 +203,7 @@ static void bios_checks(const char *dir)
     script_edit = NULL;
     script_rom = NULL;
     script_result = RECOMP_LAUNCHER_RESULT_QUIT;
-    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, true, &host) == 1);
+    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, true, &host, NULL) == 1);
     CHECK(seen_game.has_bios == 1 && seen_game.host_persists_paths == 1);
     CHECK(seen_game.bios_name && !strcmp(seen_game.bios_name, "FDS BIOS"));
     CHECK(seen_game.num_bios_patterns == 3 && !strcmp(seen_game.bios_patterns[2], "*.*"));
@@ -227,20 +227,20 @@ static void bios_checks(const char *dir)
     /* Select BIOS... -> config.ini [FDS] Bios, read back and handed in next time */
     script_bios = good;
     script_edit = pick_bios;
-    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, true, &host) == 1);
+    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, true, &host, NULL) == 1);
     CHECK(!strcmp(s.fds_bios, good));
     CHECK(cyc_settings_save(&s, cfg, NULL));
     CycSettings back;
     cyc_settings_default(&back);
     CHECK(cyc_settings_load(&back, cfg, stderr, NULL) && !strcmp(back.fds_bios, good));
     script_edit = NULL;
-    CHECK(cyc_ui_launcher(&back, cfg, NULL, &rom, true, &host) == 1);
+    CHECK(cyc_ui_launcher(&back, cfg, NULL, &rom, true, &host, NULL) == 1);
     CHECK(!strcmp(seen_io.bios_path, good));
     CycFdsBiosLookup start = { NULL, back.fds_bios, NULL, crc };  /* the next start uses it */
     CHECK(cyc_fds_bios_locate(&start, false, &r) == CYC_FDS_BIOS_OK && !strcmp(r.path, good));
     /* Clear: the key stays, empty */
     script_edit = clear_bios;
-    CHECK(cyc_ui_launcher(&back, cfg, NULL, &rom, true, &host) == 1 && !back.fds_bios[0]);
+    CHECK(cyc_ui_launcher(&back, cfg, NULL, &rom, true, &host, NULL) == 1 && !back.fds_bios[0]);
     CHECK(cyc_settings_save(&back, cfg, NULL));
     cyc_settings_default(&s);
     snprintf(s.fds_bios, sizeof(s.fds_bios), "stale");
@@ -268,7 +268,7 @@ int main(int argc, char **argv)
     cyc_settings_default(&s);
     const char *rom = image;
     script_result = RECOMP_LAUNCHER_RESULT_QUIT;
-    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, true, NULL) == 1);
+    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, true, NULL, NULL) == 1);
     CHECK(!strcmp(seen_initial, image));
     CHECK(seen_game.settings_bindings == 1);
     CHECK(!strcmp(seen_game.theme, "nes") && !strcmp(seen_game.platform, "FAMICOM DISK SYSTEM"));
@@ -291,7 +291,7 @@ int main(int argc, char **argv)
 #endif
     /* a cartridge: no Disk row, no disk media names */
     cyc_settings_default(&s);
-    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, false, NULL) == 1);
+    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, false, NULL, NULL) == 1);
     CHECK(seen_game.assist_binding_count == CYC_SC_COUNT - 1);
     CHECK(strcmp(seen_game.assist_binding_labels[0], cyc_shortcut_label(CYC_SC_DISK)));
     CHECK(seen_game.num_rom_patterns == 0);
@@ -302,7 +302,7 @@ int main(int argc, char **argv)
     script_rom = "F:/somewhere/else.fds";
     script_result = RECOMP_LAUNCHER_RESULT_LAUNCH;
     rom = image;
-    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, true, NULL) == 0);
+    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, true, NULL, NULL) == 0);
     CHECK(!strcmp(rom, "F:/somewhere/else.fds"));
     CHECK(s.window_scale == 5 && s.fullscreen == 1 && s.integer_scale == 0 && s.linear_filter == 1);
     CHECK(s.audio_enabled == 0 && s.volume == 40 && s.skip_launcher == 1);
@@ -329,13 +329,13 @@ int main(int argc, char **argv)
     script_edit = NULL;
     script_rom = NULL;
     script_result = RECOMP_LAUNCHER_RESULT_QUIT;
-    CHECK(cyc_ui_launcher(&back, cfg, NULL, &rom, true, NULL) == 1);
+    CHECK(cyc_ui_launcher(&back, cfg, NULL, &rom, true, NULL, NULL) == 1);
     CHECK(seen_io.assist_key_bind[CYC_SC_DISK] == SDL_SCANCODE_F1 && seen_io.volume == 40);
 
     /* a cartridge launcher's shortcut rows map around the missing Disk row */
     cyc_settings_default(&s);
     script_edit = edit_everything;
-    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, false, NULL) == 1);      /* closed: edits kept, quit */
+    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, false, NULL, NULL) == 1);      /* closed: edits kept, quit */
     CHECK(s.bind.shortcut[CYC_SC_DISK].key == SDL_SCANCODE_D);    /* untouched */
     CHECK(s.bind.shortcut[CYC_SC_MENU].key == SDL_SCANCODE_F1);   /* row 0 there is Menu */
     /* unavailable: go on without it */
@@ -343,7 +343,7 @@ int main(int argc, char **argv)
     script_edit = NULL;
     script_result = RECOMP_LAUNCHER_RESULT_UNAVAILABLE;
     rom = image;
-    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, true, NULL) == 2 && rom == image);
+    CHECK(cyc_ui_launcher(&s, cfg, NULL, &rom, true, NULL, NULL) == 2 && rom == image);
     CHECK(!seen_game.has_bios && !seen_game.bios_verify_for_rom);       /* no lookup: no BIOS card */
     remove(cfg);
     bios_checks(dir);

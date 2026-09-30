@@ -789,6 +789,12 @@ void dma_end_of_cycle(void)
 /* Power-on, state                                                           */
 /* ------------------------------------------------------------------------- */
 
+void *apu_state_ptr(size_t *size)
+{
+    *size = sizeof(apu);
+    return &apu;
+}
+
 void apu_power_on(void)
 {
     memset(&apu, 0, sizeof(apu));

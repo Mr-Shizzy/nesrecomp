@@ -155,7 +155,7 @@ set_tests_properties(cyc_fds_disk_test PROPERTIES FIXTURES_REQUIRED fds_fixtures
 # FDS RAM Adapter and drive: register/IRQ/drive contracts, then a synthetic
 # BIOS (tools/cyc/fds_board_fixtures.py) run on the whole machine.
 add_executable(cyc_fds_board_test fds_board_test.c cpu6502.c cpu6502_interp.c hw_machine.c ${CYC_TEST_BOARD_SOURCES}
-    hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_ramview.c cyc_native_none.c)
+    hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c ${NESRECOMP_CYC_SCHEDULER_SOURCES} cyc_native_none.c)
 target_include_directories(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 target_link_libraries(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
 if(MSVC)
@@ -173,7 +173,7 @@ set_tests_properties(cyc_fds_board_test PROPERTIES FIXTURES_REQUIRED fds_board_f
 # model's frequency and step response against its documented RC sections, and
 # no effect on the machine. The FDS default uses the board fixtures' disk.
 add_executable(cyc_console_audio_test console_audio_test.c cpu6502.c cpu6502_interp.c hw_machine.c ${CYC_TEST_BOARD_SOURCES}
-    hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_ramview.c
+    hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c ${NESRECOMP_CYC_SCHEDULER_SOURCES}
     cyc_native_none.c)
 target_include_directories(cyc_console_audio_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 target_link_libraries(cyc_console_audio_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})

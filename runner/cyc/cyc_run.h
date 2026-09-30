@@ -57,6 +57,10 @@ void cyc_run_frame(void);
 /* Called at the first instruction boundary after hw_observe_line's dot 0
  * (hw.h), in the middle of cyc_run_frame. */
 extern void (*cyc_run_observer)(void);
+/* A mod's isolated routine call (cyc_mod.c): dispatch from cpu.pc until the
+ * routine returns to stop_pc with S back at entry_s. 0, or CYC_MOD_FAIL_*
+ * (cyc_ring.h). */
+int cyc_run_isolated(uint16_t stop_pc, uint8_t entry_s);
 
 #ifdef __cplusplus
 }

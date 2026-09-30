@@ -191,6 +191,17 @@ static int run_action(void *ctx, const RecompRuntimeUiItem *it)
         if (!cyc_disk_action_toast(a, now, &t)) cyc_host_disk_press(now, f);
         return cyc_host_disk_press(now, f) != CYC_DISK_PRESS_NONE;
     }
+    if (is_key(it, "cyc.state.save") && s_host.save_state) {
+        bool ok = s_host.save_state();
+        recomp_runtime_ui_set_status(s_ui, ok ? "State saved" : "The state was not saved");
+        return ok;
+    }
+    if (is_key(it, "cyc.state.load") && s_host.load_state) {
+        bool ok = s_host.load_state();
+        recomp_runtime_ui_set_status(s_ui, ok ? "State loaded" : "No state to load for this game");
+        if (ok) recomp_runtime_ui_close(s_ui);
+        return ok;
+    }
     if (is_key(it, "cyc.quit")) {
         uint64_t now = s_host.now_ms();
         if (s_quit_armed && now - s_quit_armed < 3000) { s_host.quit(); return 1; }
@@ -275,6 +286,12 @@ RecompRuntimeUi *cyc_ui_menu_create(const CycUiHost *host)
     if (x && x->menu_items)
         for (size_t i = 0; i < x->menu_item_count; ++i)
             if (s_item_count < sizeof(s_items) / sizeof(s_items[0])) s_items[s_item_count++] = x->menu_items[i];
+    if (host->save_state && host->load_state) {
+        add("cyc.state.save", "System", "Save state", "Keep the game exactly as it is now (one slot, Save state key).",
+            RECOMP_RUNTIME_UI_ACTION, 0, 0, 0, NULL, 0, NULL);
+        add("cyc.state.load", "System", "Load state", "Go back to the saved state (Load state key).",
+            RECOMP_RUNTIME_UI_ACTION, 0, 0, 0, NULL, 0, NULL);
+    }
     add("cyc.quit", "System", "Quit", "Close the game (the disk save is written first).", RECOMP_RUNTIME_UI_ACTION,
         0, 0, 0, NULL, 0, NULL);
     refresh();

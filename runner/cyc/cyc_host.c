@@ -112,7 +112,25 @@
  *     --present-out FILE   headless: also save what a window would present
  *     --present-every N    (the picture plus the toast), every Nth frame and the
  *                          last, numbered like --shot-every. Never the picture
- *                          --screenshot, --hash-out or --frame-log see.
+ *                          --screenshot, --hash-out or --frame-log see. A game
+ *                          with its own compositor (cyc_render.h) presents at
+ *                          its width (cyc_video.h).
+ *     --present-size WxH   headless: the drawable size a window of that size
+ *                          would have, for a game presenting at "fit"
+ *
+ *   Save states (cyc_state.h): the whole machine, the host's frame counter and
+ *   drive, and the mods' records, at a frame's end:
+ *     --save-state F:FILE  write one after frame F (repeatable)
+ *     --load-state FILE    start from one: the run continues at the frame it
+ *                          was saved after (inputs and disk events before it
+ *                          are skipped), and its --hash-out lines continue the
+ *                          saved run's
+ *
+ *   Mods (a game built with nesrecomp_add_cycle_game ... MODS, cyc_session.h):
+ *     --mods-root DIR      read the mod catalog DIR (packages/, state.toml) and
+ *                          activate its selection; headless runs read none
+ *                          without it. The window reads <exe dir>/mods.
+ *   A game's own options (cyc_host_extras.h) follow its --help lines.
  *
  *   Window (SDL builds without headless options): config.ini beside the
  *   executable holds the settings and every binding (cyc_settings.h); a build
@@ -149,9 +167,15 @@
 #include "cyc_overlay.h"
 
 #ifndef CYC_ORACLE
+#include "cyc_hooks.h"
+#include "cyc_mod.h"
 #include "cyc_ramview.h"
 #include "cyc_recomp.h"
+#include "cyc_render.h"
 #include "cyc_run.h"
+#include "cyc_session.h"
+#include "cyc_state.h"
+#include "cyc_video.h"
 #endif
 
 #include <stdio.h>
@@ -168,6 +192,7 @@
 int cyc_sdl_main(const char *title, int scale);
 void cyc_sdl_option(const char *name, const char *value);
 void cyc_sdl_present_out(const char *path, long every);
+void cyc_sdl_image_path(const char *path);
 #endif
 #ifdef CYC_ORACLE
 void cyc_oracle_address_report(void *file);
@@ -777,18 +802,87 @@ static void numbered_path(char *buf, size_t n, const char *base, long frame) {
  * copy, never in the machine's picture. */
 static void write_presentation(const char *base, long frame, uint64_t now_ms, bool numbered)
 {
-    static uint32_t buf[256 * 240];
-    memcpy(buf, cyc_frame_argb(), sizeof(buf));
+    static uint32_t buf[CYC_VIDEO_MAX_WIDTH * 240];
+    int w, h;
+    const uint32_t *pic = cyc_render_present(&w, &h);
+    memcpy(buf, pic, (size_t)w * (size_t)h * sizeof(uint32_t));
     CycDiskToast t;
     if (cyc_is_fds() && cyc_disk_action_toast(cyc_host_disk_action(), now_ms, &t)) {
         char title[64], body[256];
         cyc_disk_toast_text(&t, "DISK", title, sizeof(title), body, sizeof(body));
-        cyc_overlay_toast(buf, 256, 240, title, body);
+        cyc_overlay_toast(buf, w, h, title, body);
     }
     char path[1024];
     if (numbered) numbered_path(path, sizeof(path), base, frame);
     else snprintf(path, sizeof(path), "%s", base);
-    if (!cyc_write_png(path, buf, 256, 240)) fprintf(stderr, "cannot write %s\n", path);
+    if (!cyc_write_png(path, buf, w, h)) fprintf(stderr, "cannot write %s\n", path);
+}
+
+/* ---- save states: the headless host's section (cyc_state.h) ----
+ * The next frame's number, the side a disk insert puts in, and a swap the
+ * Disk action has in flight. */
+typedef struct {
+    uint32_t version;
+    uint32_t disk_selected;
+    int64_t  next_frame;
+    int64_t  insert_at;
+    int32_t  swap_target, last_side;
+    uint8_t  eject_pending, pad[7];
+} HostState;
+static long s_loaded_frame = -1;
+
+static size_t host_state_save(uint8_t *out, size_t cap)
+{
+    if (!out || cap < sizeof(HostState)) return sizeof(HostState);
+    HostState h;
+    memset(&h, 0, sizeof(h));
+    const CycDiskAction *a = cyc_host_disk_action();
+    h.version = 1;
+    h.next_frame = (int64_t)cyc_ring_frame;
+    h.disk_selected = disk_selected;
+    h.swap_target = a->target;
+    h.last_side = a->last_side;
+    h.insert_at = a->insert_at;
+    h.eject_pending = a->eject_pending;
+    memcpy(out, &h, sizeof(h));
+    return sizeof(h);
+}
+
+static bool host_state_load(const uint8_t *data, size_t len, bool apply)
+{
+    HostState h;
+    if (len != sizeof(h)) return false;
+    memcpy(&h, data, sizeof(h));
+    if (h.version != 1 || h.next_frame < 0) return false;
+    if (!apply) return true;
+    CycDiskAction *a = cyc_host_disk_action();
+    disk_selected = h.disk_selected;
+    a->target = h.swap_target;
+    a->last_side = h.last_side;
+    a->insert_at = (long)h.insert_at;
+    a->eject_pending = h.eject_pending != 0;
+    s_loaded_frame = (long)h.next_frame;
+    return true;
+}
+
+static const CycStateHost HOST_STATE = { host_state_save, host_state_load };
+
+typedef struct { long frame; const char *path; } StateSave;
+static StateSave *s_state_saves;
+static int        s_state_save_count;
+
+static bool add_state_save(const char *spec)
+{
+    char *end;
+    long f = strtol(spec, &end, 10);
+    if (end == spec || *end != ':' || f < 0 || !end[1]) return false;
+    StateSave *grown = (StateSave *)realloc(s_state_saves, sizeof(StateSave) * (size_t)(s_state_save_count + 1));
+    if (!grown) return false;
+    s_state_saves = grown;
+    s_state_saves[s_state_save_count].frame = f;
+    s_state_saves[s_state_save_count].path = end + 1;
+    s_state_save_count++;
+    return true;
 }
 #endif
 
@@ -818,8 +912,10 @@ int main(int argc, char **argv) {
 #ifndef CYC_ORACLE
     const char *ring_out = NULL, *frame_log = NULL, *fds_bios = NULL;
     const char *fds_import_ips = NULL, *fds_export_ips = NULL, *fds_hle_arg = NULL;
-    const char *present_out = NULL;
+    const char *present_out = NULL, *load_state = NULL, *mods_root = NULL;
     long present_every = 0;
+    int present_w = 0, present_h = 0;
+    bool bad_option = false;
     bool frame_log_mesen = false, no_save = false, realtime = false;
     NesFdsHleAsk saved_hle = NES_FDS_HLE_ASK_NONE;
     const char *saved_bios = NULL;     /* the window's config.ini [FDS] Bios */
@@ -928,6 +1024,18 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--realtime")) realtime = headless = true;
         else if (!strcmp(argv[i], "--present-out") && i + 1 < argc) present_out = argv[++i];
         else if (!strcmp(argv[i], "--present-every") && i + 1 < argc) present_every = atol(argv[++i]);
+        else if (!strcmp(argv[i], "--present-size") && i + 1 < argc) {
+            if (sscanf(argv[++i], "%dx%d", &present_w, &present_h) != 2 || present_w <= 0 || present_h <= 0) {
+                fprintf(stderr, "--present-size: WxH\n");
+                return 2;
+            }
+        }
+        else if (!strcmp(argv[i], "--save-state") && i + 1 < argc) {
+            if (!add_state_save(argv[++i])) { fprintf(stderr, "--save-state: FRAME:FILE\n"); return 2; }
+            headless = true;
+        }
+        else if (!strcmp(argv[i], "--load-state") && i + 1 < argc) load_state = argv[++i], headless = true;
+        else if (!strcmp(argv[i], "--mods-root") && i + 1 < argc) mods_root = argv[++i];
         else if ((!strcmp(argv[i], "--virtual-pad") || !strcmp(argv[i], "--exit-after") ||
                   !strcmp(argv[i], "--config") || !strcmp(argv[i], "--tcp")) && i + 1 < argc) {
 #if defined(CYC_WITH_SDL)
@@ -945,6 +1053,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--ram-view-list") && i + 1 < argc) view_list = argv[++i], headless = true;
 #endif
         else if (argv[i][0] != '-' && !rom_path) rom_path = argv[i];
+#ifndef CYC_ORACLE
+        else if (cyc_session_take_option(argc, argv, &i, &bad_option)) {
+            if (bad_option) { fprintf(stderr, "%s needs a value\n", argv[i]); return 2; }
+        }
+#endif
         else {
             fprintf(stderr, "unknown argument: %s\n", argv[i]);
             return 2;
@@ -973,8 +1086,13 @@ int main(int argc, char **argv) {
                         "            [--fds-profile mesen|mesen2|hardware] [--fds-crc computed|mesen]\n"
                         "            [--fds-crc-check] [--fds-write-protect] [--fds-write-at head|mesen]\n"
                         "            [--save-file FILE | --no-save] [--fds-import-ips FILE] [--fds-export-ips FILE]\n"
-                        "            [--fds-hle auto-swap,fast-load|all|off] [--realtime]\n",
+                        "            [--fds-hle auto-swap,fast-load|all|off] [--realtime]\n"
+                        "       [--save-state F:FILE] [--load-state FILE] [--mods-root DIR]\n"
+                        "       [--present-out FILE [--present-every N] [--present-size WxH]]\n",
                 argv[0]);
+#ifndef CYC_ORACLE
+        cyc_session_print_options(stderr);
+#endif
         return 2;
     }
     size_t size;
@@ -1111,6 +1229,17 @@ int main(int argc, char **argv) {
         fprintf(stderr,"barcode requires Datach, 8/12/13 digits with valid checksum, and a positive module duration\n"); return 2;
     }
 #ifndef CYC_ORACLE
+    /* Mods: the window committed its catalog's selection when the launcher
+     * started the game (cyc_sdl_prelaunch); a headless run only with
+     * --mods-root. */
+    if (headless) {
+        char err[512];
+        if (!cyc_session_mods_init(mods_root, err, sizeof(err)) ||
+            !cyc_session_mods_start(rom_path, err, sizeof(err))) {
+            fprintf(stderr, "%s\n", err);
+            return 2;
+        }
+    }
     if (!console_given) console = (CycConsole)cyc_native_console;   /* game.toml [game] console */
 #else
     (void)console_given;
@@ -1120,11 +1249,15 @@ int main(int argc, char **argv) {
 #ifndef CYC_ORACLE
     cyc_run_power_on();
     fds_save_powered_on();
+    cyc_state_set_host(&HOST_STATE);
+    if (present_w > 0) cyc_video_window_resized(present_w, present_h);
+    if (!cyc_session_start()) return 2;
 #endif
 
 #if defined(CYC_WITH_SDL) && !defined(CYC_ORACLE)
     if (!headless) {
         cyc_sdl_present_out(present_out, present_every);
+        cyc_sdl_image_path(rom_path);
         int result=cyc_sdl_main(cyc_native_display_name ? cyc_native_display_name
                                 : cyc_native_program_name ? cyc_native_program_name : rom_path, scale);
         bool disk_ok=fds_save_flush(CYC_FDS_SAVE_EXIT);
@@ -1189,6 +1322,20 @@ int main(int argc, char **argv) {
     if (input_file && !load_input(input_file)) return 2;
     long frame = 0;
 #ifndef CYC_ORACLE
+    if (load_state) {
+        char err[256];
+        if (!cyc_state_load_file(load_state, err, sizeof(err))) {
+            fprintf(stderr, "--load-state %s: %s\n", load_state, err);
+            return 2;
+        }
+        cyc_session_state_loaded();
+        frame = s_loaded_frame;
+        /* what happened before the state is already in it */
+        while (disk_event_next < disk_event_count && disk_events[disk_event_next].frame < frame) disk_event_next++;
+        printf("state: loaded %s, continuing at frame %ld\n", load_state, frame);
+    }
+#endif
+#ifndef CYC_ORACLE
     double run_start = wall_seconds(), next_frame = run_start, load_wall = 0;
     long load_frames = 0;
 #endif
@@ -1208,6 +1355,7 @@ int main(int argc, char **argv) {
         observe_frame = frame;
         double frame_start = wall_seconds();
         cyc_run_frame();
+        cyc_session_frame_end();
         fds_save_frame(frame + 1);
         if (cyc_is_fds() && cyc_fds_hle_loading()) {
             load_frames++;
@@ -1258,6 +1406,17 @@ int main(int argc, char **argv) {
                 fclose(mf);
             }
         }
+#ifndef CYC_ORACLE
+        for (int k = 0; k < s_state_save_count; ++k) {
+            if (s_state_saves[k].frame != frame) continue;
+            char err[256];
+            if (!cyc_state_save_file(s_state_saves[k].path, err, sizeof(err))) {
+                fprintf(stderr, "--save-state %s: %s\n", s_state_saves[k].path, err);
+                return 2;
+            }
+            printf("state: saved %s after frame %ld\n", s_state_saves[k].path, frame);
+        }
+#endif
         frame++;
     }
     cyc_trace_file = NULL;
@@ -1305,6 +1464,23 @@ int main(int argc, char **argv) {
                cyc_native_ram_view_count, cyc_ramview_count(), (unsigned long long)rv->entries,
                (unsigned long long)rv->validated, (unsigned long long)rv->rejected, (unsigned long long)rv->invalidated,
                (unsigned long long)rv->code_write_exits, (unsigned long long)rv->interp_insns);
+    if (cyc_native_hook_site_count) {
+        CycHookStats hs;
+        cyc_hooks_stats(-1, &hs);
+        CycModStats ms;
+        cyc_mod_stats(&ms);
+        printf("mod hooks: %u sites, %llu callbacks run, %llu handled, %llu content mismatches; isolated calls: %llu "
+               "in %llu scopes, %llu cycles, %llu failed\n", cyc_native_hook_site_count, (unsigned long long)hs.fired,
+               (unsigned long long)hs.handled, (unsigned long long)hs.mismatched, (unsigned long long)ms.calls,
+               (unsigned long long)ms.scopes, (unsigned long long)ms.cycles, (unsigned long long)ms.failures);
+    }
+    if (present_out) {
+        CycRenderStats rs;
+        cyc_render_stats(&rs);
+        printf("present: width %d (%s), %llu composed, %llu pillarboxed, %llu native\n", cyc_video_width(),
+               nes_video_geometry_name(cyc_video_mode()), (unsigned long long)rs.composed,
+               (unsigned long long)rs.pillarboxed, (unsigned long long)rs.native);
+    }
     bool disk_ok = fds_save_flush(CYC_FDS_SAVE_EXIT);
     if (cyc_is_fds())
         printf("fds: side %d in the drive at exit, %u disk bytes written, %u disk save%s written%s%s, "

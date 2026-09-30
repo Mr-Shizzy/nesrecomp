@@ -110,6 +110,12 @@ void cyc_fds_hle_configure(const CycFdsHle *cfg)
                           H.cfg.id_check);
 }
 
+void *fds_hle_state_ptr(size_t *size)
+{
+    *size = sizeof(H);
+    return &H;
+}
+
 void fds_hle_power_on(void)
 {
     CycFdsHle cfg = H.cfg;

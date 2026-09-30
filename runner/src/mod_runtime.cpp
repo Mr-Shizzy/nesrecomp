@@ -1868,19 +1868,32 @@ bool install_archive(Runtime& runtime, const fs::path& archive,
     return true;
 }
 
+/* The image identity a package targets: the CRC32 of a cartridge's payload
+ * after its 16-byte iNES header, or of a Famicom Disk System image's side
+ * data (after a 16-byte fwNES "FDS\x1A" header, or the whole of a headerless
+ * image, whose first side begins with the disk info block), so equivalent
+ * header variants identify the same dump. */
 bool crc32_file(const fs::path& path, std::string& out,
                 std::string* error) {
     std::vector<uint8_t> bytes;
     if (!read_file(path, bytes, error)) return false;
-    if (bytes.size() <= 16 ||
-        bytes[0] != 'N' || bytes[1] != 'E' ||
-        bytes[2] != 'S' || bytes[3] != 0x1a) {
-        set_error(error, "selected image is not a valid iNES ROM");
+    size_t skip = 0;
+    if (bytes.size() > 16 && bytes[0] == 'N' && bytes[1] == 'E' &&
+        bytes[2] == 'S' && bytes[3] == 0x1a) {
+        skip = 16;
+    } else if (bytes.size() > 16 && bytes[0] == 'F' && bytes[1] == 'D' &&
+               bytes[2] == 'S' && bytes[3] == 0x1a) {
+        skip = 16;
+    } else if (bytes.size() >= 15 && bytes[0] == 0x01 &&
+               std::memcmp(bytes.data() + 1, "*NINTENDO-HVC*", 14) == 0) {
+        skip = 0;
+    } else {
+        set_error(error, "selected image is not a valid iNES ROM or FDS disk image");
         return false;
     }
     char digest[9];
     std::snprintf(digest, sizeof(digest), "%08x",
-                  crc32_compute(bytes.data() + 16, bytes.size() - 16));
+                  crc32_compute(bytes.data() + skip, bytes.size() - skip));
     out = digest;
     return true;
 }

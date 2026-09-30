@@ -60,6 +60,15 @@ void cyc_ramview_frame_end(void);
  * dependency bytes, and its state now. */
 void cyc_ramview_list(void *file);
 
+/* State (cyc_state.c). The validity of every view, for the snapshot around
+ * an isolated mod call (bytes: cyc_ramview_validity_size()); and, after a
+ * save state replaced RAM, every usable view back to UNKNOWN, as at
+ * power-on (the next dispatch compares it with RAM again). */
+size_t cyc_ramview_validity_size(void);
+void   cyc_ramview_validity_get(uint8_t *buf);
+void   cyc_ramview_validity_set(const uint8_t *buf);
+void   cyc_ramview_revalidate(void);
+
 /* ---- capture: RAM code that ran with no view, for the next compile ----
  * Records, from the call on: each instruction variant (address and bytes) the
  * interpreter ran in RAM with no view; per 1KB chunk, snapshots of the chunk

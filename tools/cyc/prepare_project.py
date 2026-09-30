@@ -53,6 +53,15 @@ def launcher_digest(path):
     return hashlib.sha256(data[skip:]).hexdigest()
 
 
+def mod_identity(path):
+    """The image identity mod packages target (runner/src/mod_runtime.cpp
+    crc32_file): CRC32 of a cartridge payload after its iNES header, of a disk
+    image's side data after its fwNES header, or of a headerless disk image."""
+    data = path.read_bytes()
+    skip = 16 if len(data) > 16 and data[:4] in (b'NES\x1a', b'FDS\x1a') else 0
+    return '%08x' % zlib.crc32(data[skip:])
+
+
 def cmake_quote(value):
     value = str(value)
     equals = '='
@@ -134,7 +143,8 @@ def main():
     manifest = ''
     for name, values in [('CYC_PROJECT_SOURCES', sources), ('CYC_PROJECT_DEPENDS', dependencies),
                          ('CYC_PROJECT_ROM', [rom]), ('CYC_PROJECT_ROM_SHA256', [digest(rom)]),
-                         ('CYC_PROJECT_LAUNCHER_SHA256', [launcher_digest(rom)])]:
+                         ('CYC_PROJECT_LAUNCHER_SHA256', [launcher_digest(rom)]),
+                         ('CYC_PROJECT_MOD_CRC32', [mod_identity(rom)])]:
         manifest += 'set(' + name + '\n' + ''.join('  ' + cmake_quote(p.as_posix() if isinstance(p, Path) else p) + '\n' for p in values) + ')\n'
     (out / 'sources.cmake').write_text(manifest, encoding='utf-8', newline='\n')
 

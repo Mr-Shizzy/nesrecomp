@@ -32,6 +32,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "cyc_core.h"
 #include "hw_mapper.h"
 #include "mmc5_state.h"
 #include "../../common/nes_cart.h"
@@ -378,6 +379,9 @@ typedef struct {
 extern HwPpu ppu;
 /* 9-bit color indices (color | emphasis << 6) and their ARGB. */
 extern uint16_t hw_frame_index[256 * 240];
+/* cyc_core.h cyc_frame_lines / cyc_frame_bg_opaque. */
+extern CycLine  hw_frame_lines[240];
+extern uint8_t  hw_frame_bg[256 * 240];
 extern uint32_t hw_frame_argb[256 * 240];
 
 void    ppu_power_on(void);
@@ -439,6 +443,34 @@ typedef struct {
     uint8_t  buffer, have_buffer, shifter, bits, out_silent, playing, enable, dma;
 } ApuDmcView;
 void    apu_debug_dmc(ApuDmcView *v);
+
+/* ---- Machine state held outside the globals above (cyc_state.c) ----
+ * The module's own struct, for save states and for the snapshot around a
+ * mod's isolated routine call. The rest of the machine is cpu, hw, hw_cart,
+ * CHR RAM, ppu, the picture, and the FDS media / HLE (hw_fds.h). */
+void    *apu_state_ptr(size_t *size);
+/* After ppu / hw were overwritten: drop the PPU's cached classifications
+ * (they are recomputed; the conservative values are always correct). */
+void     ppu_state_reloaded(void);
+/* The cartridge's sound chip held outside hw_cart (VRC7's OPLL): the bytes
+ * of an in-process snapshot (0: none), and a rebuild from hw_cart's
+ * registers after a save state replaced them (the chip's own phases are
+ * audio only and start over). */
+size_t   hw_cart_sound_snapshot_size(void);
+void     hw_cart_sound_snapshot(void *buf);
+void     hw_cart_sound_restore(const void *buf);
+void     hw_cart_sound_reloaded(void);
+
+/* Isolated execution (cyc_mod.h): while set, a CPU cycle clocks nothing
+ * (no PPU dot, APU or cartridge clock, DMA or interrupt input), so a
+ * program routine runs on memory alone; hw_isolated_cycles counts its cycles
+ * and hw_frame_done rises past hw_isolated_budget, which returns the running
+ * code to its scheduler. The caller restores the machine afterwards. */
+extern bool     hw_isolated;
+extern uint64_t hw_isolated_cycles, hw_isolated_budget;
+/* CPU stores to device registers (anything but RAM, PRG RAM or work RAM)
+ * while isolated. */
+extern uint64_t hw_isolated_io_writes;
 
 /* Hardware state hash and dump, per module. */
 uint64_t apu_state_hash(uint64_t h);

@@ -40,8 +40,34 @@ set(NESRECOMP_CYC_SOURCES
     ${NESRECOMP_CYC_DIR}/cyc_disk_action.c
     ${NESRECOMP_CYC_DIR}/cyc_overlay.c
     ${NESRECOMP_CYC_DIR}/cyc_fds_bios.c
+    # Game additions (cyc_host_extras.h, cyc_session.h), mod hook sites
+    # (cyc_hooks.h), the machine as mods see it (cyc_mod.h), save states
+    # (cyc_state.h) and the presented picture (cyc_video.h, cyc_render.h).
+    ${NESRECOMP_CYC_DIR}/cyc_host_extras_none.c
+    ${NESRECOMP_CYC_DIR}/cyc_session.c
+    ${NESRECOMP_CYC_DIR}/cyc_hooks.c
+    ${NESRECOMP_CYC_DIR}/cyc_mod.c
+    ${NESRECOMP_CYC_DIR}/cyc_state.c
+    ${NESRECOMP_CYC_DIR}/cyc_video.c
+    ${NESRECOMP_CYC_DIR}/cyc_render.c
+    # The trusted-plugin registries (runner/include/mod_function_hooks.h,
+    # mod_savestate.h): dependency-free C, linked whether or not a game has mods.
+    ${NESRECOMP_CYC_DIR}/../src/mod_function_hooks.c
+    ${NESRECOMP_CYC_DIR}/../src/mod_savestate.c
 )
 set(NESRECOMP_CYC_INCLUDE_DIRS ${NESRECOMP_CYC_DIR})
+# The scheduler and what it runs besides the machine (hook sites, isolated
+# mod calls and the snapshot they are undone with), for tests that link the
+# machine without a host.
+set(NESRECOMP_CYC_SCHEDULER_SOURCES
+    ${NESRECOMP_CYC_DIR}/cyc_run.c
+    ${NESRECOMP_CYC_DIR}/cyc_ramview.c
+    ${NESRECOMP_CYC_DIR}/cyc_hooks.c
+    ${NESRECOMP_CYC_DIR}/cyc_mod.c
+    ${NESRECOMP_CYC_DIR}/cyc_state.c
+    ${NESRECOMP_CYC_DIR}/../src/mod_function_hooks.c
+    ${NESRECOMP_CYC_DIR}/../src/mod_savestate.c
+)
 option(NESRECOMP_DEV_UI "Window developer surface: FDS drive bar, dev keys (F1-F4, F6+), coverage title" OFF)
 set(NESRECOMP_CYC_LIBRARIES "")
 if(UNIX)
@@ -78,8 +104,8 @@ set(NESRECOMP_CYC_HELPER_TEST_SOURCES ${NESRECOMP_CYC_DIR}/cyc_helper_test.c)
 # (cyc_input.c), settings (cyc_settings.c, config.ini) and TCP debug server
 # (cyc_tcp.c) to a host executable if SDL2 is found. Without it the executable
 # is headless only. DEV_UI / NO_DEV_UI override NESRECOMP_DEV_UI for this target. A game's own
-# host extras (cyc_host_extras.h) are added beforehand with the target property
-# NESRECOMP_CYC_HOST_EXTRAS set; otherwise cyc_host_extras_none.c is linked.
+# host extras (cyc_host_extras.h) replace the default cyc_host_extras_none.c
+# provides (it is in NESRECOMP_CYC_SOURCES and gives way to a definition).
 function(nesrecomp_cyc_enable_sdl target)
     cmake_parse_arguments(SDLOPT "DEV_UI;NO_DEV_UI" "" "" ${ARGN})
     list(APPEND CMAKE_PREFIX_PATH "${NESRECOMP_CYC_DIR}/../external/SDL2/cmake")
@@ -92,10 +118,6 @@ function(nesrecomp_cyc_enable_sdl target)
         ${NESRECOMP_CYC_DIR}/cyc_settings.c ${NESRECOMP_CYC_DIR}/cyc_tcp.c)
     if(WIN32)
         target_link_libraries(${target} PRIVATE ws2_32)
-    endif()
-    get_target_property(extras ${target} NESRECOMP_CYC_HOST_EXTRAS)
-    if(NOT extras)
-        target_sources(${target} PRIVATE ${NESRECOMP_CYC_DIR}/cyc_host_extras_none.c)
     endif()
     target_compile_definitions(${target} PRIVATE CYC_WITH_SDL)
     if((NESRECOMP_DEV_UI OR SDLOPT_DEV_UI) AND NOT SDLOPT_NO_DEV_UI)

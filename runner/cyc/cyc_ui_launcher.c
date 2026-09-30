@@ -138,7 +138,7 @@ static const char *stem_of(const char *path, char *out, size_t n)
 }
 
 int cyc_ui_launcher(CycSettings *settings, const char *settings_path, const CycHostExtras *extras,
-                    const char **rom_path, bool fds, const CycFdsBiosLookup *bios)
+                    const char **rom_path, bool fds, const CycFdsBiosLookup *bios, const void *mods)
 {
     static CycFdsBiosLookup bios_lookup;
     static const char *const BIOS_PATTERNS[] = { "*.rom", "*.bin", "*.*" };
@@ -189,6 +189,8 @@ int cyc_ui_launcher(CycSettings *settings, const char *settings_path, const CycH
     else snprintf(rom_cache, sizeof(rom_cache), "rom.cfg");
     gi.rom_cache_path = rom_cache;
     gi.settings_bindings = 1;         /* every binding is the host's (config.ini) */
+    /* The Mods screen (a game built with mods; recomp-ui's RECOMP_UI_ENABLE_MODS). */
+    gi.mods = (const RecompLauncherCModProvider *)mods;
     gi.default_settings = &defaults;
     gi.assist_binding_labels = shortcut_labels;
     gi.assist_binding_count = count;

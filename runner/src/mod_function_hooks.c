@@ -6,7 +6,7 @@
  * so it must link in every configuration, including titles that never enable
  * the mod package runtime.
  */
-#include "mod_function_hooks.h"
+#include "../include/mod_function_hooks.h"
 
 #include <string.h>
 
@@ -26,6 +26,7 @@ static int          s_count = 0;
  * build with hooks registered but none active pays one load and one branch. */
 static int      s_active = 0;
 static uint64_t s_hits = 0;
+static void   (*s_listener)(void);
 
 int nes_mod_register_function_entry_plugin(const char *id, uint16_t addr,
                                            NESModFunctionEntryCallback cb) {
@@ -52,6 +53,7 @@ int nes_mod_set_function_hook_enabled(const char *id, int enabled) {
         if (s_hooks[i].enabled != want) {
             s_hooks[i].enabled = want;
             s_active += want ? 1 : -1;
+            if (s_listener) s_listener();
         }
         return 1;
     }
@@ -61,6 +63,7 @@ int nes_mod_set_function_hook_enabled(const char *id, int enabled) {
 void nes_mod_disable_all_function_hooks(void) {
     for (int i = 0; i < s_count; i++) s_hooks[i].enabled = 0;
     s_active = 0;
+    if (s_listener) s_listener();
 }
 
 int nes_mod_function_hook_enabled(const char *id) {
@@ -83,3 +86,19 @@ int nes_mod_function_entry(uint16_t addr) {
 }
 
 uint64_t nes_mod_function_hook_hits(void) { return s_hits; }
+
+int nes_mod_function_hook_count(void) { return s_count; }
+
+int nes_mod_function_hook_at(int index, const char **id, uint16_t *addr, int *enabled,
+                             NESModFunctionEntryCallback *callback) {
+    if (index < 0 || index >= s_count) return 0;
+    if (id) *id = s_hooks[index].id;
+    if (addr) *addr = s_hooks[index].addr;
+    if (enabled) *enabled = s_hooks[index].enabled;
+    if (callback) *callback = s_hooks[index].callback;
+    return 1;
+}
+
+int nes_mod_function_hooks_active(void) { return s_active; }
+
+void nes_mod_function_hooks_set_listener(void (*listener)(void)) { s_listener = listener; }

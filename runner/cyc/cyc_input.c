@@ -16,9 +16,10 @@ _Static_assert(SDL_CONTROLLER_BUTTON_MAX <= 32, "button mask");
 
 static const char *const BUTTON_KEYS[CYC_INPUT_BUTTONS] = { "a", "b", "select", "start", "up", "down", "left", "right" };
 static const char *const BUTTON_LABELS[CYC_INPUT_BUTTONS] = { "A", "B", "Select", "Start", "Up", "Down", "Left", "Right" };
-static const char *const SHORTCUT_KEYS[CYC_SC_COUNT] = { "disk", "menu", "fast_forward", "screenshot", "fullscreen" };
+static const char *const SHORTCUT_KEYS[CYC_SC_COUNT] = { "disk", "menu", "fast_forward", "screenshot", "fullscreen",
+                                                          "save_state", "load_state" };
 static const char *const SHORTCUT_LABELS[CYC_SC_COUNT] = {
-    "Disk (show / swap side)", "Menu", "Fast-forward (hold)", "Screenshot", "Fullscreen",
+    "Disk (show / swap side)", "Menu", "Fast-forward (hold)", "Screenshot", "Fullscreen", "Save state", "Load state",
 };
 
 const char *cyc_button_key(int b) { return b >= 0 && b < CYC_INPUT_BUTTONS ? BUTTON_KEYS[b] : ""; }
@@ -59,6 +60,8 @@ void cyc_bindings_default(CycBindings *b)
     b->shortcut[CYC_SC_FAST_FORWARD] = (CycBinding){ SDL_SCANCODE_TAB, CYC_PAD_AXIS(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 1) };
     b->shortcut[CYC_SC_SCREENSHOT]   = (CycBinding){ SDL_SCANCODE_F12, 0 };
     b->shortcut[CYC_SC_FULLSCREEN]   = (CycBinding){ SDL_SCANCODE_F11, 0 };
+    b->shortcut[CYC_SC_SAVE_STATE]   = (CycBinding){ SDL_SCANCODE_F8, 0 };
+    b->shortcut[CYC_SC_LOAD_STATE]   = (CycBinding){ SDL_SCANCODE_F9, 0 };
 }
 
 /* ---- text forms ---- */

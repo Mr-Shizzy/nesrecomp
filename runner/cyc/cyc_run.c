@@ -2,6 +2,8 @@
 #include "cyc_run.h"
 
 #include "cyc_core.h"
+#include "cyc_hooks.h"
+#include "cyc_mod.h"
 #include "cyc_ramview.h"
 #include "cyc_recomp.h"
 #include "cyc_ring.h"
@@ -63,6 +65,8 @@ void cyc_run_frame(void) {
         hw_frame_done = false;
     }
     cyc_ramview_frame_end();
+    cyc_hooks_frame_end();
+    cyc_mod_frame_end();
     if (cyc_is_fds()) {
         fds_audio_frame_end();
         fds_hle_frame_end();
@@ -70,9 +74,11 @@ void cyc_run_frame(void) {
     cyc_ring_frame++;
 }
 
-static void run_until_stop(void) {
+/* One dispatch at an instruction boundary: recompiled ROM code, a compiled
+ * RAM view, or the interpreter. */
+static void dispatch(void) {
     int view;
-    while (!hw_frame_done) {
+    {
         if (cpu.jammed) {
             cpu_jam_cycle();
         } else if (cyc_run_native && cyc_native_has(cpu.pc)) {
@@ -106,6 +112,38 @@ static void run_until_stop(void) {
             else cyc_run_interp_other_cycles += took;
         }
     }
+}
+
+static void run_until_stop(void) {
+    while (!hw_frame_done) {
+        /* Mod hook sites (cyc_hooks.h): the callbacks run at the boundary
+         * before the site's instruction, whichever path would run it; the
+         * compiled instruction then lets execution through once. */
+        if (cyc_hooks_armed) {
+            cyc_hook_hit = false;
+            if (cyc_hooks_due(cpu.pc)) {
+                uint16_t at = cpu.pc;
+                cyc_hooks_fire(at);
+                if (cpu.pc == at) cyc_hook_passed = at;
+                continue;
+            }
+        }
+        dispatch();
+        cyc_hook_passed = -1;
+    }
+}
+
+/* A mod's isolated call (cyc_mod.c): run until the routine returns to stop_pc
+ * with the stack back at entry_s, hw_isolated set (no clocks; hw_frame_done
+ * rises when the cycle budget runs out). */
+int cyc_run_isolated(uint16_t stop_pc, uint8_t entry_s) {
+    while (!(cpu.pc == stop_pc && cpu.s == entry_s)) {
+        if (hw_frame_done) return CYC_MOD_FAIL_BUDGET;
+        if (cpu.jammed) return CYC_MOD_FAIL_JAM;
+        if ((int8_t)(cpu.s - entry_s) > 0) return CYC_MOD_FAIL_STACK;   /* returned past its caller */
+        dispatch();
+    }
+    return 0;
 }
 
 void cyc_cpu_state(CycCpuState *out) {
