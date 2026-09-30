@@ -13,6 +13,7 @@
 #include "cyc_host.h"
 #include "cyc_run.h"
 #include "recomp_runtime_ui.h"
+#include "recomp_launcher.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,7 +24,7 @@
 
 static RecompRuntimeUi *s_ui;
 static CycUiHost s_host;
-static RecompRuntimeUiItem s_items[64];
+static RecompRuntimeUiItem s_items[128];
 static size_t s_item_count;
 static unsigned s_axes;
 
@@ -37,6 +38,171 @@ static char s_shortcut_label[CYC_SC_COUNT][96];
 static char s_axis_key[MAX_AXES][24];
 static char s_shortcut_key[CYC_SC_COUNT][24];
 static uint64_t s_quit_armed;
+
+/* ---- Mods: every feature of the mod runtime's catalog (cyc_session.h), with
+ * its options, edited live. A change goes to the runtime (the same calls the
+ * launcher's Mods screen makes), is committed for the running image - which
+ * also persists it - and the plugins activate again (reset callbacks first),
+ * so the game applies it at once. ---- */
+static void add(const char *key, const char *section, const char *label, const char *desc,
+                RecompRuntimeUiItemType type, int min, int max, int step, const char *const *choices,
+                size_t choice_count, const int *values);
+#define MAX_MOD_ROWS 48
+#define MAX_MOD_CHOICES 16
+typedef struct {
+    char key[24], label[160], desc[512];
+    char package[RECOMP_LAUNCHER_MOD_ID_MAX], feature[RECOMP_LAUNCHER_MOD_ID_MAX], option[RECOMP_LAUNCHER_MOD_ID_MAX];
+    int  type;                         /* -1: the feature's on/off; RECOMP_MOD_OPTION_* */
+    char value[MAX_MOD_CHOICES][RECOMP_LAUNCHER_MOD_VALUE_MAX];
+    char name[MAX_MOD_CHOICES][128];
+    const char *names[MAX_MOD_CHOICES];
+    int  count;
+} ModRow;
+static ModRow s_mod[MAX_MOD_ROWS];
+static int    s_mod_count;
+
+static const RecompLauncherCModProvider *mods(void) { return (const RecompLauncherCModProvider *)s_host.mods; }
+static ModRow *mod_row(const RecompRuntimeUiItem *it)
+{
+    if (!it->key || strncmp(it->key, "cyc.mod.", 8)) return NULL;
+    int i = atoi(it->key + 8);
+    return i >= 0 && i < s_mod_count ? &s_mod[i] : NULL;
+}
+
+static bool mod_feature(const ModRow *m, RecompLauncherCModFeature *out)
+{
+    const RecompLauncherCModProvider *p = mods();
+    int n = p && p->feature_count ? p->feature_count(p->ctx) : 0;
+    for (int i = 0; i < n; ++i)
+        if (p->feature_get(p->ctx, i, out) && !strcmp(out->package_id, m->package) && !strcmp(out->id, m->feature))
+            return true;
+    return false;
+}
+
+static bool mod_option(const ModRow *m, RecompLauncherCModOption *out)
+{
+    const RecompLauncherCModProvider *p = mods();
+    for (int i = 0; p && p->feature_option_get && p->feature_option_get(p->ctx, m->package, m->feature, i, out); ++i)
+        if (!strcmp(out->id, m->option)) return true;
+    return false;
+}
+
+static void add_mod_rows(void)
+{
+    const RecompLauncherCModProvider *p = mods();
+    s_mod_count = 0;
+    if (!p || !p->feature_count || !p->feature_get || !p->feature_option_get) return;
+    int features = p->feature_count(p->ctx);
+    for (int f = 0; f < features && s_mod_count < MAX_MOD_ROWS; ++f) {
+        RecompLauncherCModFeature feat;
+        if (!p->feature_get(p->ctx, f, &feat) || (feat.hidden && !feat.enabled)) continue;
+        ModRow *m = &s_mod[s_mod_count];
+        memset(m, 0, sizeof(*m));
+        snprintf(m->package, sizeof(m->package), "%s", feat.package_id);
+        snprintf(m->feature, sizeof(m->feature), "%s", feat.id);
+        snprintf(m->key, sizeof(m->key), "cyc.mod.%d", s_mod_count);
+        snprintf(m->label, sizeof(m->label), "%s", feat.name);
+        snprintf(m->desc, sizeof(m->desc), "%s", feat.description);
+        m->type = -1;
+        add(m->key, "Mods", m->label, m->desc, RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, NULL, 0, NULL);
+        s_mod_count++;
+        RecompLauncherCModOption o;
+        for (int i = 0; s_mod_count < MAX_MOD_ROWS && p->feature_option_get(p->ctx, feat.package_id, feat.id, i, &o); ++i) {
+            m = &s_mod[s_mod_count];
+            memset(m, 0, sizeof(*m));
+            snprintf(m->package, sizeof(m->package), "%s", feat.package_id);
+            snprintf(m->feature, sizeof(m->feature), "%s", feat.id);
+            snprintf(m->option, sizeof(m->option), "%s", o.id);
+            snprintf(m->key, sizeof(m->key), "cyc.mod.%d", s_mod_count);
+            /* The option's own label (the row value needs the width); the
+             * description line names its feature. */
+            snprintf(m->label, sizeof(m->label), "%s", o.label);
+            if (o.description[0]) snprintf(m->desc, sizeof(m->desc), "%s: %s", feat.name, o.description);
+            else snprintf(m->desc, sizeof(m->desc), "%s", feat.name);
+            m->type = o.type;
+            if (o.type == RECOMP_MOD_OPTION_CHOICE) {
+                RecompLauncherCModChoice ch;
+                for (int c = 0; m->count < MAX_MOD_CHOICES && p->feature_choice_get &&
+                                p->feature_choice_get(p->ctx, feat.package_id, feat.id, o.id, c, &ch); ++c) {
+                    snprintf(m->value[m->count], sizeof(m->value[0]), "%s", ch.value);
+                    snprintf(m->name[m->count], sizeof(m->name[0]), "%s", ch.label);
+                    m->names[m->count] = m->name[m->count];
+                    m->count++;
+                }
+                if (!m->count) continue;
+                add(m->key, "Mods", m->label, m->desc, RECOMP_RUNTIME_UI_CHOICE, 0, m->count - 1, 1, m->names,
+                    (size_t)m->count, NULL);
+            } else if (o.type == RECOMP_MOD_OPTION_BOOLEAN) {
+                add(m->key, "Mods", m->label, m->desc, RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, NULL, 0, NULL);
+            } else if (o.type == RECOMP_MOD_OPTION_INTEGER) {
+                add(m->key, "Mods", m->label, m->desc, RECOMP_RUNTIME_UI_INT, (int)o.min_value, (int)o.max_value,
+                    o.step > 0 ? (int)o.step : 1, NULL, 0, NULL);
+            } else {
+                continue;                  /* text options stay on the launcher's Mods screen */
+            }
+            s_mod_count++;
+        }
+    }
+}
+
+static int mod_get(const ModRow *m, int *out)
+{
+    if (m->type < 0) {
+        RecompLauncherCModFeature feat;
+        if (!mod_feature(m, &feat)) return 0;
+        *out = feat.enabled != 0;
+        return 1;
+    }
+    RecompLauncherCModOption o;
+    if (!mod_option(m, &o)) return 0;
+    if (m->type == RECOMP_MOD_OPTION_CHOICE) {
+        for (int i = 0; i < m->count; ++i)
+            if (!strcmp(m->value[i], o.value)) { *out = i; return 1; }
+        *out = 0;
+    } else if (m->type == RECOMP_MOD_OPTION_BOOLEAN) {
+        *out = !strcmp(o.value, "true") || !strcmp(o.value, "1");
+    } else {
+        *out = atoi(o.value);
+    }
+    return 1;
+}
+
+static int mod_set(const ModRow *m, int v)
+{
+    const RecompLauncherCModProvider *p = mods();
+    int ok;
+    if (m->type < 0) {
+        ok = p->feature_enable && p->feature_enable(p->ctx, m->package, m->feature, v != 0);
+    } else {
+        char value[RECOMP_LAUNCHER_MOD_VALUE_MAX];
+        if (m->type == RECOMP_MOD_OPTION_CHOICE) {
+            if (v < 0 || v >= m->count) return 0;
+            snprintf(value, sizeof(value), "%s", m->value[v]);
+        } else if (m->type == RECOMP_MOD_OPTION_BOOLEAN) {
+            snprintf(value, sizeof(value), "%s", v ? "true" : "false");
+        } else {
+            snprintf(value, sizeof(value), "%d", v);
+        }
+        ok = p->feature_set_option && p->feature_set_option(p->ctx, m->package, m->feature, m->option, value);
+    }
+    if (ok) ok = p->commit && p->commit(p->ctx, s_host.image);
+    if (!ok) {
+        const char *why = p->last_error ? p->last_error(p->ctx) : NULL;
+        recomp_runtime_ui_set_status(s_ui, why && *why ? why : "The mod setting was not applied");
+        return 0;
+    }
+    if (s_host.mods_changed) s_host.mods_changed();
+    recomp_runtime_ui_set_status(s_ui, "Mod setting applied");
+    return 1;
+}
+
+static int mod_enabled(const ModRow *m)
+{
+    if (m->type < 0) return 1;
+    RecompLauncherCModFeature feat;
+    RecompLauncherCModOption o;
+    return mod_feature(m, &feat) && feat.enabled && mod_option(m, &o) && !o.disabled;
+}
 
 static const char *const HLE_CHOICES[] = { "Game default", "On", "Off" };
 static const int HLE_VALUES[] = { -1, 1, 0 };
@@ -126,6 +292,7 @@ static int get_value(void *ctx, const RecompRuntimeUiItem *it, int *out)
     else if (is_key(it, RECOMP_RUNTIME_UI_KEY_AUDIO)) *out = s->audio_enabled;
     else if (is_key(it, RECOMP_RUNTIME_UI_KEY_VOLUME)) *out = s->volume;
     else if (is_key(it, RECOMP_RUNTIME_UI_KEY_VIEW_MODE)) *out = x && x->get_view_mode ? x->get_view_mode(x->ctx) : s->view_mode;
+    else if (mod_row(it)) return mod_get(mod_row(it), out);
     else if (is_key(it, "cyc.disk.side")) {
         CycDiskToast t;
         cyc_disk_action_toast(cyc_host_disk_action(), s_host.now_ms(), &t);
@@ -151,6 +318,8 @@ static int set_value(void *ctx, const RecompRuntimeUiItem *it, int v)
     else if (is_key(it, RECOMP_RUNTIME_UI_KEY_VIEW_MODE)) {
         if (!x || !x->set_view_mode || !x->set_view_mode(x->ctx, v)) return 0;
         s->view_mode = v;
+    } else if (mod_row(it)) {
+        return mod_set(mod_row(it), v);
     } else if (is_key(it, "cyc.disk.side")) {
         long f = s_host.frames_done();
         if (v < 0) return cyc_host_disk_eject(f);
@@ -191,6 +360,17 @@ static int run_action(void *ctx, const RecompRuntimeUiItem *it)
         if (!cyc_disk_action_toast(a, now, &t)) cyc_host_disk_press(now, f);
         return cyc_host_disk_press(now, f) != CYC_DISK_PRESS_NONE;
     }
+    if (is_key(it, RECOMP_RUNTIME_UI_KEY_SAVE_STATE) && s_host.save_state) {
+        bool ok = s_host.save_state();
+        recomp_runtime_ui_set_status(s_ui, ok ? "State saved" : "The state was not saved");
+        return ok;
+    }
+    if (is_key(it, RECOMP_RUNTIME_UI_KEY_LOAD_STATE) && s_host.load_state) {
+        bool ok = s_host.load_state();
+        recomp_runtime_ui_set_status(s_ui, ok ? "State loaded" : "No state to load for this game");
+        if (ok) recomp_runtime_ui_close(s_ui);
+        return ok;
+    }
     if (is_key(it, "cyc.quit")) {
         uint64_t now = s_host.now_ms();
         if (s_quit_armed && now - s_quit_armed < 3000) { s_host.quit(); return 1; }
@@ -217,6 +397,7 @@ static int is_enabled(void *ctx, const RecompRuntimeUiItem *it)
         return !nes_fds_hle_plan_denied(p, ax) || *nes_fds_hle_ask_axis(&s_host.settings->fds_hle, ax) > 0;
     }
     if (is_key(it, RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE)) return s_host.settings->fullscreen == 0;
+    if (mod_row(it)) return mod_enabled(mod_row(it));
     if (game_row(it) && x && x->menu_callbacks && x->menu_callbacks->is_enabled)
         return x->menu_callbacks->is_enabled(x->menu_callbacks->context, it);
     return 1;
@@ -275,6 +456,7 @@ RecompRuntimeUi *cyc_ui_menu_create(const CycUiHost *host)
     if (x && x->menu_items)
         for (size_t i = 0; i < x->menu_item_count; ++i)
             if (s_item_count < sizeof(s_items) / sizeof(s_items[0])) s_items[s_item_count++] = x->menu_items[i];
+    add_mod_rows();
     add("cyc.quit", "System", "Quit", "Close the game (the disk save is written first).", RECOMP_RUNTIME_UI_ACTION,
         0, 0, 0, NULL, 0, NULL);
     refresh();
@@ -296,6 +478,8 @@ RecompRuntimeUi *cyc_ui_menu_create(const CycUiHost *host)
                    RECOMP_RUNTIME_UI_STANDARD_INTEGER_SCALE | RECOMP_RUNTIME_UI_STANDARD_LINEAR_FILTER |
                    RECOMP_RUNTIME_UI_STANDARD_AUDIO | RECOMP_RUNTIME_UI_STANDARD_VOLUME |
                    RECOMP_RUNTIME_UI_STANDARD_RESUME;
+    if (host->save_state && host->load_state)
+        std.features |= RECOMP_RUNTIME_UI_STANDARD_SAVE_STATE | RECOMP_RUNTIME_UI_STANDARD_LOAD_STATE;
     if (x && x->view_modes && x->set_view_mode) {
         std.features |= RECOMP_RUNTIME_UI_STANDARD_VIEW_MODE;
         std.view_modes = x->view_modes;

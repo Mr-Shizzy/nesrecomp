@@ -656,6 +656,111 @@ uint64_t fds_state_hash(uint64_t acc)
 }
 
 /* The disks are memory a program can read back after writing them. */
+/* ---- state (cyc_state.c) ---- */
+
+size_t fds_media_snapshot_size(void) { return sizeof(media); }
+void   fds_media_snapshot(void *buf) { memcpy(buf, &media, sizeof(media)); }
+void   fds_media_restore(const void *buf)
+{
+    /* the sides themselves are not in a snapshot: the drive (not clocked in
+     * isolation) is the only writer of their bytes */
+    FdsSide *sides = media.sides;
+    unsigned count = media.count;
+    memcpy(&media, buf, sizeof(media));
+    media.sides = sides;
+    media.count = count;
+}
+
+/* Serialized: the options, the side in the drive, the change counters, the
+ * write run, then per side its base identity (length, CRC-32 of the stream the
+ * loader built: a state of another image is refused) and its bytes now. */
+typedef struct {
+    CycFdsOptions opt;
+    uint32_t count;
+    int32_t  side;
+    uint8_t  qd;
+    uint64_t write_hash;
+    uint32_t writes;
+    uint64_t generation;
+    FdsWriteRun run;
+} FdsMediaHead;
+
+size_t fds_media_serialize(uint8_t *buf, size_t cap)
+{
+    size_t need = sizeof(FdsMediaHead);
+    for (unsigned s = 0; s < media.count; ++s) need += 12 + media.sides[s].len;
+    if (!buf || cap < need) return need;
+    FdsMediaHead h;
+    memset(&h, 0, sizeof(h));
+    h.opt = media.opt;
+    h.count = media.count;
+    h.side = media.side;
+    h.qd = media.qd;
+    h.write_hash = media.write_hash;
+    h.writes = media.writes;
+    h.generation = media.generation;
+    h.run = media.run;
+    memcpy(buf, &h, sizeof(h));
+    size_t at = sizeof(h);
+    for (unsigned s = 0; s < media.count; ++s) {
+        const FdsSide *d = &media.sides[s];
+        uint32_t base_crc = nes_crc32(0, d->base, d->base_len);
+        memcpy(buf + at, &d->base_len, 4);
+        memcpy(buf + at + 4, &base_crc, 4);
+        memcpy(buf + at + 8, &d->len, 4);
+        memcpy(buf + at + 12, d->bytes, d->len);
+        at += 12 + d->len;
+    }
+    return at;
+}
+
+bool fds_media_deserialize(const uint8_t *buf, size_t len, bool apply)
+{
+    FdsMediaHead h;
+    if (len < sizeof(h)) return false;
+    memcpy(&h, buf, sizeof(h));
+    if (h.count != media.count || memcmp(&h.opt, &media.opt, sizeof(h.opt)) ||
+        h.side < -1 || h.side >= (int32_t)media.count)
+        return false;
+    size_t at = sizeof(h);
+    for (unsigned s = 0; s < media.count; ++s) {
+        uint32_t base_len, base_crc, n;
+        if (len - at < 12) return false;
+        memcpy(&base_len, buf + at, 4);
+        memcpy(&base_crc, buf + at + 4, 4);
+        memcpy(&n, buf + at + 8, 4);
+        if (base_len != media.sides[s].base_len || base_crc != nes_crc32(0, media.sides[s].base, base_len) ||
+            !n || len - at - 12 < n)
+            return false;
+        at += 12 + n;
+    }
+    if (at != len) return false;
+    if (!apply) return true;
+    at = sizeof(h);
+    for (unsigned s = 0; s < media.count; ++s) {
+        uint32_t n;
+        memcpy(&n, buf + at + 8, 4);
+        FdsSide *d = &media.sides[s];
+        if (n != d->len) {
+            uint8_t *grown = (uint8_t *)realloc(d->bytes, n);
+            if (!grown) return false;
+            d->bytes = grown;
+            d->len = n;
+        }
+        memcpy(d->bytes, buf + at + 12, n);
+        at += 12 + n;
+    }
+    media.side = h.side;
+    media.qd = h.qd;
+    media.write_hash = h.write_hash;
+    media.writes = h.writes;
+    /* Generations only move forward: the loaded disk is a change the host's
+     * disk save has not written (its bookkeeping compares generations). */
+    media.generation++;
+    media.run = h.run;
+    return true;
+}
+
 uint64_t fds_media_hash(uint64_t h)
 {
     return cyc_trace_mix(h, media.write_hash ^ ((uint64_t)(media.side + 1) << 56));

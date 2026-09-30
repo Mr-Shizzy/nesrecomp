@@ -158,6 +158,22 @@ uint64_t cyc_cycle_count(void);
  * (color | emphasis << 6), as far as the PPU has drawn it. */
 const uint32_t *cyc_frame_argb(void);
 const uint16_t *cyc_frame_index(void);
+/* What the PPU used to draw each visible line of that picture, for a game's
+ * own compositor (cyc_render.h). Recorded at dot 1 of the line: v is the VRAM
+ * address then (the line's first two background tiles already fetched, so
+ * its coarse X is two tiles on), fine_x the fine X scroll, ctrl the $2000 bits
+ * in effect (bit 3 sprite pattern table, bit 4 background table, bit 5 8x16
+ * sprites) and mask the $2001 bits (1 greyscale, 2 background in the left 8
+ * pixels, 4 sprites there, 8 background, 16 sprites, emphasis in bits 5-7).
+ * Observation only: recording it changes nothing the machine does. */
+typedef struct {
+    uint16_t v;
+    uint8_t  fine_x, ctrl, mask, pad;
+} CycLine;
+const CycLine *cyc_frame_lines(void);        /* [240] */
+/* [256 * 240]: 1 where the background's pixel was opaque (a nonzero pattern
+ * value with the background shown there), under any sprite. */
+const uint8_t *cyc_frame_bg_opaque(void);
 /* Audio: signed 16-bit mono at the given rate. cyc_audio_enable returns false
  * if the machine has no audio output. */
 bool   cyc_audio_enable(int sample_rate);

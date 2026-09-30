@@ -715,6 +715,31 @@ void hw_cart_ppu_rd(bool reading)
 #include "hw_taito.inc"
 #include "hw_taito_x1.inc"
 
+/* ---- sound chip state outside hw_cart (cyc_state.c) ----
+ * VRC7's OPLL (emu2413) is audio only: nothing the CPU reads comes from it.
+ * An isolated mod call is undone by copying the object back into itself (its
+ * internal pointers stay valid); a save state carries VRC7's registers in
+ * hw_cart and the chip is rebuilt from them. */
+size_t hw_cart_sound_snapshot_size(void) { return vrc7_opll ? sizeof(OPLL) : 0; }
+void   hw_cart_sound_snapshot(void *buf) { if (vrc7_opll) memcpy(buf, vrc7_opll, sizeof(OPLL)); }
+void   hw_cart_sound_restore(const void *buf) { if (vrc7_opll) memcpy(vrc7_opll, buf, sizeof(OPLL)); }
+void   hw_cart_sound_reloaded(void)
+{
+    if (!vrc7_opll) return;
+    uint8_t regs[sizeof(hw_cart.m.vrc7_reg)], address = hw_cart.m.vrc7_address;
+    int16_t output = hw_cart.m.vrc7_output;
+    uint64_t phase = hw_cart.m.vrc7_phase;
+    memcpy(regs, hw_cart.m.vrc7_reg, sizeof(regs));
+    vrc7_sound_reset(false);
+    memcpy(hw_cart.m.vrc7_reg, regs, sizeof(regs));
+    hw_cart.m.vrc7_address = address;
+    hw_cart.m.vrc7_output = output;
+    hw_cart.m.vrc7_phase = phase;
+    for (unsigned r = 0; r < sizeof(regs); ++r)
+        if (r < 8 || r == 15 || (r >= 16 && r <= 21) || (r >= 32 && r <= 37) || (r >= 48 && r <= 53))
+            OPLL_writeReg(vrc7_opll, r, regs[r]);
+}
+
 static const struct {
     int         mapper;
     const char *name;

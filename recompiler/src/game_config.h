@@ -95,6 +95,15 @@ typedef struct {
     int      bank;   /* -1 for fixed bank */
 } ExtraFunc;
 
+/* [[mod_function_hook]] id and content key (see GameConfig). */
+#define GAME_CFG_MAX_MOD_HOOK_KEYS 256
+#define GAME_CFG_MOD_HOOK_BYTES     16
+typedef struct {
+    char     id[64];                         /* "" = none */
+    uint8_t  len;                            /* 0 = no content key */
+    uint32_t crc32;                          /* CRC-32 of the len bytes at the site */
+} ModHookKey;
+
 typedef struct {
     uint16_t addr;
     int      bank;          /* -1 for fixed bank */
@@ -330,12 +339,29 @@ typedef struct {
      * that does not opt in emits no callback and no overhead.
      * Usage in game.toml:  [[mod_function_hook]]
      *                      addr = 0xB0E9
-     *                      bank = 0        # optional; omitted matches any bank */
+     *                      bank = 0        # optional; omitted matches any bank
+     *                      id = "game.feature.hook"   # optional plugin id
+     *                      bytes = "A5 0E C9 08"      # optional content key, or
+     *                      length = 4                 # ... the key as the length
+     *                      crc32 = 0x1234ABCD         # and CRC-32 of those bytes
+     *
+     * The cycle backend (cyc_codegen.c) keys a hook on the code actually at
+     * the address: the `length` bytes there (1-16, given as `bytes` or by
+     * their CRC-32, which keeps the program's own bytes out of a repository)
+     * must be the key when the hook fires, which is what makes a hook in RAM
+     * meaningful (an FDS program loads different files at the same address).
+     * A hook at a RAM address must declare one, and some disk file must hold
+     * it there. `id` names the plugin that registers for this site
+     * (nes_mod_register_function_entry_plugin); the cycle host refuses a
+     * registration whose id/address no site declares. */
     ExtraFunc        mod_function_hooks[GAME_CFG_MAX_EXTRA_FUNCS];
     /* Opt-in: also intercept branch/fallthrough entry inside an emitted body.
      * The callback owns the remainder of the native routine, just as for JSR. */
     bool             mod_function_hook_internal[GAME_CFG_MAX_EXTRA_FUNCS];
     int              mod_function_hook_count;
+    /* id / content key of hook i (i < GAME_CFG_MAX_MOD_HOOK_KEYS; a hook past
+     * that index may not declare either, which the loader rejects). */
+    ModHookKey       mod_function_hook_keys[GAME_CFG_MAX_MOD_HOOK_KEYS];
 
     ExtraFunc        dedup_excludes[GAME_CFG_MAX_DEDUP_EXCLUDES];
     int              dedup_exclude_count;

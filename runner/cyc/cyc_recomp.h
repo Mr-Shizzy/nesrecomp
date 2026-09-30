@@ -7,6 +7,7 @@
  */
 #pragma once
 #include "cpu6502.h"
+#include "cyc_hooks.h"
 
 /* One compiled view of the cartridge: the instructions of one 4KB PRG bank as
  * mapped in one of the CPU's eight 4KB slots. A block folds the ROM bytes at
@@ -67,3 +68,18 @@ extern const uint32_t cyc_native_ram_view_count;
  * view folds; cleared by the scheduler before it enters a view. Compiled RAM
  * code tests it after every store that can reach such a byte. */
 extern uint8_t cyc_ram_code_dirty;
+
+/* A game.toml [[mod_function_hook]] site (cyc_hooks.h): the plugin id (NULL:
+ * plugins register by address), the address, and the content key memory must
+ * hold there for the site to fire: the CRC-32 of the len bytes from the
+ * address (len 0: none, a fixed ROM slot). */
+typedef struct {
+    const char *id;
+    uint16_t    addr;
+    uint8_t     len;
+    uint32_t    crc32;
+} CycHookSite;
+
+/* Provided by the generated umbrella file (the count may be 0). */
+extern const CycHookSite cyc_native_hook_sites[];
+extern const uint32_t    cyc_native_hook_site_count;

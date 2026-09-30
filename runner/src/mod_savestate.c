@@ -6,7 +6,7 @@
  * every configuration, including titles that never enable the mod package
  * runtime.
  */
-#include "mod_savestate.h"
+#include "../include/mod_savestate.h"
 
 #include <string.h>
 

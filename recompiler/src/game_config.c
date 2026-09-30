@@ -7,6 +7,7 @@
  */
 #include "game_config.h"
 #include "toml.h"
+#include "../../common/nes_cart.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -480,6 +481,56 @@ static bool game_config_load_toml(GameConfig *cfg, const char *path) {
         cfg->mod_function_hooks[idx].addr = toml_hex(t, "addr");
         toml_datum_t internal = toml_bool_in(t, "include_internal");
         cfg->mod_function_hook_internal[idx] = internal.ok && internal.u.b;
+        toml_datum_t id = toml_string_in(t, "id"), bytes = toml_string_in(t, "bytes");
+        toml_datum_t key_len = toml_int_in(t, "length"), key_crc = toml_int_in(t, "crc32");
+        if ((id.ok || bytes.ok || key_len.ok || key_crc.ok) && idx >= GAME_CFG_MAX_MOD_HOOK_KEYS) {
+            fprintf(stderr, "[GameConfig] [[mod_function_hook]] #%d: only the first %d hooks may declare id/bytes\n",
+                    idx, GAME_CFG_MAX_MOD_HOOK_KEYS);
+            if (id.ok) free(id.u.s);
+            if (bytes.ok) free(bytes.u.s);
+            toml_free(root);
+            return false;
+        }
+        bool key_ok = true;
+        if (id.ok) {
+            if (!id.u.s[0] || strlen(id.u.s) >= sizeof(cfg->mod_function_hook_keys[0].id)) key_ok = false;
+            else strcpy(cfg->mod_function_hook_keys[idx].id, id.u.s);
+            free(id.u.s);
+        }
+        if (key_len.ok != key_crc.ok || (bytes.ok && key_len.ok)) key_ok = false;
+        if (key_len.ok && key_ok) {
+            ModHookKey *k = &cfg->mod_function_hook_keys[idx];
+            if (key_len.u.i < 1 || key_len.u.i > GAME_CFG_MOD_HOOK_BYTES || key_crc.u.i < 0 || key_crc.u.i > 0xFFFFFFFFll)
+                key_ok = false;
+            k->len = (uint8_t)key_len.u.i;
+            k->crc32 = (uint32_t)key_crc.u.i;
+        }
+        if (bytes.ok) {
+            /* hex pairs, separated by spaces or not: "A5 0E C9 08" */
+            ModHookKey *k = &cfg->mod_function_hook_keys[idx];
+            uint8_t key[GAME_CFG_MOD_HOOK_BYTES];
+            const char *s = bytes.u.s;
+            while (*s && key_ok) {
+                if (*s == ' ' || *s == '\t') { s++; continue; }
+                int hi = -1, lo = -1;
+                char c0 = s[0], c1 = s[1];
+                hi = c0 >= '0' && c0 <= '9' ? c0 - '0' : c0 >= 'a' && c0 <= 'f' ? c0 - 'a' + 10 : c0 >= 'A' && c0 <= 'F' ? c0 - 'A' + 10 : -1;
+                lo = hi < 0 ? -1 : c1 >= '0' && c1 <= '9' ? c1 - '0' : c1 >= 'a' && c1 <= 'f' ? c1 - 'a' + 10 : c1 >= 'A' && c1 <= 'F' ? c1 - 'A' + 10 : -1;
+                if (hi < 0 || lo < 0 || k->len >= GAME_CFG_MOD_HOOK_BYTES) { key_ok = false; break; }
+                key[k->len++] = (uint8_t)(hi << 4 | lo);
+                s += 2;
+            }
+            if (!k->len) key_ok = false;
+            k->crc32 = nes_crc32(0, key, k->len);
+            free(bytes.u.s);
+        }
+        if (!key_ok) {
+            fprintf(stderr, "[GameConfig] [[mod_function_hook]] addr=0x%04X: id must be 1-63 characters, and the "
+                            "key either bytes (1-%d hex pairs) or length (1-%d) with crc32\n",
+                    cfg->mod_function_hooks[idx].addr, GAME_CFG_MOD_HOOK_BYTES, GAME_CFG_MOD_HOOK_BYTES);
+            toml_free(root);
+            return false;
+        }
     }
 
     /* [[data_region]] */

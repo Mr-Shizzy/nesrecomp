@@ -155,7 +155,7 @@ set_tests_properties(cyc_fds_disk_test PROPERTIES FIXTURES_REQUIRED fds_fixtures
 # FDS RAM Adapter and drive: register/IRQ/drive contracts, then a synthetic
 # BIOS (tools/cyc/fds_board_fixtures.py) run on the whole machine.
 add_executable(cyc_fds_board_test fds_board_test.c cpu6502.c cpu6502_interp.c hw_machine.c ${CYC_TEST_BOARD_SOURCES}
-    hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_ramview.c cyc_native_none.c)
+    hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c ${NESRECOMP_CYC_SCHEDULER_SOURCES} cyc_native_none.c)
 target_include_directories(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 target_link_libraries(cyc_fds_board_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
 if(MSVC)
@@ -169,11 +169,22 @@ set_tests_properties(cyc_fds_board_fixtures PROPERTIES FIXTURES_SETUP fds_board_
 add_test(NAME cyc_fds_board_test COMMAND cyc_fds_board_test ${NESRECOMP_FDS_BOARD_FIXTURES})
 set_tests_properties(cyc_fds_board_test PROPERTIES FIXTURES_REQUIRED fds_board_fixtures)
 
+# The presented width (cyc_video.h, common/nes_video_geometry.h): every mode's
+# width, Fit's clamp, queuing after the window exists, the apply point.
+add_executable(cyc_video_test video_test.c cyc_video.c cpu6502.c cpu6502_interp.c hw_machine.c ${CYC_TEST_BOARD_SOURCES}
+    hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c ${NESRECOMP_CYC_SCHEDULER_SOURCES} cyc_native_none.c)
+target_include_directories(cyc_video_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
+target_link_libraries(cyc_video_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
+if(MSVC)
+    target_compile_definitions(cyc_video_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+add_test(NAME cyc_video_test COMMAND cyc_video_test)
+
 # The console output stage (hw_apu.c, cyc_set_console): board defaults, each
 # model's frequency and step response against its documented RC sections, and
 # no effect on the machine. The FDS default uses the board fixtures' disk.
 add_executable(cyc_console_audio_test console_audio_test.c cpu6502.c cpu6502_interp.c hw_machine.c ${CYC_TEST_BOARD_SOURCES}
-    hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c cyc_run.c cyc_ramview.c
+    hw_ppu.c hw_apu.c hw_palette.c cyc_trace.c cyc_ring.c ${NESRECOMP_CYC_SCHEDULER_SOURCES}
     cyc_native_none.c)
 target_include_directories(cyc_console_audio_test PRIVATE ${NESRECOMP_CYC_INCLUDE_DIRS})
 target_link_libraries(cyc_console_audio_test PRIVATE ${NESRECOMP_CYC_LIBRARIES})
@@ -264,6 +275,16 @@ add_test(NAME cyc_ramview_test
             --recompiler $<TARGET_FILE:NESRecomp> --interp $<TARGET_FILE:cyc_interp>
             --out ${CMAKE_CURRENT_BINARY_DIR}/ramview_test ${NESRECOMP_NESTED_BUILD_ARGS})
 set_tests_properties(cyc_ramview_test PROPERTIES TIMEOUT 1800)
+
+# The mod surface (tools/cyc/test_cyc_mods.py, a synthetic FDS program from
+# tools/cyc/fds_mod_fixtures.py and the test plugin tests/mods/mod_test_extras.c):
+# hook sites keyed on the code in RAM, native = interpreter, isolated calls
+# that change nothing, committed calls, save states with mod records, and a
+# plugin at an undeclared site refused.
+add_test(NAME cyc_mods_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/cyc/test_cyc_mods.py
+            --recompiler $<TARGET_FILE:NESRecomp> --out ${CMAKE_CURRENT_BINARY_DIR}/mods_test ${NESRECOMP_NESTED_BUILD_ARGS})
+set_tests_properties(cyc_mods_test PROPERTIES TIMEOUT 1800)
 
 # FDS disk saves across processes: a synthetic program that saves to its disk
 # (tools/cyc/fds_save_fixtures.py) run by cyc_interp at all four alignments:

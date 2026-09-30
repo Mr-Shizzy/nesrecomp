@@ -43,6 +43,15 @@ typedef struct {
     long (*frames_done)(void);
     uint64_t (*now_ms)(void);             /* the toast's clock */
     const char *title;                    /* the menu's title (the game) */
+    bool (*save_state)(void);             /* the save state slot (cyc_state.h) */
+    bool (*load_state)(void);
+    /* The mod runtime's RecompLauncherCModProvider (NULL: no mods) and the
+     * image the game runs: the menu's Mods rows edit the features and their
+     * options live, commit them for this image, and call mods_changed to
+     * activate the plugins again. */
+    const void *mods;
+    const char *image;
+    void (*mods_changed)(void);
 } CycUiHost;
 
 /* The launcher, before the image loads. `settings` is edited in place; on
@@ -52,9 +61,11 @@ typedef struct {
  * image paths (--fds-bios, game.toml's, the compiled CRC): the launcher runs
  * it for the selected image and the player's pick (settings->fds_bios), shows
  * "FDS BIOS required" with Select BIOS... when it finds nothing usable for a
- * disk image, and keeps Start disabled until it does. */
+ * disk image, and keeps Start disabled until it does.
+ * `mods` (NULL: none) is the mod runtime's RecompLauncherCModProvider
+ * (cyc_session.h): the launcher's Mods screen, whose selection PLAY commits. */
 int  cyc_ui_launcher(struct CycSettings *settings, const char *settings_path, const CycHostExtras *extras,
-                     const char **rom_path, bool fds, const CycFdsBiosLookup *bios);
+                     const char **rom_path, bool fds, const CycFdsBiosLookup *bios, const void *mods);
 /* The launcher's BIOS verdict (recomp-ui GameInfo.bios_verify_for_rom), ctx
  * the lookup above. */
 struct RecompLauncherCBiosVerify;

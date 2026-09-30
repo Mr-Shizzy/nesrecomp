@@ -575,6 +575,7 @@ typedef struct {
     /* Every byte an emitted view folds, by CPU address (CPU RAM mirrored). */
     uint8_t     code[0x10000];
     uint32_t    code_prefix[0x10001];
+    int         hook_errors;   /* [[mod_function_hook]] sites in RAM that cannot fire */
 } RamProgram;
 
 /* The PRG byte at an offset, with the padding past the end of a ROM whose
@@ -1326,10 +1327,66 @@ static const char *mode_suffix(AddrMode am) {
     }
 }
 
+/* ---- mod hook sites ----
+ *
+ * game.toml [[mod_function_hook]] entries: addresses where a trusted mod
+ * plugin observes (or takes over) a routine of the original program
+ * (runner/cyc/cyc_hooks.h). A compiled instruction there first asks whether
+ * any hook is armed; if so the block returns to the scheduler at that
+ * instruction, which checks the site's content key against what memory holds
+ * now, runs the plugins, and dispatches the instruction again (a flag lets it
+ * through the second time). Programs without hooks emit nothing. */
+static const GameConfig *s_hook_cfg;
+
+/* A site in RAM (CPU RAM, cartridge RAM, the FDS PRG RAM) is keyed on its
+ * content; one in ROM on its bank. */
+static bool hook_in_ram(int mapper, uint16_t a) {
+    return a < 0x8000 || (mapper == 20 && a < 0xE000);
+}
+
+/* Does a hook's content key hold the `len` bytes at `bytes`? */
+static bool key_holds(const ModHookKey *k, const uint8_t *bytes, uint32_t available) {
+    return k->len <= available && nes_crc32(0, bytes, k->len) == k->crc32;
+}
+
+/* ... the bytes of ROM bank `bank` from offset `off` in its slot. */
+static bool key_holds_rom(const ModHookKey *k, const Program *p, uint32_t bank, uint32_t off) {
+    uint8_t b[GAME_CFG_MOD_HOOK_BYTES];
+    if (off + k->len > SLOT_SIZE) return false;
+    for (uint32_t j = 0; j < k->len; j++) b[j] = prg_byte(p, bank, off + j);
+    return key_holds(k, b, k->len);
+}
+
+static const ModHookKey *hook_key(int i) {
+    static const ModHookKey none;
+    return i < GAME_CFG_MAX_MOD_HOOK_KEYS ? &s_hook_cfg->mod_function_hook_keys[i] : &none;
+}
+
+/* Does instruction e (at e->P) carry a hook site? In a RAM view only when
+ * the image holds the site's content key there: a view of another file at the
+ * same address can never be that site. */
+static bool hook_site_here(const Emit *e) {
+    if (!s_hook_cfg || INTERP(e)) return false;
+    for (int i = 0; i < s_hook_cfg->mod_function_hook_count; i++) {
+        if (s_hook_cfg->mod_function_hooks[i].addr != e->P) continue;
+        const ModHookKey *k = hook_key(i);
+        if (!k->len) return true;
+        if (!e->img) {
+            if (key_holds_rom(k, e->p, e->at.bank, e->at.k)) return true;
+            continue;
+        }
+        uint32_t off = (uint32_t)(e->P - e->img->base);
+        if (off < e->img->len && key_holds(k, &e->img->bytes[off], e->img->len - off)) return true;
+    }
+    return false;
+}
+
 static void emit_instruction(Emit *e) {
     const OpDef *d = &OPS[e->opcode];
     out(e, "L_%04X: /* %02X %s%s */\n", e->P, e->opcode, d->name, mode_suffix(d->am));
     out(e, "    if (hw_frame_done) { cpu.pc = 0x%04X; return; }\n", e->P);
+    if (hook_site_here(e))
+        out(e, "    if (cyc_hook_stop(0x%04X)) { cpu.pc = 0x%04X; return; }   /* mod hook site */\n", e->P, e->P);
     out(e, "    if (cpu_fetch_rom(0x%04X, 0x%02X)) { cpu.pc = 0x%04X; cpu_interrupt(false); return; }\n", e->P,
         e->opcode, e->P);
     out(e, "    {\n");
@@ -1515,9 +1572,10 @@ static void emit_umbrella(const Program *p, const char *path, const char *prefix
         "/* Run compiled instructions from cpu.pc until execution leaves compiled\n"
         " * code or the PPU finishes a frame. Called at an instruction boundary.\n"
         " * Each iteration looks the mapping up again: a chunk returns here when\n"
-        " * control crosses a slot, a chunk boundary, or a write to the mapper. */\n"
+        " * control crosses a slot, a chunk boundary, or a write to the mapper,\n"
+        " * and goes back to the scheduler at a mod hook site (cyc_hooks.h). */\n"
         "void cyc_native_run(void) {\n"
-        "    while (!hw_frame_done && !cpu.jammed) {\n"
+        "    while (!hw_frame_done && !cyc_hook_hit && !cpu.jammed) {\n"
         "        uint16_t pc = cpu.pc;\n"
         "        if (!hw_prg_is_rom(pc) || !hw_prg_is_stable()) return;\n"
         "        unsigned k;\n"
@@ -1531,6 +1589,20 @@ static void emit_umbrella(const Program *p, const char *path, const char *prefix
         prefix, prg_hash, SLOT_SHIFT, SLOT_COUNT - 1, SLOT_SIZE - 1, CHUNK_SHIFT);
     fputc('\n', f);
     ram_emit_table(f, ram);
+    /* The mod hook sites (runner/cyc/cyc_hooks.c): the runtime fires a site
+     * only while memory holds its content key, and refuses a plugin that
+     * registers for a site the program does not declare. */
+    int nh = s_hook_cfg ? s_hook_cfg->mod_function_hook_count : 0;
+    fprintf(f, "\n/* game.toml [[mod_function_hook]] sites: id, address, content key. */\n"
+               "const CycHookSite cyc_native_hook_sites[%d] = {", nh ? nh : 1);
+    if (!nh) fprintf(f, " { 0, 0, 0, 0 }");
+    for (int i = 0; i < nh; i++) {
+        const ModHookKey *k = hook_key(i);
+        fprintf(f, "\n    { ");
+        emit_c_string(f, k->id[0] ? k->id : NULL);
+        fprintf(f, ", 0x%04X, %u, 0x%08Xu },", s_hook_cfg->mod_function_hooks[i].addr, k->len, k->crc32);
+    }
+    fprintf(f, "\n};\nconst uint32_t cyc_native_hook_site_count = %du;\n", nh);
     fclose(f);
 }
 
@@ -2175,6 +2247,36 @@ static RamProgram *ram_build(const Program *p, const GameConfig *cfg, const CycF
             for (int k = 0; k < disk_images; ++k)
                 if (ram_image_holds(r, &r->img[k], (uint16_t)a, r->var[a][v].b, r->var[a][v].len))
                     r->img[k].seed[a - r->img[k].base] = 1;
+    /* Mod hook sites in RAM are entry points of every disk file that holds the
+     * site's content key there, and of no other: a file loaded over it at the
+     * same address is other code. A site no file holds could never fire. */
+    for (int i = 0; s_hook_cfg && i < s_hook_cfg->mod_function_hook_count; ++i) {
+        uint16_t a = s_hook_cfg->mod_function_hooks[i].addr;
+        if (!hook_in_ram(p->mapper, a)) continue;
+        const ModHookKey *key = hook_key(i);
+        int held = 0;
+        for (int k = 0; k < disk_images && key->len; ++k) {
+            RamImage *im = &r->img[k];
+            uint32_t off = (uint32_t)(a - im->base);
+            if (a < im->base || off >= im->len || !key_holds(key, &im->bytes[off], im->len - off)) continue;
+            im->seed[off] = 1;
+            held++;
+        }
+        if (!key->len) {
+            fprintf(stderr, "[cyc] [[mod_function_hook]] at RAM address $%04X needs bytes = \"..\": code in RAM is "
+                            "keyed on its content\n", a);
+            r->hook_errors++;
+        } else if (!held && r->fds && a >= 0x6000) {
+            fprintf(stderr, "[cyc] [[mod_function_hook]] %s at $%04X: no disk file holds its bytes there\n",
+                    key->id[0] ? key->id : "(no id)", a);
+            r->hook_errors++;
+        } else if (!held) {
+            /* Code a run copies there: the interpreter runs it (and the
+             * scheduler fires the site) until a capture compiles it. */
+            printf("[cyc] note: [[mod_function_hook]] %s at $%04X: no image holds its bytes yet\n",
+                   key->id[0] ? key->id : "(no id)", a);
+        }
+    }
     /* Discover to a fixed point: a target leaving one image is a seed of
      * every image covering it (the code resident there may be any of them). */
     for (;;) {
@@ -2442,6 +2544,36 @@ bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *outp
             fclose(sf);
         }
     }
+    /* Mod hook sites in ROM are entry points: in the bank a fixed slot holds,
+     * or in every bank of a switchable slot that holds the site's content key
+     * there (which such a site must declare: the address alone names a
+     * different routine in each bank). */
+    s_hook_cfg = cfg;
+    int hook_errors = 0;
+    for (int i = 0; i < cfg->mod_function_hook_count; i++) {
+        uint16_t addr = cfg->mod_function_hooks[i].addr;
+        if (hook_in_ram(p->mapper, addr)) continue;
+        const ModHookKey *key = hook_key(i);
+        uint32_t slot = (addr >> SLOT_SHIFT) & (SLOT_COUNT - 1), k = addr & (SLOT_SIZE - 1);
+        if (p->fixed[slot] < 0 && !key->len) {
+            fprintf(stderr, "[cyc] [[mod_function_hook]] at $%04X is in a switchable PRG slot: it needs bytes = \"..\"\n",
+                    addr);
+            hook_errors++;
+            continue;
+        }
+        int held = 0;
+        for (uint32_t bank = 0; bank < p->banks; bank++) {
+            if (p->fixed[slot] >= 0 && (int)bank != p->fixed[slot]) continue;
+            if (!key_holds_rom(key, p, bank, k)) continue;
+            if ((size_t)n + 1 < seed_cap) seeds[n++] = POS_PACK(bank, slot, k);
+            held++;
+        }
+        if (!held) {
+            fprintf(stderr, "[cyc] [[mod_function_hook]] %s at $%04X: no PRG bank holds its bytes there\n",
+                    key->id[0] ? key->id : "(no id)", addr);
+            hook_errors++;
+        }
+    }
     discover(p, seeds, n);
     free(seeds);
     if (file_seeds) printf("[NESRecomp] cycle-accurate: %d seeds from %s\n", file_seeds, cfg->cycle_seed_file);
@@ -2453,6 +2585,16 @@ bool cyc_codegen_emit(const NESRom *rom, const GameConfig *cfg, const char *outp
     RamProgram *ram = ram_build(p, cfg, fds, &rom_seeds, &rom_seed_count);
     if (rom_seed_count) discover(p, rom_seeds, rom_seed_count);
     free(rom_seeds);
+    hook_errors += ram->hook_errors;
+    if (hook_errors) {
+        fprintf(stderr, "[cyc] %d [[mod_function_hook]] site%s cannot fire; fix game.toml\n", hook_errors,
+                hook_errors == 1 ? "" : "s");
+        ram_free(ram);
+        free(p->is_insn);
+        free(p->seen);
+        free(p);
+        return false;
+    }
 
     uint32_t count = 0, tails = 0;
     for (size_t i = 0; i < pos_space(p); i++) {

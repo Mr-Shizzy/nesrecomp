@@ -115,8 +115,45 @@ typedef enum {
     CYC_EV_FDS_IDBYTES,
     CYC_EV_FDS_SPAN,
     CYC_EV_FDS_HLE,
+    /* Mods and the host (cyc_hooks.c, cyc_mod.c, cyc_state.c, cyc_video.c).
+     * These carry a length in `repeat`:
+     *   MOD_HOOK   end of a frame in which a hook site fired: addr = the site's
+     *              address, value = site index | handled << 16 (handled capped
+     *              at $FFFF), length = callbacks run
+     *   MOD_CALL   end of a frame in which a mod ran a routine of the program in
+     *              isolation (cyc_mod.h): addr = the routine, value = calls,
+     *              length = instructions it ran
+     *   MOD_FAIL   an isolated call that did not return: addr = the routine,
+     *              value = CYC_MOD_FAIL_*, length = instructions it ran
+     *   STATE      a save state: addr = CYC_STATE_EV_*, value = frame, length =
+     *              bytes (0 when refused)
+     *   VIDEO      the presented width changed: addr = width, value = mode
+     *              (common/nes_video_geometry.h), length = the drawable width
+     *              Fit followed (0: none) */
+    CYC_EV_MOD_HOOK,
+    CYC_EV_MOD_CALL,
+    CYC_EV_MOD_FAIL,
+    CYC_EV_STATE,
+    CYC_EV_VIDEO,
     CYC_EV_KINDS
 } CycRingKind;
+
+enum {
+    CYC_MOD_FAIL_BUDGET = 1,    /* ran past its instruction budget */
+    CYC_MOD_FAIL_STACK  = 2,    /* returned past the frame it was called with */
+    CYC_MOD_FAIL_JAM    = 3,    /* executed a jam opcode */
+};
+
+enum {
+    CYC_STATE_EV_SAVE    = 0,
+    CYC_STATE_EV_LOAD    = 1,
+    CYC_STATE_EV_REFUSED = 2,   /* a load refused before touching the machine */
+};
+
+/* Nonzero while a mod runs a routine in isolation (cyc_mod.h): what the
+ * machine does then is undone afterwards, so its device events are not the
+ * machine's history and are not recorded (the MOD_CALL summary is). */
+extern uint8_t cyc_ring_muted;
 
 enum {
     CYC_FDS_SAVE_IDLE    = 1,   /* the drive stopped after changing the disk */

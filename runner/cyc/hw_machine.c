@@ -27,6 +27,8 @@ bool       hw_observe_hit;
 bool       hw_frame_end_hit;
 int        hw_dma_stalls;
 uint8_t    hw_code_watch[HW_CODE_BYTES];
+bool       hw_isolated;
+uint64_t   hw_isolated_cycles, hw_isolated_budget, hw_isolated_io_writes;
 static void no_code_write(unsigned phys, uint8_t value) { (void)phys; (void)value; }
 void     (*hw_code_write)(unsigned phys, uint8_t value) = no_code_write;
 /* What CPU RAM holds at power-on (cyc_core.h). It belongs to the machine, not
@@ -70,6 +72,7 @@ static inline void run_tick(unsigned k)
 
 void hw_clock_run_ticks(int n)
 {
+    if (hw_isolated) return;
     while (n-- > 0) run_tick(hw.tick++);
 }
 
@@ -138,6 +141,11 @@ void hw_cycle_start(uint16_t addr, HwCycleKind kind)
     hw.cpu_addr = addr;
     hw.cpu_reading = kind == HW_READ;
     hw_dma_stalls = 0;
+    if (hw_isolated) {
+        /* a mod's isolated routine call: memory only, no time (hw_internal.h) */
+        if (++hw_isolated_cycles > hw_isolated_budget) hw_frame_done = true;
+        return;
+    }
     for (;;) {
         if (hw.tick == 1) run_ticks_1_to_11();
         else
@@ -170,11 +178,17 @@ uint8_t hw_read_rom(uint16_t addr, uint8_t value)
 
 void hw_write(uint16_t addr, uint8_t value)
 {
+    /* an isolated routine that talks to a device (cyc_mod.h): counted, so a
+     * committed call can refuse (its device effects would be lost) */
+    if (hw_isolated && addr >= 0x2000 &&
+        !(hw_cart.mapper == NES_FDS_MAPPER ? addr >= 0x6000 && addr < 0xE000 : addr >= 0x6000 && addr < 0x8000))
+        hw_isolated_io_writes++;
     hw_bus_write(addr, value);
 }
 
 void hw_cycle_finish(bool instruction_done)
 {
+    if (hw_isolated) return;
     dma_end_of_cycle();
     if (cyc_trace_enabled) cyc_trace_cycle_end(instruction_done, hw.data_bus);
     hw.cycles++;

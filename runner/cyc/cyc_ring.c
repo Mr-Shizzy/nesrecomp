@@ -8,6 +8,7 @@
 #include <string.h>
 
 uint32_t cyc_ring_frame;
+uint8_t  cyc_ring_muted;
 
 static CycRingEvent *ring;          /* allocated on first use, never freed */
 static uint64_t ring_total;
@@ -22,7 +23,7 @@ void cyc_ring_reset(void)
 
 void cyc_ring_push(CycRingKind kind, uint16_t addr, uint32_t value)
 {
-    if ((unsigned)kind >= CYC_EV_KINDS) return;
+    if ((unsigned)kind >= CYC_EV_KINDS || cyc_ring_muted) return;
     kind_totals[kind]++;
     if (!ring) {
         ring = (CycRingEvent *)calloc(CYC_RING_CAPACITY, sizeof(CycRingEvent));
@@ -50,6 +51,7 @@ void cyc_ring_push(CycRingKind kind, uint16_t addr, uint32_t value)
 
 void cyc_ring_push_len(CycRingKind kind, uint16_t addr, uint32_t value, uint32_t length)
 {
+    if (cyc_ring_muted) return;
     cyc_ring_push(kind, addr, value);
     if (ring && ring_total && ring[(ring_total - 1) & (CYC_RING_CAPACITY - 1)].kind == (uint16_t)kind)
         ring[(ring_total - 1) & (CYC_RING_CAPACITY - 1)].repeat = length;
@@ -59,7 +61,8 @@ static bool has_length(unsigned kind)
 {
     return kind == CYC_EV_FDS_WRITE_RUN || kind == CYC_EV_FDS_WRITE_BLOCK || kind == CYC_EV_FDS_SAVE ||
            kind == CYC_EV_FDS_LOAD || kind == CYC_EV_FDS_IDREQ || kind == CYC_EV_FDS_IDBYTES ||
-           kind == CYC_EV_FDS_SPAN || kind == CYC_EV_FDS_HLE;
+           kind == CYC_EV_FDS_SPAN || kind == CYC_EV_FDS_HLE || kind == CYC_EV_MOD_HOOK || kind == CYC_EV_MOD_CALL ||
+           kind == CYC_EV_MOD_FAIL || kind == CYC_EV_STATE || kind == CYC_EV_VIDEO;
 }
 
 uint64_t cyc_ring_total(void) { return ring_total; }
@@ -90,6 +93,7 @@ const char *cyc_ring_kind_name(unsigned kind)
         "view.valid", "view.reject", "view.invalid", "view.exit", "ram.interp", "view.frame",
         "fds.env", "fds.audio",
         "fds.idreq", "fds.idbytes", "fds.span", "fds.hle",
+        "mod.hook", "mod.call", "mod.fail", "state", "video",
     };
     return kind < CYC_EV_KINDS ? NAMES[kind] : "?";
 }
@@ -182,6 +186,21 @@ static void describe(FILE *f, const CycRingEvent *e)
         default: fprintf(f, "code=%u value=%u length=%u", e->addr, e->value, e->repeat); break;
         }
         break;
+    case CYC_EV_MOD_HOOK:
+        fprintf(f, "site=%u pc=%04X fired=%u handled=%u", e->value & 0xFFFF, e->addr, e->repeat, e->value >> 16);
+        break;
+    case CYC_EV_MOD_CALL: fprintf(f, "routine=%04X calls=%u instructions=%u", e->addr, e->value, e->repeat); break;
+    case CYC_EV_MOD_FAIL: {
+        static const char *const WHY[] = { "?", "budget", "stack", "jam" };
+        fprintf(f, "routine=%04X %s instructions=%u", e->addr, e->value < 4 ? WHY[e->value] : "?", e->repeat);
+        break;
+    }
+    case CYC_EV_STATE: {
+        static const char *const WHAT[] = { "save", "load", "refused" };
+        fprintf(f, "%s frame=%u bytes=%u", e->addr < 3 ? WHAT[e->addr] : "?", e->value, e->repeat);
+        break;
+    }
+    case CYC_EV_VIDEO: fprintf(f, "width=%u mode=%u drawable=%u", e->addr, e->value, e->repeat); break;
     default: fprintf(f, "addr=%04X value=%08X", e->addr, e->value); break;
     }
 }

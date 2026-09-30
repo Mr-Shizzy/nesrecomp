@@ -1165,6 +1165,7 @@ the keyboard and every controller. Defaults (the nesrecomp NES layout):
 | Menu | Escape | RB |
 | Fast-forward (held) | Tab | RT |
 | Screenshot (the picture, `cyc_shot_NNNN.png`) | F12 | - |
+| Save state / load state (`saves/<image>.state`) | F8 / F9 | - |
 | Fullscreen | F11 | - |
 
 A key or button bound to a shortcut belongs to the shortcut while it is
@@ -1205,16 +1206,86 @@ the title bar. Production builds have none of them.
 **Games** add to the window with `nesrecomp_add_cycle_game(... HOST_EXTRAS
 <sources>)` defining `cyc_host_extras()` (`cyc_host_extras.h`): a presented
 picture of their own size (widescreen), view modes for the menu's View mode
-row, extra menu rows, and their own config.ini `[Game]` keys.
+row, extra menu rows, their own config.ini `[Game]` keys, per-frame work
+(`power_on`, `frame_begin`, `frame_end`), developer command-line options and
+TCP commands. A game built with `MODS` has the launcher's Mods screen and the
+runtime menu's Mods rows ([Game mods](#game-mods)).
 
 **TCP** (`cyc_tcp.h`; `--tcp PORT`, `NESRECOMP_CYC_TCP`, or `debug.ini` beside
 the executable for port 4370): JSON over newline as in [TCP.md](../../TCP.md).
 `key` and `pad` (an SDL virtual controller) hold input through the bindings,
 `action` holds an action, `disk`, `menu`, `hle`, `screenshot` (layer
 `picture`: the game alone; `ui`: everything the window drew), `state`,
-`read_ram`, `ring_dump`, `quit`. With `--hidden` and `SDL_VIDEODRIVER=dummy`
+`read_ram`, `ring_dump`, `save_state` / `load_state` (path), `video` (the
+presented width and mode, optionally setting the mode), `window_size` (w, h:
+Fit follows the new drawable), `mod_stats` (hook sites, isolated calls,
+compositor counts), `quit`, and the game's own (`tcp_setup`). With `--hidden` and `SDL_VIDEODRIVER=dummy`
 nothing reaches a desktop; `tools/cyc/test_cyc_window.py` (CTest
 `cyc_window_run`) drives production and dev windows that way.
+
+## Game mods
+
+A game's mods are trusted C in the game's `HOST_EXTRAS`, selected and
+configured through the mod runtime (`runner/src/mod_runtime.cpp`; packages and
+manifests as in [docs/MOD_PACKAGES.md](../../docs/MOD_PACKAGES.md)). The
+building blocks, all inert in a program that uses none of them (the stock
+machine and its hashes are unchanged):
+
+**Hook sites** (`cyc_hooks.h`). `game.toml` `[[mod_function_hook]]` entries
+with an `id` and a content key (`bytes`, or `length` + `crc32`) become
+instruction boundaries in the generated code that return to the scheduler
+while a hook is enabled. The scheduler runs the enabled callbacks whose key
+memory holds, before the instruction, on every path: compiled ROM banks,
+compiled RAM views and the interpreter. A nonzero callback returns from the
+routine as its RTS would. A RAM site no disk file holds, or one without a key,
+fails code generation; a plugin naming a site the program lacks fails at
+start. Counts per site (`cyc_hooks_stats`) and a `MOD_HOOK` ring event per
+frame a site fired.
+
+**Isolated guest calls** (`cyc_mod.h`). `cyc_mod_peek` / `cyc_mod_poke` read
+and write CPU RAM, PRG RAM and cartridge RAM. Between `cyc_mod_isolate_begin`
+and `cyc_mod_isolate_end`, `cyc_mod_call(routine, regs)` runs the program's
+own routine (a JSR to a sentinel return) on a machine whose cycles clock
+nothing: no PPU dots, APU, mapper counters or drive, no ring or trace events,
+hooks suspended. The end restores the whole machine from a snapshot (CPU,
+RAM, cartridge and PRG RAM, CHR RAM, PPU, APU, mapper and expansion sound, FDS
+media and HLE, RAM view validity), so a mod can decode, simulate and draw with
+the game's own code without the game noticing. A budget (default 2,000,000
+CPU cycles per call), a stack check and a jam check fail a call loudly
+(`MOD_FAIL` ring event). `cyc_mod_call_commit` keeps a routine's memory effects
+instead, and refuses a routine that stores to a device register.
+
+**Save states** (`cyc_state.h`). The whole machine, the host's section and
+every registered mod record (`runner/include/mod_savestate.h`), identified by
+the program, the layout of each section and, for a disk, the image's base
+data and FDS options; a state from another program or layout is refused.
+Window: F8 / F9 and the menu's rows (`saves/<image>.state`); TCP `save_state`
+/ `load_state`; headless `--save-state FRAME:FILE` (after that frame,
+repeatable) and `--load-state FILE` (continues at the next frame). A state
+loaded in a new process continues exactly as the uninterrupted run.
+
+**Presented width** (`cyc_video.h`). The function-level runtime's modes from
+the same geometry (`common/nes_video_geometry.h`): stock 256, 16:9 426, 21:9
+560, 32:9 854, Fit 256..854 following the window's drawable aspect (clamped to
+[16:15, 32:9], even widths, square pixels). A change queues until the window
+has presented, then applies (`VIDEO` ring event). Headless, `--present-size
+WxH` gives Fit a drawable.
+
+**Custom renderer** (`cyc_render.h`). With a width over 256 the game's
+compositor paints the picture from what the frame used: the native 256x240
+picture and its background opacity, each line's scroll, PPUCTRL and PPUMASK
+as captured at dot 1 of the line, OAM, CHR, nametables and palette, with tile
+and sprite helpers. Without a compositor, or when it declines a frame, the
+native picture is pillarboxed. A picture is composed once per frame, on the
+first present or in the game's `frame_end`.
+
+**Runtime.** `nesrecomp_add_cycle_game(... MODS GAME_ID <id>)` builds the mod
+runtime in (the catalog is `mods/` beside the executable; headless
+`--mods-root DIR`): the launcher's Mods screen, the runtime menu's rows for
+each installed feature and its options (applied at once), activation plugins
+and reset callbacks at start, and mod records in save states. A game's
+`options` (`cyc_host_extras.h`) are developer overrides on the command line,
+applied after the saved selection.
 
 ## Building
 

@@ -32,6 +32,15 @@
  * Fast load: while the drive is loading (cyc_fds_hle_loading), frames run back
  * to back without pacing and without audio, and the window shows the newest
  * one about every 1/60 s. The machine runs the same frames either way.
+ *
+ * The picture: the game's own (cyc_host_extras.h present), else the engine's
+ * (cyc_render.h): the machine's 256x240 frame, or a game compositor's at the
+ * width cyc_video.h settles on. A width change (a new mode, or Fit following a
+ * window resize) is applied after the present and before the next picture.
+ *
+ * Save states (cyc_state.h): the Save state / Load state shortcuts (F8 / F9)
+ * and the menu's rows use one slot, <exe dir>/saves/<image stem>.state; TCP
+ * save_state / load_state take any path.
  */
 #ifndef SDL_MAIN_HANDLED
 #define SDL_MAIN_HANDLED
@@ -43,14 +52,20 @@
 #include "cyc_fds_bios.h"
 #include "cyc_host.h"
 #include "cyc_host_extras.h"
+#include "cyc_hooks.h"
 #include "cyc_input.h"
+#include "cyc_mod.h"
 #include "cyc_overlay.h"
 #include "cyc_png.h"
 #include "cyc_recomp.h"
+#include "cyc_render.h"
 #include "cyc_run.h"
+#include "cyc_session.h"
 #include "cyc_settings.h"
 #include "cyc_ring.h"
+#include "cyc_state.h"
 #include "cyc_tcp.h"
+#include "cyc_video.h"
 #include "../../common/nes_cart.h"
 #include "../../common/nes_fds.h"
 #ifdef CYC_WITH_RECOMP_UI
@@ -61,6 +76,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <direct.h>
+#define make_dir(p) _mkdir(p)
+#else
+#include <sys/stat.h>
+#define make_dir(p) mkdir((p), 0755)
+#endif
 
 #define AUDIO_RATE 48000
 #define BAR_ROWS   15     /* logical rows under the 240 of the picture (dev builds) */
@@ -78,6 +100,9 @@ static const char *s_vpad_path;
 static int         s_tcp_port;
 static int         s_key_hold[SDL_NUM_SCANCODES];   /* host loops a TCP-held key stays down */
 static bool        s_hidden;
+static char        s_image[1024];                   /* the image running (the save state slot's name) */
+
+void cyc_sdl_image_path(const char *path) { snprintf(s_image, sizeof(s_image), "%s", path ? path : ""); }
 
 void cyc_sdl_option(const char *name, const char *value)
 {
@@ -119,21 +144,40 @@ static bool looks_fds(const char *path)
     return cyc_native_fds_bios_crc32 || cyc_fds_image_file(path);
 }
 
+/* <exe dir>/<name>: the directory config.ini is in. */
+static void exe_path(char *out, size_t n, const char *name)
+{
+    snprintf(out, n, "%s", cyc_settings_default_path());
+    char *cut = strrchr(out, '/'), *bcut = strrchr(out, '\\');
+    if (bcut > cut) cut = bcut;
+    if (cut) snprintf(cut + 1, n - (size_t)(cut + 1 - out), "%s", name);
+    else snprintf(out, n, "%s", name);
+}
+
 int cyc_sdl_prelaunch(const char **rom_path, const char *cli_bios, NesFdsHleAsk *saved_hle,
                       const char **saved_bios)
 {
-    s_extras = cyc_host_extras();
+    s_extras = cyc_session_extras();
     if (!s_set_path[0]) snprintf(s_set_path, sizeof(s_set_path), "%s", cyc_settings_default_path());
     cyc_settings_default(&s_set);
     if (!cyc_settings_load(&s_set, s_set_path, stderr, &GAME_KEYS)) save_settings();   /* first run: write it */
     s_fds = looks_fds(*rom_path);
+    /* The mod catalog beside the executable, for a game built with mods. */
+    char mods[1100], err[600];
+    exe_path(mods, sizeof(mods), "mods");
+    if (!cyc_session_mods_init(mods, err, sizeof(err))) {
+        fprintf(stderr, "%s\n", err);
+        cyc_sdl_error_box("Mods", err);
+        return 1;
+    }
 #ifdef CYC_WITH_RECOMP_UI
     const char *no = getenv("NESRECOMP_NO_LAUNCHER");
     if (!(no && *no && *no != '0') && !s_set.skip_launcher) {
         /* The launcher's BIOS state runs the host's own lookup (cyc_fds_bios.h);
-         * its pick comes back in s_set.fds_bios. */
+         * its pick comes back in s_set.fds_bios. PLAY commits the Mods
+         * screen's selection (the provider's commit) before it returns. */
         const CycFdsBiosLookup bios = { cli_bios, NULL, NULL, cyc_native_fds_bios_crc32 };
-        int r = cyc_ui_launcher(&s_set, s_set_path, s_extras, rom_path, s_fds, &bios);
+        int r = cyc_ui_launcher(&s_set, s_set_path, s_extras, rom_path, s_fds, &bios, cyc_session_mods_provider());
         save_settings();
         if (r == 1) return 1;
         s_fds = looks_fds(*rom_path);
@@ -141,6 +185,11 @@ int cyc_sdl_prelaunch(const char **rom_path, const char *cli_bios, NesFdsHleAsk 
 #else
     (void)cli_bios;
 #endif
+    if (!cyc_session_mods_start(*rom_path, err, sizeof(err))) {
+        fprintf(stderr, "%s\n", err);
+        cyc_sdl_error_box("Mods", err);
+        return 1;
+    }
     if (s_extras && s_extras->set_view_mode && s_set.view_mode) s_extras->set_view_mode(s_extras->ctx, s_set.view_mode);
     *saved_hle = s_set.fds_hle;
     *saved_bios = s_set.fds_bios[0] ? s_set.fds_bios : NULL;
@@ -178,9 +227,67 @@ static const uint32_t *picture(int *w, int *h)
         const uint32_t *p = s_extras->present(s_extras->ctx, w, h);
         if (p && *w > 0 && *h > 0) return p;
     }
-    *w = 256;
-    *h = 240;
-    return cyc_frame_argb();
+    return cyc_render_present(w, h);
+}
+
+/* ---- save states: one slot beside the executable ---- */
+
+static char s_note_title[64], s_note_body[128];
+static uint64_t s_note_until;
+
+static void note(const char *title, const char *body)
+{
+    snprintf(s_note_title, sizeof(s_note_title), "%s", title);
+    snprintf(s_note_body, sizeof(s_note_body), "%s", body ? body : "");
+    s_note_until = SDL_GetTicks64() + 2500;
+    printf("[cyc state] f=%ld %s%s%s\n", s_frames_done, title, body && *body ? ": " : "", body ? body : "");
+    fflush(stdout);
+}
+
+static void state_slot(char *out, size_t n)
+{
+    char stem[512];
+    const char *base = s_image, *s1 = strrchr(s_image, '/'), *s2 = strrchr(s_image, '\\');
+    if (s1 && s1 + 1 > base) base = s1 + 1;
+    if (s2 && s2 + 1 > base) base = s2 + 1;
+    snprintf(stem, sizeof(stem), "%s", *base ? base : "game");
+    char *dot = strrchr(stem, '.');
+    if (dot && dot != stem) *dot = 0;
+    char dir[1100];
+    exe_path(dir, sizeof(dir), "saves");
+    make_dir(dir);
+    snprintf(out, n, "%s/%s.state", dir, stem);
+}
+
+static bool save_state_to(const char *path, char *err, size_t n)
+{
+    return cyc_state_save_file(path, err, n);
+}
+
+static bool load_state_from(const char *path, char *err, size_t n)
+{
+    if (!cyc_state_load_file(path, err, n)) return false;
+    s_frames_done = (long)cyc_ring_frame;
+    cyc_session_state_loaded();
+    return true;
+}
+
+static bool save_state_slot(void)
+{
+    char path[1200], err[256];
+    state_slot(path, sizeof(path));
+    bool ok = save_state_to(path, err, sizeof(err));
+    note(ok ? "STATE SAVED" : "STATE NOT SAVED", ok ? NULL : err);
+    return ok;
+}
+
+static bool load_state_slot(void)
+{
+    char path[1200], err[256];
+    state_slot(path, sizeof(path));
+    bool ok = load_state_from(path, err, sizeof(err));
+    note(ok ? "STATE LOADED" : "STATE NOT LOADED", ok ? NULL : err);
+    return ok;
 }
 
 static int logical_h(void) { return s_tex_h + (s_bar ? BAR_ROWS : 0); }
@@ -584,6 +691,70 @@ static void tcp_ring(int id, const char *line)
     cyc_tcp_ok(id, NULL);
 }
 
+static void tcp_state_file(int id, const char *line, bool save)
+{
+    char path[1024], err[256];
+    if (!cyc_tcp_str(line, "path", path, sizeof(path))) { cyc_tcp_err(id, save ? "save_state: path" : "load_state: path"); return; }
+    if (save ? save_state_to(path, err, sizeof(err)) : load_state_from(path, err, sizeof(err))) {
+        char f[64];
+        snprintf(f, sizeof(f), "\"frame\":%ld", s_frames_done);
+        cyc_tcp_ok(id, f);
+    } else {
+        cyc_tcp_err(id, err);
+    }
+}
+static void tcp_save_state(int id, const char *line) { tcp_state_file(id, line, true); }
+static void tcp_load_state(int id, const char *line) { tcp_state_file(id, line, false); }
+
+static void tcp_video(int id, const char *line)
+{
+    char mode[16];
+    if (cyc_tcp_str(line, "mode", mode, sizeof(mode))) {
+        int m;
+        if (!nes_video_geometry_parse(mode, &m)) { cyc_tcp_err(id, "video: mode is stock, 16:9, 21:9, 32:9 or fit"); return; }
+        cyc_video_set_mode(m);
+    }
+    int ow = 0, oh = 0;
+    SDL_GetRendererOutputSize(s_ren, &ow, &oh);
+    char f[200];
+    snprintf(f, sizeof(f), "\"mode\":\"%s\",\"width\":%d,\"native_x0\":%d,\"drawable\":[%d,%d],\"compositor\":%s",
+             nes_video_geometry_name(cyc_video_mode()), cyc_video_width(), cyc_video_native_x0(), ow, oh,
+             cyc_render_has_compositor() ? "true" : "false");
+    cyc_tcp_ok(id, f);
+}
+
+static void tcp_window_size(int id, const char *line)
+{
+    long w = 0, h = 0;
+    if (!cyc_tcp_long(line, "w", &w) || !cyc_tcp_long(line, "h", &h) || w < 64 || h < 60 || w > 8192 || h > 8192) {
+        cyc_tcp_err(id, "window_size: w, h");
+        return;
+    }
+    SDL_SetWindowSize(s_win, (int)w, (int)h);
+    cyc_tcp_ok(id, NULL);
+}
+
+static void tcp_mod_stats(int id, const char *line)
+{
+    (void)line;
+    CycHookStats hs;
+    CycModStats ms;
+    CycRenderStats rs;
+    cyc_hooks_stats(-1, &hs);
+    cyc_mod_stats(&ms);
+    cyc_render_stats(&rs);
+    char f[512];
+    snprintf(f, sizeof(f),
+             "\"hook_sites\":%u,\"armed\":%s,\"fired\":%llu,\"handled\":%llu,\"mismatched\":%llu,\"scopes\":%llu,"
+             "\"calls\":%llu,\"call_cycles\":%llu,\"call_failures\":%llu,\"composed\":%llu,\"pillarboxed\":%llu,"
+             "\"native\":%llu",
+             cyc_native_hook_site_count, cyc_hooks_armed ? "true" : "false", (unsigned long long)hs.fired,
+             (unsigned long long)hs.handled, (unsigned long long)hs.mismatched, (unsigned long long)ms.scopes,
+             (unsigned long long)ms.calls, (unsigned long long)ms.cycles, (unsigned long long)ms.failures,
+             (unsigned long long)rs.composed, (unsigned long long)rs.pillarboxed, (unsigned long long)rs.native);
+    cyc_tcp_ok(id, f);
+}
+
 static void tcp_quit(int id, const char *line)
 {
     (void)line;
@@ -625,7 +796,13 @@ static void tcp_setup(void)
     cyc_tcp_register("screenshot", "layer picture (the game) | ui (what the window presents), path", tcp_screenshot);
     cyc_tcp_register("read_ram", "CPU address space bytes: addr, len", tcp_read_ram);
     cyc_tcp_register("ring_dump", "the always-on event ring to a file: path, first, last", tcp_ring);
+    cyc_tcp_register("save_state", "write a save state (cyc_state.h): path", tcp_save_state);
+    cyc_tcp_register("load_state", "load a save state: path", tcp_load_state);
+    cyc_tcp_register("video", "the presented width: mode stock|16:9|21:9|32:9|fit (optional)", tcp_video);
+    cyc_tcp_register("window_size", "resize the window (Fit follows its drawable): w, h", tcp_window_size);
+    cyc_tcp_register("mod_stats", "hook sites, isolated calls, compositor counts", tcp_mod_stats);
     cyc_tcp_register("quit", "close the window (the disk save is written first)", tcp_quit);
+    if (s_extras && s_extras->tcp_setup) s_extras->tcp_setup(s_extras->ctx);
     if (cyc_tcp_start(port)) printf("[cyc tcp] listening on 127.0.0.1:%d\n", port);
     else fprintf(stderr, "[cyc tcp] cannot listen on port %d\n", port);
     fflush(stdout);
@@ -898,8 +1075,17 @@ int cyc_sdl_main(const char *title_in, int scale)
         return 1;
     }
     apply_settings();
+    /* From here a width request waits for the frame boundary; Fit follows
+     * the drawable from the first frame. */
+    cyc_video_window_ready();
+    {
+        int ow = 0, oh = 0;
+        SDL_GetRendererOutputSize(s_ren, &ow, &oh);
+        cyc_video_window_resized(ow, oh);
+    }
 #ifdef CYC_WITH_RECOMP_UI
-    CycUiHost host = { &s_set, s_extras, s_fds, apply_settings, save_settings, request_quit, frames_done, now_ms, title };
+    CycUiHost host = { &s_set, s_extras, s_fds, apply_settings, save_settings, request_quit, frames_done, now_ms, title,
+                       save_state_slot, load_state_slot, cyc_session_mods_provider(), s_image, cyc_session_mods_reapply };
     s_have_menu = cyc_ui_init(s_win, s_ren, &host);
 #endif
 
@@ -942,6 +1128,11 @@ int cyc_sdl_main(const char *title_in, int scale)
             cyc_ui_process_event(&ev);
 #endif
             if (ev.type == SDL_QUIT) s_running = false;
+            else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                int ow = 0, oh = 0;
+                SDL_GetRendererOutputSize(s_ren, &ow, &oh);
+                cyc_video_window_resized(ow, oh);
+            }
             else if (ev.type == SDL_CONTROLLERDEVICEADDED || ev.type == SDL_CONTROLLERDEVICEREMOVED) open_pads();
             else if (ev.type == SDL_KEYDOWN) {
 #ifdef CYC_DEV_UI
@@ -982,6 +1173,8 @@ int cyc_sdl_main(const char *title_in, int scale)
             apply_settings();
             save_settings();
         }
+        if (edge[CYC_SC_SAVE_STATE] && !menu_open()) save_state_slot();
+        if (edge[CYC_SC_LOAD_STATE] && !menu_open()) load_state_slot();
         if (edge[CYC_SC_SCREENSHOT]) {
             char name[64];
             int pw, ph;
@@ -1003,6 +1196,10 @@ int cyc_sdl_main(const char *title_in, int scale)
             toast_title = tt;
             toast_body = tb;
         }
+        if (!toast_title && s_note_until > now) {
+            toast_title = s_note_title;
+            toast_body = s_note_body;
+        }
         s_toast_up = toast_title != NULL;
         if (s_toast_up) {
             snprintf(s_toast_title, sizeof(s_toast_title), "%s", tt);
@@ -1022,7 +1219,9 @@ int cyc_sdl_main(const char *title_in, int scale)
             cyc_host_disk_frame(now, s_frames_done);
             cyc_set_controller(0, pad0);
             cyc_set_controller(1, pad1);
+            cyc_session_frame_begin();
             cyc_run_frame();
+            cyc_session_frame_end();
             frames++;
             cyc_host_frame_done(++s_frames_done);
             loading = s_fds && cyc_host_frame_unpaced();
@@ -1046,6 +1245,8 @@ int cyc_sdl_main(const char *title_in, int scale)
             if (s_present_out && s_present_every > 0 && loops % s_present_every == 0) present_shot(s_frames_done);
             SDL_RenderPresent(s_ren);
             shown = tnow;
+            /* the one point a new width applies: after this present, before the next picture */
+            cyc_video_apply_pending();
         }
         loops++;
         tnow = SDL_GetPerformanceCounter();

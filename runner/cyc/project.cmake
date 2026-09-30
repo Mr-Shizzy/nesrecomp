@@ -48,7 +48,7 @@ if(NOT NESRECOMP_HEADLESS AND NOT NESRECOMP_RECOMP_UI STREQUAL "OFF")
 endif()
 
 function(nesrecomp_add_cycle_game target)
-    cmake_parse_arguments(CYC "HEADLESS;NO_RECOMP_UI" "ROM;GAME_CONFIG;SEED_FILE;CAPTURE_FILE;RECOMPILER;BIOS;BOXART"
+    cmake_parse_arguments(CYC "HEADLESS;NO_RECOMP_UI;MODS" "ROM;GAME_CONFIG;SEED_FILE;CAPTURE_FILE;RECOMPILER;BIOS;BOXART;GAME_ID"
         "HOST_EXTRAS" ${ARGN})
     if(CYC_UNPARSED_ARGUMENTS OR NOT CYC_ROM)
         message(FATAL_ERROR "nesrecomp_add_cycle_game requires ROM; unknown arguments: ${CYC_UNPARSED_ARGUMENTS}")
@@ -132,9 +132,28 @@ function(nesrecomp_add_cycle_game target)
     target_link_libraries(${target} PRIVATE ${NESRECOMP_CYC_LIBRARIES})
     target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
     if(CYC_HOST_EXTRAS)
-        # the game's additions to the window (cyc_host_extras.h)
+        # the game's additions (cyc_host_extras.h): its window, options,
+        # per-frame work, compositor (cyc_render.h) and mods
         target_sources(${target} PRIVATE ${CYC_HOST_EXTRAS})
         set_property(TARGET ${target} PROPERTY NESRECOMP_CYC_HOST_EXTRAS TRUE)
+    endif()
+    if(CYC_MODS)
+        # The mod package runtime (runner/include/mod_runtime.h, docs/MOD_PACKAGES.md)
+        # for this game's trusted plugins: packages target GAME_ID and the image's
+        # identity (CRC32 of the cartridge payload after its iNES header, or of
+        # the disk's side data), and the launcher gets its Mods screen.
+        if(NOT CYC_GAME_ID)
+            message(FATAL_ERROR "nesrecomp_add_cycle_game(${target} MODS) needs GAME_ID, the id mod manifests target")
+        endif()
+        if(NOT CMAKE_CXX_COMPILER_LOADED)
+            message(FATAL_ERROR "nesrecomp_add_cycle_game(${target} MODS): the mod runtime is C++; declare CXX in project()")
+        endif()
+        target_sources(${target} PRIVATE "${root}/runner/src/mod_runtime.cpp" "${root}/runner/src/crc32.c")
+        target_include_directories(${target} PRIVATE "${root}/runner/include")
+        target_compile_features(${target} PRIVATE cxx_std_17)
+        target_compile_definitions(${target} PRIVATE NESRECOMP_ENABLE_MODS=1 "CYC_MOD_GAME_ID=\"${CYC_GAME_ID}\""
+            "CYC_MOD_ROM_CRC32=\"${CYC_PROJECT_MOD_CRC32}\"")
+        set(RECOMP_UI_ENABLE_MODS ON)
     endif()
     if(NOT CYC_HEADLESS)
         nesrecomp_cyc_enable_sdl(${target})
@@ -150,4 +169,7 @@ function(nesrecomp_add_cycle_game target)
     endif()
     set_property(TARGET ${target} PROPERTY NESRECOMP_ROM "${CYC_PROJECT_ROM}")
     message(STATUS "${target}: cycle backend, ROM SHA256 ${CYC_PROJECT_ROM_SHA256}")
+    if(CYC_MODS)
+        message(STATUS "${target}: mods for ${CYC_GAME_ID}, image identity ${CYC_PROJECT_MOD_CRC32}")
+    endif()
 endfunction()
