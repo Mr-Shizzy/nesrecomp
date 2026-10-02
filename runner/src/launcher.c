@@ -140,6 +140,15 @@ static void rom_cfg_read(char *path_out, int max_len) {
     int len = (int)strlen(path_out);
     while (len > 0 && (path_out[len-1] == '\n' || path_out[len-1] == '\r'))
         path_out[--len] = '\0';
+    /* A relative path is next to the exe (a portable folder can move). */
+    int absolute = path_out[0] == '/' || path_out[0] == '\\' ||
+                   (path_out[0] && path_out[1] == ':');
+    if (path_out[0] && !absolute) {
+        char dir[1024], rel[512];
+        nesrecomp_exe_dir(dir, sizeof(dir));
+        snprintf(rel, sizeof(rel), "%s", path_out);
+        snprintf(path_out, max_len, "%s%s", dir, rel);
+    }
 }
 
 static void rom_cfg_write(const char *rom_path) {
