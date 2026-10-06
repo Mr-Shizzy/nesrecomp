@@ -129,7 +129,54 @@ static void get_rom_cfg_path(char *out, int max_len) {
     snprintf(out, max_len, "%srom.cfg", dir);
 }
 
+/* 1 if `path` is the game's ROM (CRC32 past the 16-byte iNES header), with
+ * no message: for looking around, unlike verify_rom. */
+static int rom_matches(const char *path) {
+    uint32_t want = game_get_expected_crc32();
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    static uint8_t data[1 << 20];
+    size_t n = fread(data, 1, sizeof(data), f);
+    fclose(f);
+    return n > 16 && n < sizeof(data) && want &&
+           crc32_compute(data + 16, n - 16) == want;
+}
+
+/* No ROM picked yet (or it moved): use the game's ROM if it's in the game's
+ * folder, whatever its file name, so copying it there is all it takes. */
+static void rom_find_in_exe_dir(char *path_out, int max_len) {
+#ifdef _WIN32
+    char dir[1024], pat[1100], cand[1400];
+    nesrecomp_exe_dir(dir, sizeof(dir));
+    snprintf(pat, sizeof(pat), "%s*.nes", dir);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        snprintf(cand, sizeof(cand), "%s%s", dir, fd.cFileName);
+        if (rom_matches(cand)) {
+            snprintf(path_out, max_len, "%s", cand);
+            break;
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    (void)path_out; (void)max_len;
+#endif
+}
+
+static void rom_cfg_read_saved(char *path_out, int max_len);
+
 static void rom_cfg_read(char *path_out, int max_len) {
+    rom_cfg_read_saved(path_out, max_len);
+    FILE *f = path_out[0] ? fopen(path_out, "rb") : NULL;
+    if (f) { fclose(f); return; }
+    path_out[0] = '\0';
+    rom_find_in_exe_dir(path_out, max_len);
+}
+
+static void rom_cfg_read_saved(char *path_out, int max_len) {
     char cfg_path[512];
     get_rom_cfg_path(cfg_path, sizeof(cfg_path));
     FILE *f = fopen(cfg_path, "r");

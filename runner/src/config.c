@@ -99,10 +99,30 @@ void nesrecomp_guid_strip_crc(char *guid) {
     if (guid && strlen(guid) >= 8) memcpy(guid + 4, "0000", 4);
 }
 
+/* First run (no config.ini yet): the biggest window scale that fits the
+ * screen, leaving room for the taskbar and title bar, so a 1440p or 4K
+ * screen doesn't get a small window. Physical pixels (the runner is DPI
+ * aware), from the primary display's current mode. */
+static int fitting_window_scale(int fallback) {
+#ifdef _WIN32
+    DEVMODEW dm;
+    memset(&dm, 0, sizeof dm);
+    dm.dmSize = sizeof dm;
+    if (EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &dm) && dm.dmPelsHeight > 0) {
+        int s = (int)(dm.dmPelsHeight * 0.85) / 240;
+        return clampi(s, 2, 8);
+    }
+#endif
+    return fallback;
+}
+
 void config_load(const char *path) {
     config_set_defaults(&g_nes_config);
     FILE *f = fopen(path, "r");
-    if (!f) return;
+    if (!f) {
+        g_nes_config.window_scale = fitting_window_scale(g_nes_config.window_scale);
+        return;
+    }
     char line[256];
     while (fgets(line, sizeof(line), f)) {
         char *s = trim(line);
